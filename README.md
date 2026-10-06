@@ -4,7 +4,7 @@
 > iki motorlu OCR, Türkçe düzeltme katmanı, otomatik öğrenme döngüsü ve kalite
 > güvence araçlarıyla.
 
-**English quick start at the bottom.**
+**Türkçe** · [English](README.en.md)
 
 ---
 
@@ -71,27 +71,20 @@ Kurallar [CONTRIBUTING.md](CONTRIBUTING.md)'de.
 | `docs/` | Gelişim günlüğü, karar kayıtları ve öğrenmeler |
 | `kullanici-sozlugu.txt` | Kelime-düzeyi düzeltme sözlüğü (toplulukla büyür) |
 
+## Dokümantasyon
+
+Projenin nasıl geliştiğini ve neden böyle inşa edildiğini merak ederseniz:
+
+- [Gelişim günlüğü](docs/GELISTIRME-GUNLUGU.md) — her adım ne zaman, ne için
+  ve hangi ölçümle atıldı
+- [Karar kayıtları](docs/NASIL-VE-NEDEN.md) — telif duvarından düzeltme
+  kurallarına, 10 önemli kararın gerekçesi
+- [Öğrenmeler](docs/OGRENMELER.md) — geliştirme sırasında yakalanan tuzaklar
+  ve dersler
+
 ## Yol haritası
 
 1. Öğrenme paketi dışa aktarma + `birlestir.py` (oylamalı birleştirme)
 2. Low-conf blok kurtarma turu (upscale/kontrast ikinci deneme)
 3. Karışım madenciliği: font profili başına en iyi motor/parametre seçimi
 4. Tek dosyalık `.exe` dağıtımı (CPU varsayılan, GPU opsiyonel)
-
----
-
-### English quick start
-
-```sh
-py -3 hardsub2srt.py "episode.mp4"       # produces episode.srt (Turkish hardsub OCR)
-py -3 ui_server.py                       # web UI on http://127.0.0.1:8765
-```
-
-Requirements: Python 3.10+, EasyOCR + PaddleOCR (installed at first run from
-requirements.txt), ffmpeg on PATH. GPU optional (`--cpu` to force CPU).
-
-What you get: an SRT plus `stats.json` (block statistics) and a
-`hardsub2srt.json` sidecar (video hash + parameters, so an SRT can always be
-tied to the exact video it came from). Corrections you make in the UI are
-learned by the tool; see CONTRIBUTING for how to share them back without
-uploading any copyrighted subtitle text or frames.
