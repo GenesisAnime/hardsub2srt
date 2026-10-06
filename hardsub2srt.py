@@ -4826,7 +4826,7 @@ def main():
     # Amaç: SRT tek başına taşındığında bile hangi video koşumundan ve hangi
     # parametrelerle üretildiği dosyayla seyahat etsin (E02 vakası,
     # _video_kimlik docstring'i). SRT'nin İÇİNE comment YAZILMAZ — SRT
-    # formatında comment yok, oyuncular bozulur. Video-hash alanları
+    # formatında comment yok, oynatıcılar bozulur. Video-hash alanları
     # stats'tan KOPYALANIR, yeniden hesaplanmaz.
     meta_yol = out.with_name(out.stem + ".hardsub2srt.json")
     meta = {"arac": ARAC_SURUM,

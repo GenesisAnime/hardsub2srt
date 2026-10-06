@@ -11,7 +11,7 @@
 ## Ne yapar?
 
 Gömülü altyazılı (hardsub) bir video alır, altyazı bandını otomatik bulur,
-kare kare OCR'lar ve zamanlanmış Türkçe `.srt` üretir. Oyuncu uyumluluğu için
+kare kare OCR'lar ve zamanlanmış Türkçe `.srt` üretir. Oynatıcı uyumluluğu için
 SRT dosyasına hiçbir özel işaret girmez; eşleşme bilgisi yan dosyaya yazılır.
 
 | Katman | Açıklama |
