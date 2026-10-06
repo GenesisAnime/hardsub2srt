@@ -316,6 +316,61 @@ yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
      "video"yu düz isim olarak okuyan kod YOK (ölçüldü: _op-katman1.py
      kendi "video" alanını üretiyor, ui_server okumuyor); isim bilgi
      kaybı olmasın diye sözlüğün "ad" alanında yaşar.
+
+06.10.2026 — LOW-CONF KURTARMA TURU (--kurtarma, VARSAYILAN AÇIK;
+  --no-kurtarma kapatır). Doğruluk rezervinin en büyük kalemi: E1074 tam
+  koşumda 47 bloğun 12'si low-conf (%25,5). ANA zincir bitip bloklar
+  birleştikten (ve oto-eşik yeniden denemesi karara bağlandıktan) SONRA,
+  gürültü ayrımından ÖNCE, conf'u --conf-thr (LOW_CONF_THR=0.75) altında
+  kalan bloklar İKİNCİ bir OCR turu görür — YALNIZ low-conf bloklar,
+  tüm bloklar değil.
+
+  Her low-conf blok için segmentin orta karesi tek sefer grab edilir ve
+  ANA geçişin birebir girdisi (grab -> binarize|ham -> isteğe bağlı 2x;
+  _band_inputs hazırlığının aynısı) üretilir; üzerine ÜÇ aday kaynağı:
+    (a) x2-lanczos   : ana girdinin ÜSTÜNE 2x Lanczos (ana yol 1x ise
+        2x, 2x ise 4x). EasyOCR detect'i canvas_size=2560'ta kıssa da
+        tanıma (recognize) ham kırpmadan çalıştığı için büyütme
+        tanıma çözünürlüğünü gerçekten artırır.
+    (b) kontrast     : HAM bantta (binarize ÖNCESİ) CLAHE + unsharp-mask
+        (_kontrast_keskinle). Binarize girdi 0/255 olduğu için kontrast
+        onda etkisizdir; thr'nin erittiği glif kenarı anti-aliased ham
+        görüntüde yaşar (tophat/use_raw gerekçesiyle aynı mantık).
+    (c) ikinci motor : (a) ve (b) görüntüleri mevcut ikinci motora
+        (get_second_engine zinciri) ayrı ayrı verilir — ana oy turunda
+        ikinci motor yalnız ana girdiyi görmüştü; burada ÖN-İŞLENMİŞ
+        görüntüleri görür (ayrı çağrı). Motor yoksa (a)+(b) kalır.
+    (a) ve (b) ana okuyucudan ocr_consensus ile (3 varyant, blok conf'u
+    ile aynı ölçüm yöntemi) okunur.
+
+  SEÇİM VE KÖTÜLEŞME YASAĞI: adaylar arasından en yüksek conf'lu olan,
+  mevcut metinden SIKI olarak daha güvenliyse (>) blok güncellenir;
+  eşit/düşükse DOKUNULMAZ. Aday barı — her merged bloğunun girmek
+  zorunda kaldığı aynı süzgeçler: word_re+vowel_re eşleşmesi ve uzunluk
+  koruması (boşluksuz uzunluk >= TAKAS_UZUNLUK_ORANI x mevcut — 8. turun
+  ölçülmüş 'buldum.' içerik-kaybı eşiği). EŞİK YENİ İCAT EDİLMEDİ:
+  low-conf tanımı = conf < --conf-thr (mevcut tanım).
+
+  YERİ ÖNEMLİ: kurtarma, _split_noise'dan ÖNCE çalışır — _split_noise
+  blokları KOPYALAYarak ayırdığı için bu noktadan sonra yapılan düzeltme
+  ana/_ekran listelerine akmazdı; öncesinde yapılan düzeltme hem her iki
+  listeye akar hem conf'u yükselen blok çöp profilinde yanlış rotaya
+  düşmez. HAVUZ = merged + micro_moved (koşumun TÜM blokları, bloklar.json
+  evreni): _micro_cleanup mikro blokları yeni liste olarak taşıdığı için
+  yalnız merged'e bakmak mikro-süreli low-conf blokları kaçırmıştı
+  (E1074 240sn: iki low-conf bloğun ikisi de mikro — ilk koşuda
+  denenen=0 ölçüldü, kapsam genişletildi). BLOK SAYISI VE SÜRELER
+  DEĞİŞMEZ: yalnız metin+conf yerinde güncellenir (konuşma alanı
+  korunumu yapısal olarak garanti).
+
+  KAYIT (sessiz değişiklik yok): <ad>.kurtarma-gunlugu.json (zaman/eski/
+  yeni/conf_eski/conf_yeni/yontem — hangi ön-işleme kazandıysa kaynak
+  o), bloklar.json'da güncellenen bloğa "kurtarma": true alanı (yalnız
+  güncellenen blokta — varken-yaz deseni), stats["kurtarma"] = {acik,
+  denenen, kurtarilan, degismeyen, ikinci_motor_cagri, sure_sn}. Günlük
+  dosyası her koşuda yeniden yazılır (F6 deseni: 0 kurtarma = boş
+  değişiklik listesi, bayat içerik taklit edemez). Ölçüm (E1074, 240 sn,
+  --cpu, iki ardışık koşum): dosya başlığındaki kurtarma bölümünde.
 """
 
 import argparse
@@ -512,6 +567,18 @@ TAKAS_UZUNLUK_ORANI = 0.60  # ikinci motor metni konsensusun bu oranından
 # ~0.14) bu kuraldan ETKİLENMEZ (ölçüm: _kal2-blends takas kayıtlarında
 # CJK-çoğunluk hedef yalnız 00:03:58 kredisi ve 00:19:23 "一一" çöpü).
 TAKAS_CJK_ILK_CONF = 0.45
+
+# --- low-conf kurtarma turu (06.10.2026) ----------------------------------
+# EŞİK KAYNAĞI: low-conf tanımı mevcut --conf-thr / LOW_CONF_THR'den gelir
+# (yeni eşik icat edilmez). Aşağıdaki sabitler yalnız ÖN-İŞLEME ve koruma
+# parametreleridir; kazanım kararı conf kıyasıyla (sıkı >) verilir.
+KURTARMA_UPSCALE = 2.0        # (a) ana girdinin ÜSTÜNE Lanczos büyütme
+KURTARMA_CLAHE_CLIP = 2.0     # (b) ham bant CLAHE clipLimit
+KURTARMA_UNSHARP_GUCU = 1.6   # (b) unsharp: addWeighted(g, GUC, blur, 1-GUC)
+                              #     = g + 0.6*(g-blur) — ölçülen standart
+                              #     keskinleştirme miktarı (amount=0.6)
+# Uzunluk koruması YENİ SABİT DEĞİL: TAKAS_UZUNLUK_ORANI (0.60) kullanılır —
+# 8. turun 'buldum.' içerik-kaybı vakasından ölçülmüş eşik.
 
 # ikinci görüş motoru: tembel kurulur, oy verir; metni tek başına değiştirmez
 # — İSTİSNA: yukarıdaki ölçülü takas koşulu (TAKAS_*) sağlanırsa metin
@@ -1500,6 +1567,23 @@ def binarize_white(img, thr):
     g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, m = cv2.threshold(g, thr, 255, cv2.THRESH_BINARY)
     return cv2.cvtColor(m, cv2.COLOR_GRAY2BGR)
+
+
+def _kontrast_keskinle(img, clip=KURTARMA_CLAHE_CLIP,
+                       guc=KURTARMA_UNSHARP_GUCU):
+    """Kurtarma turunun (b) ön-işlemesi: HAM banta CLAHE + unsharp mask.
+
+    Binarize girdi (0/255) üzerinde kontrast işleminin etkisi yoktur; bu
+    yüzden ham banddan çalışır. CLAHE lokal kontrastı açar (gölgede kalan
+    glif kenarları), unsharp mask bulanık kenarı keskinleştirir. Girdi ve
+    çıktı BGR; ÇIKTI BİNARIZE EDİLMEZ — anti-aliased kenar bilgisi OCR'a
+    gider (thr'nin erittiği glif tam burada yaşar; tophat/use_raw ile aynı
+    mantık). Saf cv2: reader/motor bağımlılığı yok, birim testi mümkün."""
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    g = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8)).apply(g)
+    blur = cv2.GaussianBlur(g, (0, 0), 2.0)
+    g = cv2.addWeighted(g, guc, blur, 1.0 - guc, 0)
+    return cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
 
 
 def _group_lines(res):
@@ -3425,6 +3509,17 @@ def main():
                          "degisiklik <ad>.duzeltme-gunlugu."
                          "json'a yazilir (varsayilan acik; --no-duzelt = "
                          "ham OCR metni)")
+    ap.add_argument("--kurtarma", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="low-conf kurtarma turu: birlesme bittikten sonra "
+                         "conf<--conf-thr bloklar 2 on-isleme (2x Lanczos, "
+                         "CLAHE+unsharp ham bant) + ikinci motorun ayri "
+                         "cagrilarıyla yeniden okunur; en yuksek conf'lu "
+                         "sonuc mevcuttan SIKI olarak yuksekse blok "
+                         "guncellenir (esit/dusuk: DOKUNULMAZ). Blok "
+                         "sayisi/sureleri degismez. Her degisiklik "
+                         "<ad>.kurtarma-gunlugu.json'a yazilir (varsayilan "
+                         "acik; --no-kurtarma = kapat)")
     ap.add_argument("--lang", default="tr,en",
                     help="EasyOCR dil kodlari, virgulle birlestirilir "
                          "(orn: tr,en / ja / ko,zh_sim)")
@@ -4346,6 +4441,138 @@ def main():
                              f"dusuk guven)")
                 esik_kayit["sure_s"] = round(time.time() - t_esik, 1)
 
+    # --- Low-conf kurtarma turu (06.10.2026; --no-kurtarma kapatır) ---------
+    # YERİ ÖNEMLİ (iki neden):
+    #   1) oto-eşik yeniden denemesi yukarıda karara bağlandı — kurtarma
+    #      yalnız KABUL edilmiş nihai blokları görmeli (yeniden _extract
+    #      merged'i değiştirir).
+    #   2) aşağıdaki _split_noise blokları KOPYALAYarak ayırır — kurtarma
+    #      bu noktadan ÖNCE yerinde çalışmalı ki düzeltilen metin+conf hem
+    #      ana hem _ekran tarafına aksın ve conf'u yükselen blok çöp
+    #      profilinde yanlış rotaya düşmesin. Blok sayısı ve
+    #      süreler burada DEĞİŞTİRİLMEZ (yalnız [2]/[3] alanları).
+    # HAVUZ: merged + micro_moved — koşumun TÜM blokları (bloklar.json
+    # evreni: ana + _ekran). _micro_cleanup mikro blokları YENİ liste
+    # olarak micro_moved'a taşıdığı için yalnız merged'e bakmak E1074
+    # 240sn penceresindeki iki low-conf bloğu (ikisi de mikro süreli)
+    # kaçıracaktı — ölçüldü, ilk koşuda denenen=0 kaldı ve kapsam
+    # genişletildi. micro_moved nesneleri yerinde güncellenir; değerler
+    # ekran_bloklari (_micro_moved referansları) ve _mikro_geri'ye aker.
+    # Yalnız low-conf bloklar (conf < args.conf_thr — mevcut tanım) ikinci
+    # turu görür; mekanizma ve kötüleşme yasağı modül docstring'inde.
+    kurtarma_bilgi = {"acik": args.kurtarma, "denenen": 0, "kurtarilan": 0,
+                      "degismeyen": 0, "ikinci_motor_cagri": 0, "sure_sn": 0.0}
+    kurtarma_bloklar = set()           # (a, b) — bloklar.json "kurtarma" işareti
+    kurtarma_kayit = []                # <ad>.kurtarma-gunlugu.json gövdesi
+    kurtarma_havuzu = list(merged) + list(micro_moved)
+    if args.kurtarma and kurtarma_havuzu:
+        t_k = time.time()
+        # ikinci motor: _read_chunk'ta kurulmamış olabilir (tüm low-conf
+        # segmentler boş metin ürettiyse); burada tembel kurulur, yoksa (c)
+        # atlanır — (a)/(b) ana okuyucuyla yine de denenir.
+        sec = get_second_engine(lang_list, gpu_flag, args.ocr,
+                                conf_thr=args.conf_thr)
+        aday_bloklar = [r for r in kurtarma_havuzu if r[3] < args.conf_thr]
+        if aday_bloklar:
+            note(f"[kurtarma] {len(aday_bloklar)} low-conf blok "
+                 f"(conf<{args.conf_thr}) ikinci turda yeniden okunuyor")
+        for blok in aday_bloklar:
+            a, b, eski_metin, eski_conf = blok
+            kurtarma_bilgi["denenen"] += 1
+            try:
+                # ANA geçişin birebir girdisi: grab -> binarize|ham ->
+                # isteğe bağlı 2x (_band_inputs hazırlığının aynısı; tek
+                # grab için satır içi kopya — fonksiyona dokunma riski yok)
+                img_raw = grab_band(video, frame_time((a + b) // 2),
+                                    cfg["band_y"], cfg["band_h"])
+                p_img = img_raw if use_raw else \
+                    binarize_white(img_raw, cfg["white_thr"])
+                if upscale2x:
+                    p_img = cv2.resize(p_img, None, fx=2, fy=2,
+                                       interpolation=cv2.INTER_LANCZOS4)
+            except Exception as e:                     # noqa: BLE001
+                note(f"[kurtarma] goruntu alinamadi t={frame_time(a):.2f}s "
+                     f"({type(e).__name__}: {e}) — blok DOKUNULMADI")
+                kurtarma_bilgi["degismeyen"] += 1
+                continue
+            # (a) ana girdinin üstüne 2x Lanczos; (b) HAM bantta CLAHE+unsharp
+            v_up = cv2.resize(p_img, None, fx=KURTARMA_UPSCALE,
+                              fy=KURTARMA_UPSCALE,
+                              interpolation=cv2.INTER_LANCZOS4)
+            v_kon = _kontrast_keskinle(img_raw)
+            aday_okumalar = []             # (metin, conf, yontem)
+            try:
+                t1, c1 = ocr_consensus(reader, v_up)
+                if t1 and t1.strip():
+                    aday_okumalar.append((t1, c1, "x2-lanczos"))
+            except Exception:                      # noqa: BLE001
+                pass
+            try:
+                t2, c2 = ocr_consensus(reader, v_kon)
+                if t2 and t2.strip():
+                    aday_okumalar.append((t2, c2, "kontrast"))
+            except Exception:                      # noqa: BLE001
+                pass
+            if sec["fn"] is not None:
+                for v_img, ynt in ((v_up, "x2-lanczos+2motor"),
+                                   (v_kon, "kontrast+2motor")):
+                    try:
+                        t3, c3 = sec["fn"](v_img)
+                        if t3 and t3.strip():
+                            kurtarma_bilgi["ikinci_motor_cagri"] += 1
+                            aday_okumalar.append((t3, c3, ynt))
+                    except Exception:              # noqa: BLE001
+                        pass
+            # Aday barı: merged'e girmek zorunda kalan aynı süzgeçler +
+            # 8. turun ölçülmüş uzunluk koruması (içerik kaybını engelle)
+            eski_uz = sum(1 for c in eski_metin if not c.isspace())
+            gecerli = []
+            for metin, conf, ynt in aday_okumalar:
+                # TİP GÜVENCESİ (savunma katmanı): kök nedeni çözülmüş
+                # unpack-sırası hatasının (SONRA-2 koşumu: metin pozisyonuna
+                # numpy conf düşüyor; re bunu "bytes-like object" diye
+                # raporluyor) yeniden oluşmasına karşı adım; OCR kaynakları
+                # str garantisizse blok DOKUNULMAZ, kaynak+tip log'a yazılır.
+                if not isinstance(metin, str):
+                    note(f"[kurtarma] str olmayan aday ATLANDI "
+                         f"(tip={type(metin).__name__}, yontem={ynt}, "
+                         f"t={frame_time(a):.2f}s) — blok DOKUNULMADI")
+                    continue
+                if not (word_re.search(metin) and vowel_re.search(metin)):
+                    continue
+                if sum(1 for c in metin if not c.isspace()) < \
+                        TAKAS_UZUNLUK_ORANI * eski_uz:
+                    continue
+                gecerli.append((conf, metin, ynt))
+            if not gecerli:
+                kurtarma_bilgi["degismeyen"] += 1
+                continue
+            y_conf, y_metin, y_yontem = max(gecerli, key=lambda x: x[0])
+            if y_conf > eski_conf:     # SIKI >: eşit/düşükse DOKUNULMAZ
+                blok[2] = y_metin
+                blok[3] = y_conf
+                kurtarma_bilgi["kurtarilan"] += 1
+                kurtarma_bloklar.add((a, b))
+                kurtarma_kayit.append({
+                    "zaman": fmt_ts(frame_time(a)),
+                    "eski": eski_metin, "yeni": y_metin,
+                    "conf_eski": round(eski_conf, 4),
+                    "conf_yeni": round(y_conf, 4),
+                    "yontem": y_yontem})
+                note(f"[kurtarma] t={fmt_ts(frame_time(a))} [{y_yontem}] "
+                     f"conf {eski_conf:.3f}->{y_conf:.3f} "
+                     f"{eski_metin[:40]!r} -> {y_metin[:40]!r}")
+            else:
+                kurtarma_bilgi["degismeyen"] += 1
+        kurtarma_bilgi["sure_sn"] = round(time.time() - t_k, 1)
+        if kurtarma_bilgi["denenen"]:
+            note(f"[kurtarma] tamam: {kurtarma_bilgi['denenen']} denenen, "
+                 f"{kurtarma_bilgi['kurtarilan']} kurtarilan, "
+                 f"{kurtarma_bilgi['degismeyen']} degismeyen "
+                 f"({kurtarma_bilgi['sure_sn']} sn)")
+        else:
+            note("[kurtarma] low-conf blok yok — ikinci tur atlandı")
+
     # --- Düzeltme 2c: gürültü ayrımı (taşıma var, silme yok) ---
     ekran_ist = {}
     ana, gurultu = _split_noise(merged, fps, ayir=args.ayir_gurultu,
@@ -4621,14 +4848,23 @@ def main():
         return fmt_ts(frame_time(a)), fmt_ts(end)
 
     dokum = []
-    for i, (_a, _b, metin, conf) in enumerate(ana):
+    for i, (a, b, metin, conf) in enumerate(ana):
         bas, son = _dokum_zamani(i, ana)
-        dokum.append({"index": i, "start": bas, "end": son, "metin": metin,
-                      "conf": round(conf, 4), "kaynak": "ana"})
-    for i, (_a, _b, metin, conf) in enumerate(ekran_bloklari):
+        d = {"index": i, "start": bas, "end": son, "metin": metin,
+             "conf": round(conf, 4), "kaynak": "ana"}
+        # kurtarma işareti YALNIZ güncellenen blokta (varken-yaz deseni);
+        # kurtarma turu bu bloğun metnini ikinci tur OCR'dan aldı —
+        # kaynak: <ad>.kurtarma-gunlugu.json'daki yontem alanı
+        if (a, b) in kurtarma_bloklar:
+            d["kurtarma"] = True
+        dokum.append(d)
+    for i, (a, b, metin, conf) in enumerate(ekran_bloklari):
         bas, son = _dokum_zamani(i, ekran_bloklari)
-        dokum.append({"index": i, "start": bas, "end": son, "metin": metin,
-                      "conf": round(conf, 4), "kaynak": "ekran"})
+        d = {"index": i, "start": bas, "end": son, "metin": metin,
+             "conf": round(conf, 4), "kaynak": "ekran"}
+        if (a, b) in kurtarma_bloklar:
+            d["kurtarma"] = True
+        dokum.append(d)
     bloklar_yol = out.with_name(out.stem + ".bloklar.json")
     bloklar_yol.write_text(
         json.dumps(dokum, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -4658,6 +4894,26 @@ def main():
     if cjk_kayit:
         print(f"    takas-cjk: {len(cjk_kayit)} blok takas RED -> _ekran "
               f"(gunluk: {takas_yol.name})")
+
+    # --- 06.10.2026: kurtarma günlüğü (SESSİZ DEĞİŞİKLİK YOK) ---------------
+    # Kurtarma turu bir bloğun metnini değiştirdiyse hangi blokta, hangi
+    # ön-işlemeyle (yontem = kaynak) ve hangi conf'lar arasında değiştiği
+    # burada kayıtlı. F6 deseni: dosya HER koşuda yeniden yazılır (0
+    # kurtarma -> boş değişiklik listesi; bayat içerik taklit edemez).
+    kurtarma_yol = out.with_name(out.stem + ".kurtarma-gunlugu.json")
+    kurtarma_yol.write_text(
+        json.dumps({"video": video.name,
+                    "conf_esik": args.conf_thr,
+                    "uzunluk_orani": TAKAS_UZUNLUK_ORANI,
+                    "on_isleme": {"upscale": KURTARMA_UPSCALE,
+                                  "clahe_clip": KURTARMA_CLAHE_CLIP,
+                                  "unsharp_gucu": KURTARMA_UNSHARP_GUCU},
+                    **kurtarma_bilgi,
+                    "degisiklik": kurtarma_kayit},
+                   ensure_ascii=False, indent=2), encoding="utf-8")
+    if kurtarma_kayit:
+        print(f"    kurtarma: {len(kurtarma_kayit)} blok güncellendi "
+              f"(gunluk: {kurtarma_yol.name})")
 
     low = sum(1 for _, _, _, conf in ana if conf < args.conf_thr)
     print(f"[3/3] SRT yazildi: {out}")
@@ -4781,6 +5037,7 @@ def main():
                         "siniflar": duzelt_say,
                         "gunluk": (out.stem + ".duzeltme-gunlugu.json")
                         if args.duzelt else None},
+             "kurtarma": kurtarma_bilgi,
              "tekrar_kurali": {"sim": REP_SIM, "pencere_sn": REP_WIN,
                                "min_uye": REP_MIN,
                                "medyan_sure_asgari": REP_MEDIAN_DUR,
