@@ -47,13 +47,15 @@ Doğruluk iddiası GT (doğru altyazı) kıyasıyla ölçülür, tahminle söyle
 
 ## Topluluk öğrenme döngüsü (yapım aşaması)
 
-Kullanıcıların düzeltmeleri **telif-güvenli** biçimde geri akar: program tek
-anonim "öğrenme paketi" (JSON) üretir → GitHub Issue'ya eklenir → oylamalı
-birleştirici sözlüğü günceller → yeni sürümde herkes faydalanır.
-Tasarım: [TOPLULUK-OGRENME-TASARIMI.md](TOPLULUK-OGRENME-TASARIMI.md).
+Düşüncem şu: kullanıcıların düzeltmeleri altyazı metni toplanmadan geri aksın.
+Program anonim bir "öğrenme paketi" üretir, kullanıcı bunu GitHub'da bir
+Issue'ya ekler, paketler oylamayla birleştirilip sözlüğe işlenir ve yeni
+sürümle herkese dağılır. Nasıl çalışacağı
+[TOPLULUK-OGRENME-TASARIMI.md](TOPLULUK-OGRENME-TASARIMI.md)'de yazıyor.
 
-⛔ **Bu repoya altyazı metni veya anime karesi yüklenmez** — yalnız istatistik,
-kelime-düzeyi sözlük girişleri ve ölçüm verileri. Ayrıntı: [CONTRIBUTING.md](CONTRIBUTING.md).
+Bu repoya altyazı metni ya da anime karesi yüklenmiyor; paylaşılacak şey
+yalnız istatistik, kelime düzeyi sözlük girişleri ve ölçüm verileri.
+Kurallar [CONTRIBUTING.md](CONTRIBUTING.md)'de.
 
 ## Dosya haritası
 

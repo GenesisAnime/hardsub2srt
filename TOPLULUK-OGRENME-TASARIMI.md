@@ -1,49 +1,62 @@
-# Çok-kullanıcı öğrenme döngüsü — tasarım v1 (2026-10-06)
+# Topluluk öğrenme döngüsü — tasarım notu
 
-Hedef: kullanıcılar programı kendi bilgisayarlarında koşturur; telif-güvenli veri geri akar;
-her sürümün doğruluğu ölçülerek yükselir. Bu doküman GitHub'a açık projenin veri mimarisidir.
+Bu proje açık kaynağa açılırken aklımızdaki model şu: insanlar programı kendi
+bilgisayarlarında koşturur, altyazılar iyileşir ama bir noktada herkes tıkanır —
+çünkü her bilgisayarda farklı font, farklı rip, farklı zor kare var. Güzelliği
+şurada: birbirimizin tıkandığı yerler farklı. Birinin tıkandığı kare, diğerinin
+düzgün çıktığı kare olabilir; hataları paylaştıkça programın hiç görmediği
+vakaları öğrenme şansı doğuyor.
 
-## 1. Veri kategorileri (telif güvenliği)
+Bu not o döngünün nasıl kurulacağını anlatır; kod yazılmadan önceki iş planıdır.
 
-| Kategori | İçerik | Telif durumu |
-|---|---|---|
-| istatistik | video-hash, parametre seti, blok sayısı, konuşma sn, low-conf oranı | temiz |
-| karışım matrisi | OCR karakter karışım sayıları (rn↔n, ö-i vs.) | temiz |
-| sözlük girişi | yanlış→doğru KELİME düzeyi eşleme (ogren.py günlüğünden) | temiz |
-| zor kare | bölüm+sn koordinatı, kırpılmış altyazı-bant PNG (opsiyonel, açık onayla) | gri — tek kare, bant kırpılmış |
+## Önce telif meselesi
 
-⛔ Pakete ASLA girmeyecekler: SRT metni, cümle/tam replik düzeyi düzeltmeler,
-tam video kareleri, dosya yolları, kullanıcı kimliği.
-GitHub repoya telifli altyazı dağıtmama kuralı CONTRIBUTING'e birebir yazılır.
+Bir yerde durmamız lazım: altyazı metnini buraya toplayamayız. Kullanıcının
+çıkardığı .srt lisanslı çeviridir; repoya giren her replik telif sorunu demek.
+O yüzden toplanacak şey metnin kendisi değil, hataların şekli:
 
-## 2. Döngü akışı
+- OCR karışım istatistikleri — "rn"nin "n"e, "i"nin "ı"ya dönmesi gibi, hangi
+  durumda kaç kez
+- kelime düzeyi düzeltme girişleri ("FilFin → Fil'in" gibi)
+- hangi videoda (hash), hangi ayarlarla kaç blok çıktığı
+- gerektiğinde, açık onay istenerek, tek bir kırpılmış altyazı bandı karesi
 
-1. **Üretim:** Araç her koşumda `<srt>.hardsub2srt.json` meta yazar (yapıldı, commit 317d659).
-2. **Dışa aktar:** UI'da "Öğrenme paketi dışa aktar" → ogren.py öğrenme günlüğü + meta
-   istatistikleri + karışım matrisi birleştirilip tek anonim `paket-<tarih>.json` üretir.
-   Kullanıcı paketi yüklemeden önce içeriğin önizlemesini görür ve onaylar.
-3. **Gönderim:** Kullanıcı paketi GitHub **Issue**'ya ekler (şablonlu — PR'dan çok daha kolay,
-   .exe kullanıcısı için tek tık). Teknik kullanıcılar sözlük dosyasını düzenleyip **PR** da açabilir.
-4. **Birleştirme:** Bakımcı `birlestir.py` koşar:
-   - paketleri okur, sözlük çakışmalarını oylar (≥2 bağımsız kullanıcı aynı düzeltmeyi verdiyse
-     otomatik kabul; tek oy → "aday" havuzu, insan onayı);
-   - karışım matrislerini toplar → düzeltme katmanı için kural adayları çıkarır;
-   - çıktı: güncel `kullanici-sozlugu.txt` + `istatistik-sureli.json` + sürüm notu.
-5. **Dağıtım:** Yeni exe/sözlük sürümü yayınlanır → kullanıcılar günceller → döngü kapanır.
+Bunlar telifli değil ve %100'e götürecek şey tam olarak bunlar.
 
-## 3. %100 hedefine ölçüm köprüsü
+## Döngü
 
-- `regresyon/` kare seti her sürümde koşar → CER trendi README'de yayınlanır (sürüm başına).
-- low-conf kurtarma turu ve karışım madenciliği, kullanıcı verisi geldikçe beslenir.
-- Ölçüm kuralı: "iyileşti" demek için GT-CER + low-conf oranı ikisi birden düşmeli.
+1. Program zaten her koşumda video hash'ini ve istatistikleri yan dosyaya
+   yazıyor; temeli hazır.
+2. Arayüze "öğrenme paketi dışa aktar" düğmesi gelecek: tek tıkla anonim bir
+   .json üretir. İçerik kaydedilmeden önce önizlenir, onay verilir; yol
+   bilgisi ve kimlik yok.
+3. Bu dosya GitHub'da bir Issue'ya eklenir. PR bilinçli seçilmedi: .exe ile
+   gelen insan PR açamaz, dosya ekleyebilir. PR'ı teknik kullanıcılar için
+   açık bırakıyoruz (sözlüğe satır ekleyip göndermek gibi).
+4. Geliştirmede birleştirici bir betik paketleri okur: iki farklı insan aynı
+   hatayı aynı şekilde düzelttiyse otomatik kabul; tek oy kaldıysa aday
+   havuzunda bekler, insan karar verir.
+5. Sonuç yeni sözlük dosyasına girer, sonraki sürümle herkese dağılır.
+   Döngü böyle kapanır.
 
-## 4. .exe yol haritası (ayrı büyük iş)
+## Ölçüm
 
-- PyInstaller tek dosya; PaddleOCR **CPU** modeli varsayılan (~200-400 MB), GPU opsiyonel mod.
-- Güncelleme: exe ayrı, sözlük/istatistik ayrı dosya → sözlük güncellemesi exe çıkmadan dağıtılabilir.
-- İlk GitHub sürümünden önce: LICENSE (telif uyarılı), CONTRIBUTING (veri kuralı), Issue şablonları.
+"İyileşti" demeyi söylemek kolay, ölçmek zor. Her sürümde regresyon seti
+koşacak ve CER sayısı sürüm notlarında yayınlanacak. Kullanıcı düzeltmeleri
+eklendikçe bu sayı düşmeli; düşmüyorsa değişiklik işe yaramamış demektir.
+Hedef %100'e yaklaşmak — ama bunu iddia olarak değil, sürüm sürüm yayınlanan
+ölçümle göstereceğiz.
 
-## 5. Kararları bekleyenler
+## .exe
 
-- Repo adı ve açılış sürümü kapsamı (araç + UI + betikler mi; kurs içeriği mi).
-- Zor kare paylaşımının opt-in varsayılan mı, açık onay mı olacağı (öneri: açık onay).
+Tek dosyalık bir .exe hedefleniyor. CPU modeli varsayılan olsun ki GPU'su
+olmayan da çalışabilsin; GPU opsiyonel kalsın. Sözlük dosyasını exe'den ayrı
+dağıtacağız ki küçük düzeltmeler sürüm beklemeden ulaşsın. PaddleOCR ve GPU
+bağımlılıkları paketi epey büyütüyor — bu ayrı bir mühendislik işi, ilk sürüm
+için CPU modeli yeterli olabilir.
+
+## Açık sorular
+
+- İlk sürümün kapsamı: yalnız araç mı, arayüz ve betikleriyle birlikte mi.
+- Zor kare paylaşımı varsayılan açık mı kapalı mı — önerimiz kapalı; paylaşmak
+  isteyen açıkça isteyerek paylaşsın.

@@ -1,6 +1,6 @@
 # Katkı kuralları (CONTRIBUTING)
 
-## ⛔ Kırmızı çizgi — telif
+## Kırmızı çizgi: telif
 
 Bu repo telifli içerik dağıtmaz. Aşağıdakiler **asla** gönderilmez
 (Issue, PR, ekran görüntüsü — hiçbir yolla):
@@ -9,7 +9,7 @@ Bu repo telifli içerik dağıtmaz. Aşağıdakiler **asla** gönderilmez
 2. Tam video kareleri / anime görüntüsü
 3. Video dosyaları veya video yolları
 
-## Gönderilebilen veri (telif-güvenli)
+## Gönderilebilen veri (telif sorunu olmayan)
 
 | Veri | Nasıl |
 |---|---|
@@ -17,8 +17,8 @@ Bu repo telifli içerik dağıtmaz. Aşağıdakiler **asla** gönderilmez
 | **Sözlük PR'ı** | Teknik kullanıcılar `kullanici-sozlugu.txt`'ye satır ekleyip PR açabilir (yanlış→doğru kelime; cümle değil) |
 | **Hata raporu** | Koşum istatistikleri (stats.json içeriği — metin değil), araç sürümü, `--cpu/--gpu` |
 
-Zor kare paylaşımı (kırpılmış altyazı-bant PNG) yalnız **bakımcı özel talebiyle ve
-açık onayla** olur — varsayılan olarak kapalıdır.
+Zor kare paylaşımı (kırpılmış altyazı-bant PNG) yalnız geliştiricinin özel
+talebiyle ve açık onayla olur — varsayılan olarak kapalıdır.
 
 ## Kod PR'ı
 
@@ -46,5 +46,5 @@ regresyon CER trendi README'de yayınlanır.
 
 ## Davranış
 
-Sıcak ve somut olalım: hata raporunda araç sürümü + istatistik dosyan + ne
-gördüğünü bekliyoruz; tartışmada ölçümü konuşalım, kimseyi değil.
+Hata raporunda araç sürümünü, stats.json içeriğini ve ne gördüğünü yaz.
+Tartışmada tahminden çok ölçüme bakalım.
