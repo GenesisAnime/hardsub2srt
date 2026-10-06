@@ -1,0 +1,246 @@
+{
+  "_aciklama": "hardsub2srt regresyon seti — nokta listesi. zaman_sn = bloklar.json'daki seçili bloğun orta noktası (fade kenarından uzak). 'bant' alanını --bant-yenile doldurur (aracın detect_style + _dar_bant_genislet zinciri); OCR bu koordinatlarla kareler/*.png'yi kırpar. PNG sabit girdidir (rapor _op-rapor.md §c.1: video sonradan değişebilir).",
+  "arac_yol": "C:\\Users\\naton\\OneDrive\\Desktop\\.srt\\hardsub2srt.py",
+  "video_dizin": "E:/One Piece",
+  "noktalar": [
+    {
+      "id": "e1050_t79.6",
+      "bolum": 1050,
+      "zaman_sn": 79.6,
+      "video_glob": "E:/One Piece/S01E1050*.mp4",
+      "neden": "Rapor _op-rapor.md §b.2: altyazısız-rip şüphesi; koşumun yakaladığı tek diyalog (conf 0.09) — en sert OCR vakası.",
+      "bant": {
+        "band_y": 860,
+        "band_h": 220,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": null,
+        "upscale2x": false,
+        "kaynak": "varsayilan (detect_style basarisiz)",
+        "video": "S01E1050 - Two Dragons Face Off! Momonosuke’s Determination!.mp4",
+        "cozunurluk": "1920x1080"
+      }
+    },
+    {
+      "id": "e1007_t643.2",
+      "bolum": 1007,
+      "zaman_sn": 643.2,
+      "video_glob": "E:/One Piece/S01E1007*.mp4",
+      "neden": "Rapor §b.3: dar bant (y=952,h=128 piksel) + aracın tek 'tophat' maskeli bölümü, low-conf %64 (64/150).",
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "tophat",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 15,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1007 - Zoro’s Pursuit! Ice Oni Tag!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 236.4
+      }
+    },
+    {
+      "id": "e1007_t662",
+      "bolum": 1007,
+      "zaman_sn": 662.0,
+      "video_glob": "E:/One Piece/S01E1007*.mp4",
+      "neden": "Aynı bölümde düşük-conf blok (conf 0.50, 'sonrasında olacaklariçin endişeliyim:') — ikinci motor (PP-OCRv6) oy zincirini örnekler.",
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "tophat",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 15,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1007 - Zoro’s Pursuit! Ice Oni Tag!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 236.4
+      }
+    },
+    {
+      "id": "e1071_t680.4",
+      "bolum": 1071,
+      "zaman_sn": 680.4,
+      "video_glob": "E:/One Piece/S01E1071*.mp4",
+      "neden": "Rapor §b.3: en dar bant (y=976,h=104 piksel); üç satırlık uzun diyalog — dar-bant genişletme (BANT_MIN_H_1080=180) kuralının hedefi.",
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 20,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1071 - Luffy's Peak - Attained! Gear Five.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 255.0
+      }
+    },
+    {
+      "id": "e1074_t692.8",
+      "bolum": 1074,
+      "zaman_sn": 692.8,
+      "video_glob": "E:/One Piece/S01E1074*.mp4",
+      "neden": "Rapor §b.1: dar bant (940,140 piksel) + altyazısız-rip şüphesi (speech 25.7 sn, 3 kötü bölüm arası); kısa blok (0.2 sn) fade kenarı riski.",
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 35,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1074 - I Trust Momo - Luffy's Final Powerful Technique!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 255.0
+      }
+    },
+    {
+      "id": "e1075_t610.2",
+      "bolum": 1075,
+      "zaman_sn": 610.2,
+      "video_glob": "E:/One Piece/S01E1075*.mp4",
+      "neden": "Rapor §b.3: dar bant (940,140 piksel), low-conf %66 (27/41).",
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "tophat",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 30,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1075 - 20 Years' Worth of Prayers! Take Back the Land of Wano!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 255.0,
+        "beyaz_fon": true
+      }
+    },
+    {
+      "id": "e1049_t310.7",
+      "bolum": 1049,
+      "zaman_sn": 310.7,
+      "video_glob": "E:/One Piece/S01E1049*.mp4",
+      "neden": "Rapor §b.1: düşük verim (17 blok / 31.2 sn konuşma, white_thr=250); Wano verim çöküşü kümesinden.",
+      "bant": {
+        "band_y": 860,
+        "band_h": 220,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": null,
+        "upscale2x": false,
+        "kaynak": "varsayilan (detect_style basarisiz)",
+        "video": "S01E1049 - Luffy Soars! Revenge Against the King of the Beasts.mp4",
+        "cozunurluk": "1920x1080"
+      }
+    },
+    {
+      "id": "e02_t80.5",
+      "bolum": 2,
+      "zaman_sn": 80.5,
+      "video_glob": "E:/One Piece/S01E02*.mp4",
+      "neden": "Erken bölüm sağlıklı koşum (298 blok, low-conf %10); rapor §c.1'de videosu sonradan değiştiği kanıtlanan bölüm — sabit PNG girdinin gerekliliğini temsil eder.",
+      "bant": {
+        "band_y": 796,
+        "band_h": 284,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 80,
+        "upscale2x": false,
+        "kaynak": "auto",
+        "video": "S01E02 - The Great Swordsman Appears! Pirate Hunter, Roronoa Zoro.mp4",
+        "cozunurluk": "1440x1080",
+        "core": 254.2
+      }
+    },
+    {
+      "id": "e1004_t1131",
+      "bolum": 1004,
+      "zaman_sn": 1131.0,
+      "video_glob": "E:/One Piece/S01E1004*.mp4",
+      "neden": "Rapor §b.3 dar bant listesindeki 24 bölümden biri; low-conf orta (%28) — dar-bant genişletmenin tetiklenmesini gözlemler.",
+      "bant": {
+        "band_y": 892,
+        "band_h": 188,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 35,
+        "upscale2x": true,
+        "kaynak": "auto",
+        "video": "S01E1004 - An Inherited Technique! Unleashing Oden’s Secret Swordplay!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 253.1
+      }
+    },
+    {
+      "id": "e1080_t970",
+      "bolum": 1080,
+      "zaman_sn": 970.0,
+      "video_glob": "E:/One Piece/S01E1080*.mp4",
+      "neden": "Rapor §b.2 speech 30-120 sn Wano kümesi; normal bant, düşük-conf blok (0.73).",
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 40,
+        "upscale2x": true,
+        "kaynak": "auto",
+        "video": "S01E1080 - A Celebration Banquet! The New Emperors of the Sea!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 255.0
+      }
+    },
+    {
+      "id": "e1000_t651.8",
+      "bolum": 1000,
+      "zaman_sn": 651.8,
+      "video_glob": "E:/One Piece/S01E1000*.mp4",
+      "neden": "Düşük risk kontrol: sağlıklı Wano-bası koşum (160 blok, low-conf %14), normal bant.",
+      "bant": {
+        "band_y": 836,
+        "band_h": 244,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 55,
+        "upscale2x": false,
+        "kaynak": "auto",
+        "video": "S01E1000 - Overwhelming Strength! The Straw Hats Come Together!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 254.4
+      }
+    },
+    {
+      "id": "e1001_t494.7",
+      "bolum": 1001,
+      "zaman_sn": 494.7,
+      "video_glob": "E:/One Piece/S01E1001*.mp4",
+      "neden": "Düşük risk kontrol ikincisi: sağlıklı koşum (182 blok, low-conf %14), thr modu.",
+      "bant": {
+        "band_y": 836,
+        "band_h": 244,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 55,
+        "upscale2x": false,
+        "kaynak": "auto",
+        "video": "S01E1001 - A Risky Invitation! A Plot to Eliminate Queen!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 254.8
+      }
+    }
+  ]
+}

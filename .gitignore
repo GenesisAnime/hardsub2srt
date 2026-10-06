@@ -1,0 +1,20 @@
+# Çıktılar ve kişisel çalışma artefaktları — repoya girmez
+*.srt
+*.srt.hardsub2srt.json
+*.stats.json
+*.bloklar.json
+*.takas-gunlugu.json
+*.duzeltme-gunlugu.json
+*.ogrenme-gunlugu.json
+kosuldu.list
+
+# Anime kareleri (telif) — regresyon kareleri YEREL kalmalı
+regresyon/kareler/
+qa/
+arsiv/
+
+# Geliştirme kalıntıları
+__pycache__/
+*.pyc
+_*
+*.vtt

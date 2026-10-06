@@ -1,0 +1,6 @@
+numpy
+opencv-python
+easyocr
+rapidocr>=3.9
+onnxruntime
+flask

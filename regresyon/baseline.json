@@ -1,0 +1,300 @@
+{
+  "meta": {
+    "arac": "hardsub2srt.py",
+    "surum": "hardsub2srt 2026-10-06",
+    "arac_yol": "C:\\Users\\naton\\OneDrive\\Desktop\\.srt\\hardsub2srt.py",
+    "tarih": "2026-10-06 23:30:52",
+    "cihaz": "CPU (regresyon)",
+    "dil": "tr,en",
+    "easyocr": "1.7.2",
+    "onnxruntime": "1.26.0",
+    "nokta_sayisi": 12,
+    "hata_sayisi": 0,
+    "not": "OCR girdisi kareler/*.png (sabit); bant koordinatlari noktalar.json'da donduruldu (--bant-yenile). Zincir: 3 varyant konsensus + conf<0.75 ikinci motor oyu (hardsub2srt.py ile ayni)."
+  },
+  "noktalar": {
+    "e1050_t79.6": {
+      "okundu": true,
+      "metin": "7 y ^1 '1 & % #\nsen de kendiniçin yapiyorsun değil mi?",
+      "conf": 0.1912,
+      "ikinci_oy": {
+        "metin": "ジンベエ 宝亀克寿\nsen de kendinjiçin yapiyorsun degil' mi?",
+        "conf": 0.951,
+        "motor": "pp-ocrv6"
+      },
+      "sure_sn": 13.6,
+      "bant": {
+        "band_y": 860,
+        "band_h": 220,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": null,
+        "upscale2x": false,
+        "kaynak": "varsayilan (detect_style basarisiz)",
+        "video": "S01E1050 - Two Dragons Face Off! Momonosuke’s Determination!.mp4",
+        "cozunurluk": "1920x1080"
+      },
+      "png": "e1050_t79.6.png"
+    },
+    "e1007_t643.2": {
+      "okundu": true,
+      "metin": "Yaraucıs) antikorları da elinde &utujyordurs",
+      "conf": 0.2758,
+      "ikinci_oy": {
+        "metin": "Yaratıcısı antikorları da elinde tutuyordur.",
+        "conf": 0.9787,
+        "motor": "pp-ocrv6"
+      },
+      "sure_sn": 9.1,
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "tophat",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 15,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1007 - Zoro’s Pursuit! Ice Oni Tag!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 236.4
+      },
+      "png": "e1007_t643.2.png"
+    },
+    "e1007_t662": {
+      "okundu": true,
+      "metin": "Siddet düşkunluklerinden çok\n'sonrasında @lacaklariçin endişeliyim: 0",
+      "conf": 0.4329,
+      "ikinci_oy": {
+        "metin": "sonrasinda olacaklar için endişeliyim. Şiddet düşkünlüklerinden çok,",
+        "conf": 0.9521,
+        "motor": "pp-ocrv6"
+      },
+      "sure_sn": 9.4,
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "tophat",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 15,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1007 - Zoro’s Pursuit! Ice Oni Tag!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 236.4
+      },
+      "png": "e1007_t662.png"
+    },
+    "e1071_t680.4": {
+      "okundu": true,
+      "metin": "Böyle alçak bir adam olarak yaşadığın sürece senin\nyüzünden ölenlerin gözü arkada kalmaya devam edecek!",
+      "conf": 0.9227,
+      "ikinci_oy": null,
+      "sure_sn": 10.1,
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 20,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1071 - Luffy's Peak - Attained! Gear Five.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 255.0
+      },
+      "png": "e1071_t680.4.png"
+    },
+    "e1074_t692.8": {
+      "okundu": true,
+      "metin": "seytan meyvesi güçleri tek başına\ndunyayı dize getirmeye yetmez!",
+      "conf": 0.7708,
+      "ikinci_oy": null,
+      "sure_sn": 10.0,
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 35,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1074 - I Trust Momo - Luffy's Final Powerful Technique!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 255.0
+      },
+      "png": "e1074_t692.8.png"
+    },
+    "e1075_t610.2": {
+      "okundu": true,
+      "metin": "Aplal yerine koydugunuz adam tarafundan\nyenilmek sinfr Dozucu @lsa gerek] eleber",
+      "conf": 0.5555,
+      "ikinci_oy": {
+        "metin": "yenilmek sinir bozucu olsa gerek! eleber",
+        "conf": 0.9983,
+        "motor": "pp-ocrv6"
+      },
+      "sure_sn": 10.9,
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "tophat",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 30,
+        "upscale2x": true,
+        "kaynak": "auto-genisletildi (dar bant -> hedef h)",
+        "video": "S01E1075 - 20 Years' Worth of Prayers! Take Back the Land of Wano!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 255.0,
+        "beyaz_fon": true
+      },
+      "png": "e1075_t610.2.png"
+    },
+    "e1049_t310.7": {
+      "okundu": true,
+      "metin": "Kaido, Onigashima'da başıboş gezerse herkes dayak yerl",
+      "conf": 0.4211,
+      "ikinci_oy": {
+        "metin": "Kaido, Onigashima'da başıboş gezerse herkes dayak yer!",
+        "conf": 0.9921,
+        "motor": "pp-ocrv6"
+      },
+      "sure_sn": 10.7,
+      "bant": {
+        "band_y": 860,
+        "band_h": 220,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": null,
+        "upscale2x": false,
+        "kaynak": "varsayilan (detect_style basarisiz)",
+        "video": "S01E1049 - Luffy Soars! Revenge Against the King of the Beasts.mp4",
+        "cozunurluk": "1920x1080"
+      },
+      "png": "e1049_t310.7.png"
+    },
+    "e02_t80.5": {
+      "okundu": true,
+      "metin": "B2] kio bep yanunda oacağum",
+      "conf": 0.391,
+      "ikinci_oy": {
+        "metin": "Bil ki.  hep yaninda olacağım",
+        "conf": 0.9272,
+        "motor": "pp-ocrv6"
+      },
+      "sure_sn": 10.4,
+      "bant": {
+        "band_y": 796,
+        "band_h": 284,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 80,
+        "upscale2x": false,
+        "kaynak": "auto",
+        "video": "S01E02 - The Great Swordsman Appears! Pirate Hunter, Roronoa Zoro.mp4",
+        "cozunurluk": "1440x1080",
+        "core": 254.2
+      },
+      "png": "e02_t80.5.png"
+    },
+    "e1004_t1131": {
+      "okundu": true,
+      "metin": "Hepimiz onu çok sevdiğinden\nbirbirimizi öldürmeye bile niyetlendik;",
+      "conf": 0.9169,
+      "ikinci_oy": null,
+      "sure_sn": 13.0,
+      "bant": {
+        "band_y": 892,
+        "band_h": 188,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 35,
+        "upscale2x": true,
+        "kaynak": "auto",
+        "video": "S01E1004 - An Inherited Technique! Unleashing Oden’s Secret Swordplay!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 253.1
+      },
+      "png": "e1004_t1131.png"
+    },
+    "e1080_t970": {
+      "okundu": true,
+      "metin": "Her gün karınlarını tıka basa doyurabilecekleri,\nistedikleri kadar içebilecekleri.",
+      "conf": 0.7428,
+      "ikinci_oy": {
+        "metin": "Her gün karınlarını tıka basa doyurabilecekleri,\nistedikleri kadar içebilecekleri...",
+        "conf": 0.9903,
+        "motor": "pp-ocrv6"
+      },
+      "sure_sn": 11.7,
+      "bant": {
+        "band_y": 900,
+        "band_h": 180,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 40,
+        "upscale2x": true,
+        "kaynak": "auto",
+        "video": "S01E1080 - A Celebration Banquet! The New Emperors of the Sea!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 255.0
+      },
+      "png": "e1080_t970.png"
+    },
+    "e1000_t651.8": {
+      "okundu": true,
+      "metin": "Genelevde bizim için kendinizi\nfeda ettiniz, sağ olun var olun!",
+      "conf": 0.8325,
+      "ikinci_oy": null,
+      "sure_sn": 9.2,
+      "bant": {
+        "band_y": 836,
+        "band_h": 244,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 55,
+        "upscale2x": false,
+        "kaynak": "auto",
+        "video": "S01E1000 - Overwhelming Strength! The Straw Hats Come Together!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 254.4
+      },
+      "png": "e1000_t651.8.png"
+    },
+    "e1001_t494.7": {
+      "okundu": true,
+      "metin": "Kid, sen ve Apoo ittifak kurmuştunuz.\nAma Apoo ikinize ihanet etti.",
+      "conf": 0.9985,
+      "ikinci_oy": {
+        "metin": "Kid, sen ve Apoo ittifak kurmuştunuz.\nAma Apoo ikinize ihanet etti.",
+        "conf": 0.9985,
+        "motor": "pp-ocrv6"
+      },
+      "sure_sn": 10.6,
+      "bant": {
+        "band_y": 836,
+        "band_h": 244,
+        "mask": "thr",
+        "white_thr": 240,
+        "tophat_thr": 120,
+        "text_h": 55,
+        "upscale2x": false,
+        "kaynak": "auto",
+        "video": "S01E1001 - A Risky Invitation! A Plot to Eliminate Queen!.mp4",
+        "cozunurluk": "1920x1080",
+        "core": 254.8
+      },
+      "png": "e1001_t494.7.png"
+    }
+  }
+}
