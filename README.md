@@ -68,6 +68,7 @@ Kurallar [CONTRIBUTING.md](CONTRIBUTING.md)'de.
 | `toplu.bat` | Toplu koşum + done-listesi (koşulmuşları atlar, `--yeni` ile bypass) |
 | `senkron-vault.ps1` | Geliştirme kopyası senkronu (dahili) |
 | `regresyon/` | 12 nokta OCR regresyon seti + kıyas betiği |
+| `docs/` | Gelişim günlüğü, karar kayıtları ve öğrenmeler |
 | `kullanici-sozlugu.txt` | Kelime-düzeyi düzeltme sözlüğü (toplulukla büyür) |
 
 ## Yol haritası
