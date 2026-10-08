@@ -64,10 +64,15 @@ Rules in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | File | What |
 |---|---|
+| `cikar.bat` | **Main entry**: drag-and-drop extraction (single/multiple files or a folder) |
+| `arayuz.bat` | UI launcher (opens the browser, runs the server) |
 | `hardsub2srt.py` | Extraction engine (CLI) |
 | `ui_server.py` | Flask UI: runs, corrections, learning, quality panel |
 | `ogren.py` | Automatic learning CLI (safe dual classifier) |
 | `vtt-qa.py` | Ground-truth/VTT measurement |
+| `srt2ass.py` | SRT → ASS converter (preserves style/position) |
+| `paket-uret.py` | Anonymous learning-package builder (community loop) |
+| `birlestir.py` | Vote-based merger that folds incoming packages into the dictionary |
 | `toplu.bat` | Batch runs + done-list (skips already-processed, `--yeni` bypasses) |
 | `regresyon/` | 12-point OCR regression set + comparison script |
 | `docs/` | Development log, decision records, lessons |

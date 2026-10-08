@@ -18,3 +18,7 @@ __pycache__/
 *.pyc
 _*
 *.vtt
+
+# Büyük yerel OCR sözlüğü (~15 MB; repoya girmez, yerel kalır)
+turkce-sozluk.txt
+README.vault-oncesi-*.md

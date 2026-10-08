@@ -61,12 +61,16 @@ Kurallar [CONTRIBUTING.md](CONTRIBUTING.md)'de.
 
 | Dosya | Ne |
 |---|---|
+| `cikar.bat` | **Ana giriş**: video sürükle-bırak çıkarma (tek/çoklu dosya veya klasör) |
+| `arayuz.bat` | Arayüz başlatıcı (tarayıcıyı açar, sunucuyu koşturur) |
 | `hardsub2srt.py` | Çıkarım motoru (CLI) |
 | `ui_server.py` | Flask arayüz: koşum, düzeltme, öğrenme, kalite panosu |
 | `ogren.py` | Otomatik öğrenme CLI (güvenli çift sınıflandırıcı) |
 | `vtt-qa.py` | GT/VTT kıyas ölçümü |
+| `srt2ass.py` | SRT → ASS dönüştürücü (stil/konum koruyan çıktı) |
+| `paket-uret.py` | Anonim öğrenme paketi üreticisi (topluluk döngüsü) |
+| `birlestir.py` | Gelen paketleri oylamayla sözlüğe işleyen birleştirici |
 | `toplu.bat` | Toplu koşum + done-listesi (koşulmuşları atlar, `--yeni` ile bypass) |
-| `senkron-vault.ps1` | Geliştirme kopyası senkronu (dahili) |
 | `regresyon/` | 12 nokta OCR regresyon seti + kıyas betiği |
 | `docs/` | Gelişim günlüğü, karar kayıtları ve öğrenmeler |
 | `kullanici-sozlugu.txt` | Kelime-düzeyi düzeltme sözlüğü (toplulukla büyür) |
