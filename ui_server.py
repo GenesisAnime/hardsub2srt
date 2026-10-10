@@ -1542,7 +1542,29 @@ def api_ai_ceviri_durum():
     try:
         result = translation_review.proposal_status(request.args.get("review_id", ""))
         result["review_id"] = request.args.get("review_id", "")
+        try:
+            result["translation_memory_sync"] = translation_review.sync_translation_memory(
+                request.args.get("review_id", ""))
+        except Exception as exc:
+            result["translation_memory_sync"] = {
+                "status": "pending",
+                "message": "Onay kararları kaydedildi; çeviri belleği görünümü henüz onarılamadı.",
+                "error_type": type(exc).__name__,
+            }
         return jsonify(result)
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.post("/api/ai-ceviri/bellek-yenile")
+def api_ai_ceviri_bellek_yenile():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        return jsonify(translation_review.sync_translation_memory(v.get("review_id", "")))
     except Exception as exc:
         return _translation_error(exc)
 
@@ -1574,7 +1596,8 @@ def api_ai_ceviri_karar():
         record = translation_review.decide(
             v.get("review_id", ""), v.get("proposal_id", ""),
             v.get("decision", ""), v.get("translation"))
-        return jsonify({"ok": True, "event_id": record["event_id"]})
+        return jsonify({"ok": True, "event_id": record["event_id"],
+                        "translation_memory_sync": record.get("translation_memory_sync")})
     except Exception as exc:
         return _translation_error(exc)
 

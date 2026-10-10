@@ -147,30 +147,6 @@ def create_request(review_id: str, drafts: object, source_language: object,
     if not isinstance(drafts, dict) or not drafts or len(drafts) > MAX_CUES_PER_REQUEST:
         raise ocr_review.ReviewError(f"1–{MAX_CUES_PER_REQUEST} altyazı seçin", 400)
     verified = _verified_sources(info)
-    items, private_cues = [], []
-    for cue_id, draft in drafts.items():
-        if not isinstance(cue_id, str) or not _valid_text(draft):
-            raise ocr_review.ReviewError("Altyazı kimliği veya çeviri taslağı geçersiz", 400)
-        link = verified.get(cue_id)
-        if not link:
-            raise ocr_review.ReviewError("Her seçili blok önce görselle doğrulanmış olmalı", 409)
-        cue, source_event = link["cue"], link["event"]
-        crop = ocr_review._verify_crop(info, cue)
-        if crop is None:
-            raise ocr_review.ReviewError("Kırpım değişmiş veya doğrulanamıyor", 409)
-        image = ocr_review._read_bounded(crop[0], ocr_review.MAX_CROP_BYTES, "Altyazı kırpımı")
-        items.append({
-            "cue_id": cue_id, "start_ms": cue["start_ms"], "end_ms": cue["end_ms"],
-            "verified_source_text": source_event["verified_source_text"],
-            "draft_translation": draft.strip(),
-            "crop_mime_type": "image/jpeg",
-            "crop_base64": base64.b64encode(image).decode("ascii"),
-        })
-        private_cues.append({"cue_id": cue_id, "source_review_event_id": source_event["event_id"],
-                             "crop_sha256_local": cue["crop_sha256_local"],
-                             "verified_source_text": source_event["verified_source_text"],
-                             "draft_translation": draft.strip(),
-                             "start_ms": cue["start_ms"], "end_ms": cue["end_ms"]})
     request = {
         "schema_version": 1, "request_id": uuid.uuid4().hex,
         "source_language": source_language.strip(), "target_language": target_language.strip(),
@@ -182,7 +158,7 @@ def create_request(review_id: str, drafts: object, source_language: object,
             "eksik/fazla içerik, terim ve üslup açısından değerlendir. Yalnız öneri ver; SRT zamanını, "
             "cue_id değerini değiştirme; cue ekleme/birleştirme/bölme. JSON dışında metin yazma."
         ),
-        "cues": items,
+        "cues": [],
         "response_schema": {
             "schema_version": 1, "request_id": "same request_id", "cues": [{
                 "cue_id": "same cue_id", "start_ms": 0, "end_ms": 1,
@@ -195,6 +171,43 @@ def create_request(review_id: str, drafts: object, source_language: object,
             }],
         },
     }
+    items, private_cues = request["cues"], []
+    # Reserve envelope overhead first. Image bytes are checked against the
+    # exact JSON budget before they are read into an accumulated base64 batch.
+    estimated_size = len(_json_bytes(request)) - 2  # replace the empty [] with cue JSON
+    for cue_id, draft in drafts.items():
+        if not isinstance(cue_id, str) or not _valid_text(draft):
+            raise ocr_review.ReviewError("Altyazı kimliği veya çeviri taslağı geçersiz", 400)
+        link = verified.get(cue_id)
+        if not link:
+            raise ocr_review.ReviewError("Her seçili blok önce görselle doğrulanmış olmalı", 409)
+        cue, source_event = link["cue"], link["event"]
+        crop = ocr_review._verify_crop(info, cue)
+        if crop is None:
+            raise ocr_review.ReviewError("Kırpım değişmiş veya doğrulanamıyor", 409)
+        item = {
+            "cue_id": cue_id, "start_ms": cue["start_ms"], "end_ms": cue["end_ms"],
+            "verified_source_text": source_event["verified_source_text"],
+            "draft_translation": draft.strip(), "crop_mime_type": "image/jpeg",
+            "crop_base64": "",
+        }
+        base64_length = 4 * ((crop[1] + 2) // 3)
+        item_size = len(_json_bytes(item)) - 1 + base64_length
+        proposed_size = estimated_size + (1 if items else 0) + item_size
+        if proposed_size > MAX_REQUEST_BYTES:
+            raise ocr_review.ReviewError(
+                "İstek paketi 12 MiB sınırını aşacak; daha az veya küçük kırpım seçin", 413)
+        image = ocr_review._read_bounded(crop[0], ocr_review.MAX_CROP_BYTES, "Altyazı kırpımı")
+        if len(image) != crop[1] or _sha(image) != cue.get("crop_sha256_local"):
+            raise ocr_review.ReviewError("Kırpım istek hazırlanırken değişti; istek oluşturulmadı", 409)
+        item["crop_base64"] = base64.b64encode(image).decode("ascii")
+        items.append(item)
+        estimated_size = proposed_size
+        private_cues.append({"cue_id": cue_id, "source_review_event_id": source_event["event_id"],
+                             "crop_sha256_local": cue["crop_sha256_local"],
+                             "verified_source_text": source_event["verified_source_text"],
+                             "draft_translation": draft.strip(),
+                             "start_ms": cue["start_ms"], "end_ms": cue["end_ms"]})
     data = _json_bytes(request)
     if len(data) > MAX_REQUEST_BYTES:
         raise ocr_review.ReviewError("İstek paketi 12 MiB sınırını aşıyor; daha küçük grup seçin", 413)
@@ -454,6 +467,7 @@ def proposal_status(review_id: str) -> dict:
         seen.add(pid)
         proposals[pid] = event
     # Apply only valid append-only decision events, in order.
+    decision_ids = set()
     for event in events:
         if not _valid_event(event) or event["event_type"] != "decision":
             continue
@@ -463,12 +477,69 @@ def proposal_status(review_id: str) -> dict:
                 event.get("manifest_sha256") == proposal["manifest_sha256"] and
                 event.get("srt_sha256") == proposal["srt_sha256"] and
                 event.get("crop_sha256_local") == proposal["crop_sha256_local"] and
+                event["event_id"] not in decision_ids and
                 event["decision"] in ("accepted", "edited", "rejected") and
                 "decision_event_id" not in proposal):
+            decision_ids.add(event["event_id"])
             proposal["decision"] = event["decision"]
             proposal["decision_translation"] = event["approved_translation"]
             proposal["decision_event_id"] = event["event_id"]
+            proposal["decision_created_at"] = event["created_at"]
     return {"proposals": list(proposals.values()), "warnings": []}
+
+
+def sync_translation_memory(review_id: str) -> dict:
+    """Atomically rebuild the TM snapshot from accepted decision journal events.
+
+    The append-only translation review journal is authoritative. A failed file
+    projection is safe to retry at any time and cannot lose the user decision.
+    """
+    with _LOCK:
+        info = _info(review_id)
+        proposals = proposal_status(review_id)["proposals"]
+        rows = []
+        for proposal in proposals:
+            if proposal.get("decision") not in ("accepted", "edited"):
+                continue
+            decision_event_id = proposal.get("decision_event_id")
+            if not isinstance(decision_event_id, str) or not re.fullmatch(r"[a-f0-9]{32}", decision_event_id):
+                continue
+            rows.append({
+                "schema_version": 1,
+                "memory_id": hashlib.sha256(
+                    ("translation-memory-v1:" + decision_event_id).encode("ascii")).hexdigest()[:32],
+                "source_review_event_id": proposal["source_review_event_id"],
+                "verified_source_text": proposal["verified_source_text"],
+                "approved_translation": proposal["decision_translation"],
+                "source_language": proposal["source_language"],
+                "target_language": proposal["target_language"],
+                "cue_id": proposal["cue_id"], "job_id": proposal["job_id"],
+                "proposal_id": proposal["proposal_id"],
+                "decision_event_id": decision_event_id,
+                "created_at": proposal["decision_created_at"],
+            })
+        payload = b"".join(_json_bytes(row) for row in rows)
+        if len(payload) > MAX_EVENTS_BYTES or len(rows) > MAX_EVENTS:
+            raise ocr_review.ReviewError("Onaylı çeviri belleği sınırları aşıyor", 413)
+        target = info["pack"] / "translation-memory-v1.jsonl"
+        if target.is_symlink():
+            raise ocr_review.ReviewError("Çeviri belleği sembolik bağlantı olamaz", 403)
+        if target.exists():
+            current = ocr_review._read_bounded(target, MAX_EVENTS_BYTES, "Çeviri belleği")
+            if current == payload:
+                return {"status": "ready", "entry_count": len(rows)}
+        fd, tmp_name = tempfile.mkstemp(prefix=".translation-memory-", dir=info["pack"])
+        try:
+            os.chmod(tmp_name, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            Path(tmp_name).replace(target)
+        except Exception:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
+        return {"status": "ready", "entry_count": len(rows)}
 
 
 def _valid_event(event: dict) -> bool:
@@ -535,8 +606,6 @@ def _source_schema(source: object) -> bool:
 def _translation_schema(trans: object) -> bool:
     return (isinstance(trans, dict) and set(trans) == {"status", "issues", "proposed_translation", "reason"} and
             trans.get("status") in ("reviewed", "deferred") and isinstance(trans.get("issues"), list) and
-            all(isinstance(issue, str) and issue in ISSUES for issue in trans["issues"]) and
-            len(set(trans["issues"])) == len(trans["issues"]) and
             _valid_text(trans.get("reason")) and
             all(isinstance(issue, str) and issue in ISSUES for issue in trans["issues"]) and
             len(set(trans["issues"])) == len(trans["issues"]) and
@@ -577,16 +646,14 @@ def _decide_locked(review_id: str, proposal_id: str, decision: str,
               "srt_sha256": info["srt_sha256"], "crop_sha256_local": proposal["crop_sha256_local"],
               "decision": decision, "approved_translation": approved,
               "reviewer": "local_user", "created_at": _now()}
+    # Commit the user's decision first. This append-only journal is the source
+    # of truth; the translation-memory file is a recoverable derived snapshot.
     _append(info["pack"] / "translation-review-events.jsonl", record)
-    # A separately versioned memory is a projection of explicit user approvals.
-    if decision in ("accepted", "edited"):
-        memory = {"schema_version": 1, "memory_id": uuid.uuid4().hex,
-                  "source_review_event_id": proposal["source_review_event_id"],
-                  "verified_source_text": proposal["verified_source_text"],
-                  "approved_translation": approved,
-                  "source_language": proposal["source_language"], "target_language": proposal["target_language"],
-                  "cue_id": proposal["cue_id"], "job_id": proposal["job_id"],
-                  "proposal_id": proposal_id, "decision_event_id": record["event_id"],
-                  "created_at": record["created_at"]}
-        _append(info["pack"] / "translation-memory-v1.jsonl", memory)
+    try:
+        record["translation_memory_sync"] = sync_translation_memory(review_id)
+    except Exception as exc:
+        record["translation_memory_sync"] = {
+            "status": "pending", "message": "Karar kaydedildi; çeviri belleği görünümü daha sonra onarılabilir.",
+            "error_type": type(exc).__name__,
+        }
     return record
