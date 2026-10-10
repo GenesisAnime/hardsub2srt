@@ -14,6 +14,7 @@ import re
 import tempfile
 import threading
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -248,6 +249,90 @@ def create_request(review_id: str, drafts: object, source_language: object,
     return {"filename": path.name, "request": request}
 
 
+def create_chat_export(review_id: str, drafts: object, source_language: object,
+                       target_language: object) -> tuple[Path, str, int]:
+    """Build a user-shareable ZIP with visible JPEGs and no local sidecar data."""
+    created = create_request(review_id, drafts, source_language, target_language)
+    request_data = created["request"]
+    info = _info(review_id)
+    request = _load_request(info, request_data["request_id"])
+    verified = _verified_sources(info)
+    private_rows = {row["cue_id"]: row for row in request["_local"]["cues"]}
+    public_items, template_items = [], []
+    image_names = []
+    for item in request["cues"]:
+        cue_id = item["cue_id"]
+        local = private_rows.get(cue_id)
+        source = verified.get(cue_id)
+        if (not local or not source or source["event"]["event_id"] != local["source_review_event_id"] or
+                source["event"]["verified_source_text"] != local["verified_source_text"] or
+                source["cue"].get("crop_sha256_local") != local["crop_sha256_local"] or
+                ocr_review._verify_crop(info, source["cue"]) is None):
+            raise ocr_review.ReviewError("Kaynak doğrulaması veya görsel değişti; sohbet paketi oluşturulmadı", 409)
+        if not re.fullmatch(r"[a-f0-9]{32}-cue-\d{5,}", cue_id):
+            raise ocr_review.ReviewError("Cue dosya kimliği güvenli değil", 409)
+        try:
+            image = base64.b64decode(item["crop_base64"], validate=True)
+        except (ValueError, base64.binascii.Error):
+            raise ocr_review.ReviewError("İstek görseli bozuk; sohbet paketi oluşturulmadı", 409)
+        if _sha(image) != local["crop_sha256_local"]:
+            raise ocr_review.ReviewError("İstek görseli yerel doğrulama kaydıyla eşleşmiyor", 409)
+        del image
+        image_name = f"images/{cue_id}.jpg"
+        image_names.append(image_name)
+        public_items.append({
+            "cue_id": cue_id, "start_ms": item["start_ms"], "end_ms": item["end_ms"],
+            "verified_source_text": item["verified_source_text"],
+            "draft_translation": item["draft_translation"], "image_file": image_name,
+        })
+        template_items.append({
+            "cue_id": cue_id, "start_ms": item["start_ms"], "end_ms": item["end_ms"],
+            "source_review": {"status": "uncertain", "observed_text": "", "proposed_source_text": None,
+                              "reason": "Kaynak metin görselde henüz doğrulanmadı."},
+            "translation_review": {"status": "deferred", "issues": [],
+                                   "proposed_translation": None, "reason": "Kaynak doğrulanana kadar ertelendi."},
+        })
+    metadata = {
+        "schema_version": 1, "request_id": request["request_id"],
+        "source_language": request["source_language"], "target_language": request["target_language"],
+        "cues": public_items,
+    }
+    response_template = {"schema_version": 1, "request_id": request["request_id"], "cues": template_items}
+    prompt = """# Hardsub altyazı inceleme isteği
+
+Bu istek seçilmiş altyazı görüntülerini içerir. Sohbet eklerinde `request.json`, `response-template.json` ve `images/` altındaki görseller bulunmalıdır; bu şablon yanıtın gerekli alanlarını ve cue eşleşmelerini içerir. Her cue'da önce ilgili görselde kaynak metni oku ve bunu `request.json` içindeki `verified_source_text` ile karşılaştır. Görsel kaynak metni kesin doğrulamıyorsa `source_review.status` değerini `uncertain` veya `correction_proposed` yap ve `translation_review.status` değerini `deferred` yap; bağlamdan kaynak metni tahmin etme.
+
+Kaynak metin görselle birebir doğrulanırsa `source_review.status=confirmed` ve `observed_text` alanına görselde okuduğun tam metni yaz. Ardından `draft_translation` metnini anlam, eksik/fazla içerik, terim ve üslup açısından değerlendir. Öneri ver; insan onayı olmadan doğru kabul etme.
+
+Cue kimliklerini ve başlangıç/bitiş zamanlarını aynen koru. Cue ekleme, silme, birleştirme, bölme veya yeniden zamanlama yapma. `response-template.json` dosyasını tamamla ve yalnızca onunla aynı şemadaki JSON'u döndür. JSON dışında açıklama ekleme.
+
+İstek bilgileri `request.json` içindedir. Görsel dosyalarının adları cue kimlikleriyle eşleşir. Gerekli tüm görselleri incele; emin olmadığın metni belirsiz olarak işaretle.
+"""
+    directory = _request_dir(info)
+    filename = f"hardsub-ai-review-{request['request_id']}.zip"
+    target = directory / filename
+    if target.exists() or target.is_symlink():
+        raise ocr_review.ReviewError("Sohbet paketi dosyası zaten var", 409)
+    fd, tmp_name = tempfile.mkstemp(prefix=".chat-export-", suffix=".zip", dir=directory)
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp_name, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+            archive.writestr("prompt.md", prompt)
+            archive.writestr("request.json", json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
+            archive.writestr("response-template.json",
+                             json.dumps(response_template, ensure_ascii=False, indent=2) + "\n")
+            by_name = {f"images/{item['cue_id']}.jpg": item for item in request["cues"]}
+            for image_name in image_names:
+                image = base64.b64decode(by_name[image_name]["crop_base64"], validate=True)
+                archive.writestr(image_name, image)
+                del image
+        if Path(tmp_name).stat().st_size > MAX_REQUEST_BYTES:
+            raise ocr_review.ReviewError("Sohbet ZIP paketi 12 MiB sınırını aşıyor", 413)
+        Path(tmp_name).replace(target)
+    except Exception:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+    return target, filename, len(public_items)
 def _valid_text(value: object, allow_empty: bool = False) -> bool:
     return isinstance(value, str) and len(value) <= MAX_TEXT and (allow_empty or bool(value.strip()))
 

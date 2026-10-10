@@ -1580,6 +1580,23 @@ def api_ai_ceviri_istek():
         return _translation_error(exc)
 
 
+@app.post("/api/ai-ceviri/sohbet-paketi")
+def api_ai_ceviri_sohbet_paketi():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        path, filename, _count = translation_review.create_chat_export(
+            v.get("review_id", ""), v.get("drafts"),
+            v.get("source_language"), v.get("target_language"))
+        return send_file(path, mimetype="application/zip", as_attachment=True,
+                         download_name=filename, max_age=0)
+    except Exception as exc:
+        return _translation_error(exc)
+
+
 @app.get("/api/ai-ceviri/durum")
 def api_ai_ceviri_durum():
     if translation_review is None or ocr_review is None:
