@@ -48,19 +48,22 @@ def _scope(project_key: object, source_language: object, target_language: object
     key = unicodedata.normalize("NFKC", project_key).strip().casefold()
     if not re.fullmatch(r"[\w.-]{1,80}", key, flags=re.UNICODE) or key in {".", ".."}:
         raise ocr_review.ReviewError("Proje anahtarı 1–80 harf/rakam veya . _ - içermeli", 400)
-    langs = []
-    for value, label in ((source_language, "Kaynak"), (target_language, "Hedef")):
-        if not isinstance(value, str):
-            raise ocr_review.ReviewError(f"{label} dil etiketi gerekli", 400)
-        tag = value.strip().replace("_", "-").lower()
-        if not re.fullmatch(r"[a-z]{2,3}(?:-[a-z0-9]{2,8}){0,3}", tag):
-            raise ocr_review.ReviewError(f"{label} dil etiketi geçersiz (ör. ja, tr)", 400)
-        langs.append(tag)
+    langs = [_canonical_language(source_language, "Kaynak"),
+             _canonical_language(target_language, "Hedef")]
     if langs[0] == langs[1]:
         raise ocr_review.ReviewError("Kaynak ve hedef dil aynı olamaz", 400)
     body = {"project_key": key, "source_language": langs[0], "target_language": langs[1]}
     digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {**body, "scope_id": digest}
+
+
+def _canonical_language(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise ocr_review.ReviewError(f"{label} dil etiketi gerekli", 400)
+    tag = value.strip().replace("_", "-").lower()
+    if not re.fullmatch(r"[a-z]{2,3}(?:-[a-z0-9]{2,8}){0,3}", tag):
+        raise ocr_review.ReviewError(f"{label} dil etiketi geçersiz (ör. ja, tr)", 400)
+    return tag
 
 
 def _root() -> Path:
@@ -161,17 +164,20 @@ def _read(scope: dict) -> tuple[list[dict], list[dict]]:
                 raise ocr_review.ReviewError("Bellek günlüğünde geçersiz olay var; kısmi sonuç kullanılmadı", 409)
             events.append(event)
     active = {}
-    additions = set()
+    seen_event_ids = set()
+    rolled_back_ids = set()
     for event in events:
+        if event["event_id"] in seen_event_ids:
+            raise ocr_review.ReviewError("Bellek günlüğünde yinelenen olay kimliği var; kısmi sonuç kullanılmadı", 409)
+        seen_event_ids.add(event["event_id"])
         if event["event_type"] in ("translation_add", "lexicon_add"):
-            if event["event_id"] in additions:
-                continue
-            additions.add(event["event_id"])
             active[event["event_id"]] = event
         elif event["event_type"] == "rollback":
             target = event["undo_event_id"]
-            if target in active:
-                del active[target]
+            if target not in active or target in rolled_back_ids:
+                raise ocr_review.ReviewError("Bellek günlüğünde geçersiz geri alma bağlantısı var; kısmi sonuç kullanılmadı", 409)
+            del active[target]
+            rolled_back_ids.add(target)
     return events, list(active.values())
 
 
@@ -282,8 +288,9 @@ def add_approved(review_id: str, project_key: object, source_language: object,
     if missing:
         raise ocr_review.ReviewError("Seçilen kayıt artık etkin, görselle doğrulanmış bir kaynak kararına bağlı değil", 409)
     selected_rows = [by_decision[decision_id] for decision_id in decision_event_ids]
-    if any(row["source_language"].lower() != scope["source_language"] or
-           row["target_language"].lower() != scope["target_language"] for row in selected_rows):
+    if any(_canonical_language(row["source_language"], "Kaynak") != scope["source_language"] or
+           _canonical_language(row["target_language"], "Hedef") != scope["target_language"]
+           for row in selected_rows):
         raise ocr_review.ReviewError("Kabul edilmiş çeviri seçilen dil çiftine uymuyor", 409)
     added, skipped = 0, 0
     with _LOCK:
@@ -373,13 +380,20 @@ def suggest(review_id: str, cue_id: object, project_key: object, source_language
     matches, collision_matches = [], []
     for normalized, candidates in terms.items():
         targets_for_term = {_norm_text(e["target_term"]): e for e in candidates}
-        source_term = candidates[0]["source_term"]
-        pattern = re.compile(r"(?<!\w)" + re.escape(source_term) + r"(?!\w)", re.IGNORECASE)
+        occurrences = {}
+        for candidate in candidates:
+            # Literal substring matching works for both space-delimited text and
+            # CJK scripts, where Unicode word-boundary assertions suppress valid
+            # Japanese/Chinese phrase matches. Overlaps below are handled as
+            # ambiguity, never resolved by an arbitrary precedence rule.
+            pattern = re.compile(re.escape(candidate["source_term"]), re.IGNORECASE)
+            for found in pattern.finditer(source_text):
+                occurrences[(found.start(), found.end())] = found
         if len(targets_for_term) != 1:
-            collision_matches.extend(pattern.finditer(source_text))
+            collision_matches.extend(occurrences.values())
             continue
-        matches.extend((m.start(), m.end(), candidates[0], next(iter(targets_for_term.values()))["target_term"])
-                       for m in pattern.finditer(source_text))
+        target = next(iter(targets_for_term.values()))["target_term"]
+        matches.extend((m.start(), m.end(), candidates[0], target) for m in occurrences.values())
     matches.sort(key=lambda m: (m[0], -(m[1] - m[0])))
     chosen, ambiguous = [], bool(collision_matches)
     for match in matches:
