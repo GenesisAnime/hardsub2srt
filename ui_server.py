@@ -58,6 +58,7 @@ Kontrol paneli + toplu pano (v1.3):
     görüntüleyici). Eski-format stats boş hücreyle zarifçe listelenir.
 """
 
+import atexit
 import base64
 import json
 import os
@@ -69,6 +70,7 @@ import sys
 import threading
 import time
 import tempfile
+import uuid
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -106,7 +108,11 @@ app = Flask(__name__)
 
 # ---------------------------------------------------------------- durum ----
 KILIT = threading.Lock()
-PICKER_KILIT = threading.Lock()   # Aynı anda tek Windows dialog süreci
+PICKER_JOB_LOCK = threading.Lock()
+PICKER_JOBS = {}
+PICKER_ACTIVE_JOB = None
+PICKER_SHUTDOWN = threading.Event()
+PICKER_TIMEOUT_SECONDS = 300
 ISLER = []                 # eklenme sırasıyla tüm işler (dict listesi)
 LOG = deque(maxlen=LOG_LIMIT)
 LOG_SAYAC = 0
@@ -874,14 +880,27 @@ async function windowsSecim(tur){
   const pickerButtons = [...document.querySelectorAll("[data-picker-button]")];
   const oldLabels = pickerButtons.map(b => b.textContent);
   pickerButtons.forEach(b => { b.disabled = true; b.textContent = "Windows seçicisi açılıyor…"; });
-  ekleMesaji("Windows seçicisi hazırlanıyor…", "");
+  ekleMesaji("Windows seçicisi başlatılıyor…", "");
   let slowHint = setTimeout(() => {
-    ekleMesaji("Windows seçicisi yanıt bekliyor. Pencere başka bir pencerenin arkasında görünüyorsa görev çubuğundan öne alın.", "warn");
+    ekleMesaji("Seçici hâlâ hazırlanıyor. Windows penceresi başka bir pencerenin arkasında görünüyorsa görev çubuğundan öne alın.", "warn");
   }, 1800);
   try{
-    const j = await api("/api/secim", {tur});
+    const started = await api("/api/secim", {tur});
+    if (!started.job_id) throw new Error("Seçici işi başlatılamadı.");
+    let j;
+    while (true){
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const state = await api("/api/secim/" + encodeURIComponent(started.job_id));
+      if (state.status === "done"){ j = state.result; break; }
+      if (["error", "timeout", "cancelled"].includes(state.status))
+        throw new Error(state.hata || "Windows seçicisi tamamlanamadı.");
+      const statusText = state.status === "opening"
+        ? "Windows seçicisi açık; dosya veya klasör seçin."
+        : "Windows seçicisi hazırlanıyor…";
+      ekleMesaji(statusText, "");
+    }
     if (tur === "klasor"){
-      if (!j.dizin) return;
+      if (!j.dizin){ ekleMesaji("Klasör seçimi iptal edildi.", ""); return; }
       $("tara-dizin").value = j.dizin;
       await klasorTara();
     }else if (j.yollar && j.yollar.length){
@@ -892,8 +911,13 @@ async function windowsSecim(tur){
       }
       $("yollar").value = mevcut.join("\n");
       ekleMesaji(j.yollar.length + " dosya seçildi; eklemeden önce listeyi gözden geçirin.", "ok");
-    }
-  }catch(e){ ekleMesaji("Dosya/klasör seçimi başarısız: " + e.message, "err"); }
+    }else ekleMesaji("Dosya seçimi iptal edildi.", "");
+  }catch(e){
+    const detail = e instanceof TypeError && /fetch/i.test(e.message)
+      ? "UI sunucusuyla bağlantı kesildi. Başlatıcı penceresini yeniden açıp tekrar deneyin."
+      : e.message;
+    ekleMesaji("Dosya/klasör seçimi başarısız: " + detail, "err");
+  }
   finally{
     clearTimeout(slowHint);
     pickerButtons.forEach((b, i) => { b.disabled = false; b.textContent = oldLabels[i]; });
@@ -1500,29 +1524,148 @@ def api_klasortara():
     return jsonify({"dizin": str(p.resolve()), "videolar": videolar})
 
 
+def _picker_terminate(process):
+    if process is None or process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            process.kill()
+            process.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            app.logger.exception("Windows picker helper could not be reaped")
+
+
+def _picker_finish(job_id, status, result=None, error=None):
+    global PICKER_ACTIVE_JOB
+    now = time.time()
+    with PICKER_JOB_LOCK:
+        job = PICKER_JOBS.get(job_id)
+        if job is None:
+            return
+        job.update(status=status, result=result, hata=error, finished_at=now)
+        if PICKER_ACTIVE_JOB == job_id:
+            PICKER_ACTIVE_JOB = None
+
+
+def _watch_picker_job(job_id):
+    with PICKER_JOB_LOCK:
+        job = PICKER_JOBS.get(job_id)
+    if job is None:
+        return
+    process = job["process"]
+    marker = Path(job["marker"])
+    deadline = job["started_at"] + PICKER_TIMEOUT_SECONDS
+    timeout = False
+    dialog_marked = False
+    try:
+        while process.poll() is None:
+            if PICKER_SHUTDOWN.is_set():
+                _picker_terminate(process)
+                break
+            if not dialog_marked:
+                try:
+                    dialog_ms = int(marker.read_text(encoding="ascii").strip())
+                except (OSError, ValueError):
+                    dialog_ms = None
+                if dialog_ms is not None:
+                    dialog_marked = True
+                    spawn_ms = dialog_ms - job["process_started_epoch_ms"]
+                    request_ms = dialog_ms - job["request_started_epoch_ms"]
+                    with PICKER_JOB_LOCK:
+                        current = PICKER_JOBS.get(job_id)
+                        if current:
+                            current["status"] = "opening"
+                            current["timing"].update(spawn_to_showdialog_ms=spawn_ms,
+                                                     request_to_showdialog_ms=request_ms)
+                    app.logger.info("picker timing mode=%s spawn_to_showdialog_ms=%d request_to_showdialog_ms=%d",
+                                    job["mode"], spawn_ms, request_ms)
+            if time.time() >= deadline:
+                timeout = True
+                _picker_terminate(process)
+                break
+            PICKER_SHUTDOWN.wait(0.1)
+        stdout, stderr = process.communicate()
+        total_ms = int((time.time() - job["request_started_epoch_ms"] / 1000) * 1000)
+        if PICKER_SHUTDOWN.is_set():
+            _picker_finish(job_id, "cancelled", error="Sunucu kapanırken Windows seçicisi kapatıldı.")
+        elif timeout:
+            app.logger.warning("picker timeout mode=%s total_ms=%d", job["mode"], total_ms)
+            _picker_finish(job_id, "timeout", error="Windows seçicisi 5 dakika içinde tamamlanmadı; kapatıldı.")
+        elif process.returncode != 0:
+            detail = (stderr or stdout or "PowerShell seçicisi açılamadı").strip()
+            app.logger.warning("picker helper failed mode=%s exit=%s error=%s",
+                               job["mode"], process.returncode, detail[:400])
+            _picker_finish(job_id, "error", error=detail[:500])
+        else:
+            try:
+                result = json.loads(stdout.strip())
+                if job["mode"] == "dosya":
+                    result = {"yollar": [str(Path(p).resolve()) for p in result.get("yollar", [])]}
+                else:
+                    path = result.get("dizin") or ""
+                    result = {"dizin": str(Path(path).resolve()) if path else ""}
+                _picker_finish(job_id, "done", result=result)
+            except (ValueError, TypeError, OSError) as exc:
+                _picker_finish(job_id, "error", error=f"Windows seçicisi yanıtı okunamadı: {exc}")
+        app.logger.info("picker timing mode=%s post_total_ms=%d exit=%s",
+                        job["mode"], total_ms, process.returncode)
+    except Exception as exc:
+        app.logger.exception("Windows picker watcher failed")
+        _picker_terminate(process)
+        _picker_finish(job_id, "error", error=f"Windows seçicisi izlenemedi: {exc}")
+    finally:
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            app.logger.warning("picker marker cleanup failed: %s", marker)
+
+
+def _stop_picker_helpers():
+    PICKER_SHUTDOWN.set()
+    with PICKER_JOB_LOCK:
+        jobs = list(PICKER_JOBS.items())
+    for job_id, job in jobs:
+        _picker_terminate(job.get("process"))
+        watcher = job.get("watcher")
+        if watcher and watcher.ident is not None and watcher is not threading.current_thread():
+            watcher.join(timeout=3)
+        if job.get("status") in ("starting", "opening"):
+            _picker_finish(job_id, "cancelled", error="Sunucu kapanırken Windows seçicisi kapatıldı.")
+        try:
+            Path(job["marker"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+atexit.register(_stop_picker_helpers)
+
+
 @app.post("/api/secim")
 def api_secim():
-    """Yerel Windows dosya/klasör penceresi; medya tarayıcıya yüklenmez."""
+    """Başlatıcıyı hızlıca yanıtla; sonuç GET /api/secim/<job_id> ile izlenir."""
+    global PICKER_ACTIVE_JOB
     if os.name != "nt":
         return jsonify({"hata": "Windows seçicisi yalnız Windows sunucusunda kullanılabilir; yolu elle girin."}), 501
+    if PICKER_SHUTDOWN.is_set():
+        return jsonify({"hata": "UI sunucusu kapanıyor; başlatıcıyı yeniden açın."}), 503
     v = request.get_json(force=True, silent=True) or {}
     tur = v.get("tur")
     if tur not in ("dosya", "klasor"):
         return jsonify({"hata": "tur 'dosya' veya 'klasor' olmalı"}), 400
-    if not PICKER_KILIT.acquire(blocking=False):
-        return jsonify({"hata": "Windows seçicisi zaten açık; mevcut pencereyi tamamlayın."}), 409
-    request_started = time.perf_counter()
-    request_started_epoch_ms = int(time.time() * 1000)
-    marker_path = None
-    try:
-        # Windows UI frameworkleri STA ister; Flask isteği kendi worker thread'inde
-        # çalıştığından dosya penceresini ayrı STA PowerShell sürecinde aç.
-        env = os.environ.copy()
-        env["HARDSUB_PICKER_MODE"] = tur
-        marker_fd, marker_path = tempfile.mkstemp(prefix="hardsub-picker-", suffix=".started")
-        os.close(marker_fd)
-        env["HARDSUB_PICKER_STARTED"] = marker_path
-        script = r'''
+
+    powershell = shutil.which("powershell.exe")
+    if not powershell:
+        system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        candidate = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+        if candidate.is_file():
+            powershell = str(candidate)
+    if not powershell:
+        return jsonify({"hata": "Windows PowerShell bulunamadı"}), 500
+
+    script = r'''
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Windows.Forms
@@ -1550,55 +1693,70 @@ if ($mode -eq 'dosya') {
   @{ dizin = $path } | ConvertTo-Json -Compress
 }
 '''
-        powershell = shutil.which("powershell.exe")
-        if not powershell:
-            system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
-            candidate = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
-            if candidate.is_file():
-                powershell = str(candidate)
-        if not powershell:
-            raise RuntimeError("Windows PowerShell bulunamadı")
-        # EncodedCommand avoids Windows command-line quoting/Unicode parsing of
-        # this multi-line script while preserving the separate interactive STA process.
-        encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
-        process_started_epoch_ms = int(time.time() * 1000)
-        r = subprocess.run(
-            [powershell, "-NoProfile", "-STA", "-EncodedCommand", encoded_script],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            env=env, cwd=str(KLASOR), timeout=300,
-        )
-        dialog_started_ms = None
-        try:
-            dialog_started_ms = int(Path(marker_path).read_text(encoding="ascii").strip())
-        except (OSError, ValueError):
-            pass
-        elapsed_ms = int((time.perf_counter() - request_started) * 1000)
-        spawn_to_dialog_ms = (dialog_started_ms - process_started_epoch_ms
-                              if dialog_started_ms is not None else None)
-        request_to_dialog_ms = (dialog_started_ms - request_started_epoch_ms
-                                if dialog_started_ms is not None else None)
-        app.logger.info("picker timing mode=%s spawn_to_showdialog_ms=%s request_to_showdialog_ms=%s post_total_ms=%d exit=%d",
-                        tur, spawn_to_dialog_ms, request_to_dialog_ms, elapsed_ms, r.returncode)
-        if r.returncode != 0:
-            raise RuntimeError((r.stderr or r.stdout or "PowerShell seçicisi açılamadı").strip())
-        result = json.loads(r.stdout.strip())
-        if tur == "dosya":
-            return jsonify({"yollar": [str(Path(p).resolve()) for p in result.get("yollar", [])]})
-        dizin = result.get("dizin") or ""
-        return jsonify({"dizin": str(Path(dizin).resolve()) if dizin else ""})
-    except subprocess.TimeoutExpired:
-        app.logger.warning("picker timeout mode=%s total_ms=%d", tur,
-                           int((time.perf_counter() - request_started) * 1000))
-        return jsonify({"hata": "Windows seçicisi 5 dakika içinde tamamlanmadı; işlem kapatıldı. Yeniden deneyin."}), 504
-    except Exception as e:
-        return jsonify({"hata": f"Windows seçicisi açılamadı: {e}"}), 500
-    finally:
-        if marker_path:
-            try:
+    encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    env = os.environ.copy()
+    env["HARDSUB_PICKER_MODE"] = tur
+    request_started_epoch_ms = int(time.time() * 1000)
+    marker_fd, marker_path = tempfile.mkstemp(prefix="hardsub-picker-", suffix=".started")
+    os.close(marker_fd)
+    env["HARDSUB_PICKER_STARTED"] = marker_path
+    job_id = uuid.uuid4().hex
+    process = None
+    try:
+        with PICKER_JOB_LOCK:
+            active = PICKER_JOBS.get(PICKER_ACTIVE_JOB) if PICKER_ACTIVE_JOB else None
+            if active and active.get("status") in ("starting", "opening"):
                 os.unlink(marker_path)
-            except OSError:
-                pass
-        PICKER_KILIT.release()
+                return jsonify({"hata": "Windows seçicisi zaten açık; önce mevcut seçimi tamamlayın."}), 409
+            now = time.time()
+            for old_id, old in list(PICKER_JOBS.items()):
+                if old.get("finished_at", now) < now - 600:
+                    PICKER_JOBS.pop(old_id, None)
+            process_started_epoch_ms = int(time.time() * 1000)
+            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            process = subprocess.Popen(
+                [powershell, "-NoProfile", "-STA", "-EncodedCommand", encoded_script],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace", env=env, cwd=str(KLASOR),
+                creationflags=flags,
+            )
+            PICKER_JOBS[job_id] = {
+                "process": process, "marker": marker_path, "mode": tur, "status": "starting",
+                "result": None, "hata": None, "started_at": now,
+                "request_started_epoch_ms": request_started_epoch_ms,
+                "process_started_epoch_ms": process_started_epoch_ms,
+                "timing": {"spawn_ms": process_started_epoch_ms - request_started_epoch_ms},
+            }
+            PICKER_ACTIVE_JOB = job_id
+            watcher = threading.Thread(target=_watch_picker_job, args=(job_id,), daemon=True)
+            PICKER_JOBS[job_id]["watcher"] = watcher
+    except Exception as exc:
+        _picker_terminate(process)
+        try:
+            os.unlink(marker_path)
+        except OSError:
+            pass
+        app.logger.exception("Windows picker helper could not start")
+        return jsonify({"hata": f"Windows seçicisi başlatılamadı: {exc}"}), 500
+
+    watcher.start()
+    app.logger.info("picker started mode=%s job_id=%s spawn_ms=%d",
+                    tur, job_id, process_started_epoch_ms - request_started_epoch_ms)
+    return jsonify({"job_id": job_id, "status": "starting"}), 202
+
+
+@app.get("/api/secim/<job_id>")
+def api_secim_durum(job_id):
+    with PICKER_JOB_LOCK:
+        job = PICKER_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"hata": "Seçici işi bulunamadı veya süresi doldu."}), 404
+        result = {"job_id": job_id, "status": job["status"], "timing": dict(job["timing"])}
+        if job["status"] == "done":
+            result["result"] = job["result"]
+        elif job.get("hata"):
+            result["hata"] = job["hata"]
+    return jsonify(result)
 
 
 @app.post("/api/ac")
@@ -2191,8 +2349,13 @@ def main():
     log_ekle("bilgi", f"sunucu başladı: http://127.0.0.1:{PORT} — klasör: {KLASOR}")
     print(f"[ui] http://127.0.0.1:{PORT}  (durdurmak icin Ctrl+C)")
     print(f"[ui] arac: {ARAC}")
-    app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False,
-            threaded=True)
+    try:
+        app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False,
+                threaded=True)
+    except KeyboardInterrupt:
+        print("[ui] kapanış istendi; Windows seçicisi varsa kapatılıyor")
+    finally:
+        _stop_picker_helpers()
 
 
 if __name__ == "__main__":
