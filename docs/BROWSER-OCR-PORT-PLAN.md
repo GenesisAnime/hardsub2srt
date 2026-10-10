@@ -4,7 +4,7 @@ Bu belge uygulanmış bir özellik değildir. GitHub Pages üzerinde çalışan 
 
 ## Teknik sınır
 
-Kullanıcının dosya seçimine veya GPU kullanımına izin vermesi tarayıcıya seçilen dosyanın içeriğini ve Web API'lerini kullanma hakkı verir. `<input type=file>` / File API, seçilen `File` nesnesini verir; web uygulaması genel amaçlı mutlak Windows yolu edinmez. İzinler tarayıcıdan Python, PowerShell, `ffmpeg.exe`, CUDA Torch veya yerel alt süreç çalıştırmaz. WebGPU, JavaScript'ten tarayıcı ve sürücü aracılığıyla grafik/compute aygıtına erişim sağlar; yerel CUDA PyTorch erişimi değildir.
+Dosya seçimi kullanıcı etkileşimidir: `<input type=file>` / File API seçilen `File` nesnesinin içeriğini verir; web uygulaması genel amaçlı mutlak Windows yolu edinmez. WebGPU bu dosya seçimi gibi bir kullanıcı izin penceresi değildir. WebGPU yalnız güvenli bağlamda sunulur; `navigator.gpu` bulunmayabilir ve `requestAdapter()` uygun bir adapter bulamazsa `null` dönebilir. Adapter seçimini tarayıcı, işletim sistemi, sürücü ve aygıt belirler. Bunların hiçbiri Python, PowerShell, `ffmpeg.exe`, CUDA Torch veya başka bir yerel alt süreç çalıştırma izni vermez.
 
 GitHub Pages statik web hosting'dir. Python OCR motoru veya sürekli worker çalıştırmaz. VDS API de kullanıcının bilgisayarındaki video karelerini veya GPU'sunu işlemez. Gerçekten browser-only deneyim istenirse OCR/decoder/pre-postprocess JavaScript/WASM/WebGPU ile yeniden uygulanmalı ve modeller indirilip tarayıcıda yürütülmelidir.
 
@@ -46,3 +46,13 @@ Bir UI portu değil, dar bir teknik spike ile karar verin:
 ## Karar önerisi
 
 Kullanıcıların mevcut makinesindeki CUDA/GPU ve Python motoru korunacaksa en düşük riskli ürün yolu **Pages = indirme/dokümantasyon, yerel Python worker = OCR, VDS = ayrı ve açık onaylı türetilmiş ölçüm API'si** biçimindedir. Browser-only OCR ayrı bir araştırma prototipi olarak ilerletilmeli; onun seçilen video izni yerel executable çalıştırma izni değildir.
+
+## Birincil kaynaklar
+
+- [W3C WebGPU specification](https://www.w3.org/TR/webgpu/) — secure context, adapter seçimi ve `requestAdapter()` davranışı.
+- [MDN File API](https://developer.mozilla.org/en-US/docs/Web/API/File_API/Using_files_from_web_applications) — web uygulamalarında kullanıcı tarafından seçilen dosyalar.
+- [MDN WebCodecs API](https://developer.mozilla.org/en-US/docs/Web/API/WebCodecs_API) — tarayıcıda medya decode/encode API'si ve codec sınırları.
+- [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/) ve [execution provider/operator desteği](https://onnxruntime.ai/docs/execution-providers/) — WASM/WebGPU çalışma yolları ve operatör kapsamı.
+- [ONNX Runtime WebGPU](https://onnxruntime.ai/docs/tutorials/web/ep-webgpu.html) ve [deployment](https://onnxruntime.ai/docs/tutorials/web/deploy.html) — WebGPU/Web dağıtım ayrıntıları.
+- [FFmpeg.wasm performance](https://ffmpegwasm.netlify.app/docs/performance/) ve [FAQ](https://ffmpegwasm.netlify.app/docs/faq/) — WASM performansı ve kaynak maliyetleri.
+- [GitHub Pages: What is GitHub Pages?](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages) — Pages'in statik hosting modeli.

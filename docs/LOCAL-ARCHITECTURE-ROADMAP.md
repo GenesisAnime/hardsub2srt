@@ -40,3 +40,11 @@ GitHub Pages yalnız statik HTML/CSS/JavaScript dosyaları sunar; Python/FFmpeg/
 | 3 — dağıtım sitesi | Pages üzerinde statik sürüm/kurulum/indirilebilir paket; API aynı origin varsayılmaz | HTTPS, checksum/signature, CORS ve release provenance | supply chain, tarayıcıda saklanan sırlar, yanlış release |
 
 **Önerilen ilk adım:** mevcut Python motorunu koruyup temiz Windows kurulumunu/portable dağıtımı ölçmek; ondan sonra kullanıcı onaylı ve ham içerik almayan telemetry tasarımını prototiplemek. VDS OCR veya otomatik SRT/video yüklemesi bu mimari için gerekli değildir.
+
+## Birincil kaynaklar
+
+- [W3C WebGPU specification](https://www.w3.org/TR/webgpu/) — güvenli bağlam ve adapter seçimi.
+- [MDN File API](https://developer.mozilla.org/en-US/docs/Web/API/File_API/Using_files_from_web_applications) ve [MDN WebCodecs API](https://developer.mozilla.org/en-US/docs/Web/API/WebCodecs_API) — browser file/media API sınırları.
+- [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/), [execution provider/operator desteği](https://onnxruntime.ai/docs/execution-providers/), [WebGPU](https://onnxruntime.ai/docs/tutorials/web/ep-webgpu.html) ve [deployment](https://onnxruntime.ai/docs/tutorials/web/deploy.html) — browser inference seçenekleri ve dağıtım.
+- [FFmpeg.wasm performance](https://ffmpegwasm.netlify.app/docs/performance/) ve [FAQ](https://ffmpegwasm.netlify.app/docs/faq/) — tarayıcı içi decode/işleme maliyetleri.
+- [GitHub Pages: What is GitHub Pages?](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages) — statik yayın sınırları.
