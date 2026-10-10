@@ -55,11 +55,14 @@ OCR motoru görünen altyazıyı çıkarır; kendi başına çeviri yapmaz. İst
 - Kuyruk sayacı/iş hata mesajlarını izleyin. Bir iş hata aldıysa işin log ve koşum klasörüne bakın. Sunucuyu yeniden başlatmak bekleyen kuyruğu kurtarmaz.
 - Model ilk indirmeleri ve GPU/PyTorch paket boyutu internet, Python ve sürücü sürümüne göre değişir.
 
-## Gizlilik ve gelecek işler
+## Gizlilik ve isteğe bağlı ölçüm katkısı
 
-İşleme varsayılan olarak yereldir. Bu sürümde merkezi telemetry, VDS API'si, GitHub Pages üzerinden OCR veya kullanıcı dosyalarının otomatik yüklenmesi **uygulanmış değildir**. Gelecekte ölçüm/paylaşım eklenecekse açık kullanıcı tercihi ve gözden geçirilebilir gönderim özeti gereklidir; video, ham SRT, tam altyazı cümleleri ve kişisel yollar varsayılan olarak gönderilmemelidir. Tasarım notları:
+OCR ve AI incelemesi yerel çalışır. GPT/DeepSeek API çağrısı yoktur. Katkı API kodu isteğe bağlı prototip olarak eklendi; **VDS'ye dağıtılmamıştır** ve hiçbir uzak gönderim yapılmadı. Yerel `/katki` sayfasında tamamlanmış koşum için önce ağsız bir önizleme hazırlanır; sadece ayrı onay kutusu ve **Onayla ve gönder** tıklaması HTTPS isteği başlatır. URL/token ve saklama gün sayısı ayarları yoksa düğme kapalıdır; ekranda gösterilen gün sayısı API politikasıyla eşleşmelidir. Gönderilen v1 JSON yalnız sayısal süre/kare/cue/düşük güven özetlerini, OCR aygıt ve motor sınıfını taşır. Video, görüntü, SRT/VTT/metin, dosya adı/yolu, kullanıcı adı, hash veya kalıcı cihaz kimliği kabul edilmez. CER gönderimi UI'de kapalıdır; API sözleşmesinde yerel güvenilir VTT ve ayrıca CER onayı zorunludur. Saklama süresi VDS işletmecisi tarafından açıkça konfigüre edilmeden API başlamaz.
+
+VDS kurulum adımları, token yaşam döngüsü, retention/silme ve TLS proxy sınırları: [İsteğe bağlı katkı API'si](docs/CONTRIBUTION-API.md). Bu API'yi canlıya almak için gerçek domain/TLS, Windows servis hesabı, kalıcı/veri yedekli disk, güvenlik duvarı ve retention kararı gerekir. GitHub Pages OCR/API sunucusu değildir. Tasarım notları:
 
 - [Yerel istemci ve mimari yol haritası](docs/LOCAL-ARCHITECTURE-ROADMAP.md)
+- [İsteğe bağlı katkı API'si ve VDS hazırlığı](docs/CONTRIBUTION-API.md)
 - [Tarayıcı içi OCR teknik planı](docs/BROWSER-OCR-PORT-PLAN.md)
 - [OCR ve çeviri öğrenme sistemi planı](docs/LEARNING-SYSTEM-PLAN.md)
 - [Öğrenme sistemi Phase 0 kaynaklı baseline](docs/LEARNING-SYSTEM-BASELINE.md)
@@ -72,6 +75,8 @@ OCR motoru görünen altyazıyı çıkarır; kendi başına çeviri yapmaz. İst
 |---|---|
 | `hardsub2srt.py` | CLI çıkarım/OCR motoru |
 | `ui_server.py` | localhost Flask UI, iş kuyruğu, yerel alt süreçler |
+| `contribution_client.py`, `contribution_api.py` | varsayılanı kapalı, açık onaylı sayısal katkı istemcisi ve WSGI API |
+| `schemas/contribution-metrics-v1.schema.json` | katkı payload'ının strict v1 sözleşmesi |
 | `srt_format.py` | SRT zaman biçimi yardımcıları |
 | `cikar.bat`, `arayuz.bat`, `toplu.bat` | Windows başlatıcıları |
 | `srt2ass.py` | SRT'den ASS üretimi |

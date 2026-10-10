@@ -1,0 +1,10 @@
+# Reverse-proxy template only. Supply a publicly trusted cert/key from an
+# independently selected, Windows-compatible ACME/certificate renewal client.
+# Do not use this template with a bare IP and assume Caddy's local CA is trusted.
+__OPERATOR_DOMAIN__ {
+    tls __PATH_TO_PUBLICLY_TRUSTED_CERT__ __PATH_TO_PRIVATE_KEY__
+    encode zstd gzip
+    @contrib path /healthz /v1/contributions /v1/contributions/*
+    reverse_proxy @contrib 127.0.0.1:8787
+    respond "Not found" 404
+}

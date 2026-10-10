@@ -1,0 +1,18 @@
+<!-- WinSW template. Replace all placeholders; configure_contribution_windows.ps1
+     performs install, switches off LocalSystem, and applies ACLs before returning. -->
+<service>
+  <id>hardsub-contribution-api</id>
+  <name>hardsub2srt Contribution API</name>
+  <description>Optional minimized OCR metrics API; loopback only.</description>
+  <executable>__ABSOLUTE_WAITRESS_SERVE_EXE_PATH__</executable>
+  <arguments>--listen=127.0.0.1:8787 contribution_api:app</arguments>
+  <workingdirectory>__DEPLOYED_REPOSITORY_DIRECTORY__</workingdirectory>
+  <env name="PYTHONPATH" value="__DEPLOYED_REPOSITORY_DIRECTORY__" />
+  <env name="PYTHONDONTWRITEBYTECODE" value="1" />
+  <env name="H2S_CONTRIB_DB" value="__ABSOLUTE_DATA_DIRECTORY_OUTSIDE_REPOSITORY__\contributions.sqlite3" />
+  <env name="H2S_CONTRIB_RETENTION_DAYS" value="__OPERATOR_MUST_CHOOSE_NUMERIC_DAYS__" />
+  <env name="H2S_CONTRIB_SERVICE_ACCOUNT" value="NT SERVICE\hardsub-contribution-api" />
+  <env name="H2S_CONTRIB_PURGE_ACCOUNT" value="__DEDICATED_NON_ADMIN_PURGE_ACCOUNT__" />
+  <env name="H2S_CONTRIB_LOG_DIR" value="__ABSOLUTE_LOG_DIRECTORY_OUTSIDE_REPOSITORY__" />
+  <log mode="none" />
+</service>

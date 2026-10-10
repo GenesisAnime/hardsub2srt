@@ -90,6 +90,12 @@ KUYRUK_YANIT = 100         # /api/durum yanıtında dönen iş sayısı
 MAX_BATCH = 100            # tek ekle isteğinin üst sınırı
 MAX_AKTIF_KUYRUK = 2000    # çalışan + bekleyen işlerin üst sınırı
 
+
+def _child_process_env():
+    """Preserve normal settings but never delegate contribution config/secrets."""
+    return {key: value for key, value in os.environ.items()
+            if not key.upper().startswith("H2S_CONTRIB_")}
+
 try:
     from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 except ImportError:
@@ -116,6 +122,13 @@ except Exception as _translation_memory_hatasi:
     translation_memory = None
     print(f"[ui] UYARI: translation_memory.py yuklenemedi — kapsamlı çeviri belleği kapalı: "
           f"{_translation_memory_hatasi!r}")
+
+try:
+    import contribution_client
+except Exception as _contrib_hatasi:
+    contribution_client = None
+    print(f"[ui] UYARI: contribution_client.py yüklenemedi — katkı gönderimi kapalı: "
+          f"{_contrib_hatasi!r}")
 
 # otomatik öğrenme (Kaydet = öğren): sınıflandırıcı ogren.py'de tek kaynaktır;
 # yüklenemezse kayıt çalışmaya devam eder, yalnız öğrenme atlanır
@@ -164,6 +177,18 @@ def _memory_request_error():
 def _guard_local_translation_memory():
     if request.path.startswith("/api/ceviri-bellegi/"):
         return _memory_request_error()
+    if request.path.startswith("/api/katki/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        host = request.environ.get("HTTP_HOST", "").lower()
+        if host not in {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}:
+            return jsonify({"hata": "Katkı işlemi yalnız yerel arayüzden kullanılabilir"}), 403
+        try:
+            origin = urlsplit(request.headers.get("Origin", ""))
+            if (origin.scheme != "http" or origin.netloc.lower() != host or origin.hostname not in {"localhost", "127.0.0.1"} or
+                    origin.port != PORT or origin.username or origin.password or origin.path not in ("", "/") or
+                    origin.query or origin.fragment):
+                return jsonify({"hata": "Katkı işlemi için aynı yerel arayüz kaynağı gerekli"}), 403
+        except ValueError:
+            return jsonify({"hata": "Geçersiz katkı isteği kaynağı"}), 403
     return None
 
 # ---------------------------------------------------------------- durum ----
@@ -175,6 +200,7 @@ PICKER_SHUTDOWN = threading.Event()
 PICKER_TIMEOUT_SECONDS = 300
 ISLER = []                 # eklenme sırasıyla tüm işler (dict listesi)
 LOG = deque(maxlen=LOG_LIMIT)
+KATKI_ONIZLEMELERI = {}
 LOG_SAYAC = 0
 IS_SAYAC = 0
 CALISAN = {}               # {"pid": int, "is_id": str} — çalışan süreç
@@ -331,7 +357,7 @@ def is_yurut(isim):
     if limit > 0:
         cmd += ["--limit-seconds", str(limit)]
 
-    ortam = dict(os.environ)
+    ortam = _child_process_env()
     ortam["PYTHONUNBUFFERED"] = "1"
     ortam["PYTHONIOENCODING"] = "utf-8"
 
@@ -463,6 +489,7 @@ def is_yurut(isim):
                  "-o", str(ass_yol)],
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=120, cwd=str(KLASOR),
+                env=_child_process_env(),
             )
             cikti = (r.stdout or "") + (r.stderr or "")
             for ln in cikti.splitlines():
@@ -524,6 +551,7 @@ def vtt_kiyas(isim, srt_yol, video):
              "-o", str(rapor)],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=300, cwd=str(KLASOR),
+            env=_child_process_env(),
         )
         if r.returncode == 0 and rapor.exists():
             j = json.loads(rapor.read_text(encoding="utf-8"))
@@ -734,6 +762,7 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
   <span class="klasor" id="sunucu-klasor" title="Sunucu klasörü (varsayılan çıktı klasörü)"></span>
   <button class="kirmizi" id="iptal-btn" onclick="iptalEt()" disabled>İptal (çalışanı öldür)</button>
   <button class="ikincil" id="pano-btn" onclick="panoAc()">Pano</button>
+  <a class="ikincil" href="/katki" style="text-decoration:none">İsteğe bağlı katkı</a>
   <span id="baglanti">bağlanıyor…</span>
 </header>
 
@@ -1471,6 +1500,105 @@ def ocr_inceleme_sayfasi():
     return Response(ocr_review.REVIEW_HTML, mimetype="text/html")
 
 
+@app.get("/katki")
+def katki_sayfasi():
+    if contribution_client is None:
+        return Response("Katkı modülü kullanılamıyor.", status=503)
+    status = contribution_client.config_status()
+    enabled = "true" if status["enabled"] else "false"
+    retention = (str(status["retention_days"]) + " gün") if status["retention_days"] else "yapılandırılmamış"
+    html = r'''<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>İsteğe bağlı ölçüm katkısı</title><style>
+body{max-width:860px;margin:32px auto;padding:0 16px;background:#12141a;color:#dde3f0;font:15px/1.55 "Segoe UI",sans-serif}a,button{color:#fff;background:#315fae;border:0;border-radius:6px;padding:9px 13px;cursor:pointer}input,select,pre{background:#0e1016;color:#dde3f0;border:1px solid #394158;border-radius:6px;padding:10px}pre{white-space:pre-wrap;overflow-wrap:anywhere}.muted{color:#9aa6bd}.warn{color:#efbd66}button:disabled{opacity:.45;cursor:not-allowed}
+</style><h1>İsteğe bağlı ölçüm katkısı</h1><p>Bu özellik varsayılan olarak kapalıdır. Önizleme oluşturmak ağ isteği göndermez. Yalnızca aşağıdaki gönder düğmesine basınca, gösterilen sayısal ölçümler HTTPS ile katkı API’sine gönderilir. Video, kırpım, SRT/VTT metni, dosya adı/yolu, kullanıcı adı ve kalıcı cihaz kimliği gönderilmez. GPT/DeepSeek API’si kullanılmaz.</p>
+<p id="config" class="warn"></p><label for="job">Tamamlanan yerel OCR işi</label><select id="job"></select> <button id="preview">Önizlemeyi oluştur</button>
+<h2>Gönderilecek alanların önizlemesi</h2><pre id="payload">Henüz önizleme yok.</pre><p class="muted">Yukarıda gösterilen saklama gün sayısı bu istemcide yapılandırılmış sunucu politikasıyla eşleşmelidir. Bu yerel ekran gönderim başına yeni bir kimlik üretir.</p>
+<label><input type="checkbox" id="consent"> Önizlemedeki yalnız sayısal ölçümleri, ekranda belirtilen saklama süresi boyunca katkı sunucusunda tutulmak üzere bu gönderim için paylaşmayı onaylıyorum.</label><p><button id="send" disabled>Onayla ve gönder</button> <button id="delete" hidden>Gönderdiğim katkıyı sil</button> <a href="/">Arayüze dön</a></p><p id="status" role="status"></p>
+<script>const configured=__ENABLED__;const job=document.querySelector('#job'),pre=document.querySelector('#payload'),send=document.querySelector('#send'),del=document.querySelector('#delete'),consent=document.querySelector('#consent'),status=document.querySelector('#status');let current=null,submitted=null;
+document.querySelector('#config').textContent=configured?'HTTPS adresi/token hazır. Sunucuda planlanan saklama süresi: '+__RETENTION__+'. Gönderim yalnız bu sayfadaki açık onaydan sonra yapılır.':'Gönderim kapalı: HTTPS URL, token ve H2S_CONTRIB_RETENTION_DAYS (sunucuda yapılandırılmış gün sayısı) birlikte ayarlanmalı.';
+async function api(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(!r.ok)throw Error(j.hata||j.error||('HTTP '+r.status));return j}
+fetch('/api/katki/isler').then(r=>r.json()).then(j=>{for(const x of j.jobs){const o=document.createElement('option');o.value=x.id;o.textContent=x.id;job.append(o)}if(!j.jobs.length)status.textContent='Bu oturumda tamamlanmış iş yok.'}).catch(()=>status.textContent='Yerel işler okunamadı.');
+document.querySelector('#preview').onclick=async()=>{current=null;submitted=null;del.hidden=true;del.disabled=false;consent.checked=false;send.disabled=true;status.textContent='';try{const j=await api('/api/katki/preview',{job_id:job.value});current=j.submission_id;pre.textContent=JSON.stringify(j.payload,null,2);status.textContent='Önizleme hazır. Henüz ağa hiçbir veri gönderilmedi.'}catch(e){pre.textContent='Önizleme oluşturulamadı.';status.textContent=e.message}};
+consent.onchange=()=>send.disabled=!(configured&&current&&consent.checked);
+send.onclick=async()=>{if(!configured||!current||!consent.checked)return;send.disabled=true;status.textContent='Gönderiliyor…';try{const j=await api('/api/katki/gonder',{submission_id:current,consent:true});submitted=j.submission_id;del.hidden=false;status.textContent='Gönderildi: '+j.submission_id+' ('+j.status+').'}catch(e){status.textContent=e.message;send.disabled=false}};
+del.onclick=async()=>{if(!submitted)return;del.disabled=true;try{const j=await api('/api/katki/sil',{submission_id:submitted});status.textContent=j.status==='deleted'?'Katkı sunucudan silindi.':'Katkı kaydı bulunamadı.';del.hidden=true;submitted=null}catch(e){status.textContent=e.message;del.disabled=false}};
+</script></html>'''.replace("__ENABLED__", enabled)
+    html = html.replace("__RETENTION__", json.dumps(retention, ensure_ascii=False))
+    return Response(html, mimetype="text/html")
+
+
+@app.get("/api/katki/isler")
+def api_katki_isler():
+    with KILIT:
+        jobs = [{"id": x["id"]} for x in ISLER if x.get("durum") == "bitti" and isinstance(x.get("stats"), dict)]
+    return jsonify({"jobs": jobs[-100:]})
+
+
+@app.post("/api/katki/preview")
+def api_katki_preview():
+    if contribution_client is None:
+        return jsonify({"hata": "Katkı modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    body = request.get_json(silent=True) or {}
+    if set(body) != {"job_id"} or not isinstance(body.get("job_id"), str):
+        return jsonify({"hata": "Önizleme için yalnız iş kimliği gerekli"}), 400
+    job_id = body.get("job_id")
+    with KILIT:
+        job = next((is_snapshot(x) for x in ISLER if x["id"] == job_id and x.get("durum") == "bitti"), None)
+    if not job or not isinstance(job.get("stats"), dict):
+        return jsonify({"hata": "Tamamlanmış koşum istatistiği bulunamadı"}), 404
+    try:
+        payload = contribution_client.validate_payload(contribution_client.build_payload(job["stats"], job.get("sure_sn") or 0))
+    except Exception as exc:
+        return jsonify({"hata": str(exc)}), 422
+    now = time.time()
+    with KILIT:
+        if len(KATKI_ONIZLEMELERI) > 100:
+            KATKI_ONIZLEMELERI.clear()
+        KATKI_ONIZLEMELERI[payload["submission_id"]] = {"payload": payload, "expires": now + 600, "used": False}
+    return jsonify({"submission_id": payload["submission_id"], "payload": payload})
+
+
+@app.post("/api/katki/gonder")
+def api_katki_gonder():
+    if contribution_client is None:
+        return jsonify({"hata": "Katkı modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    body = request.get_json(silent=True) or {}
+    if set(body) != {"submission_id", "consent"} or body.get("consent") is not True:
+        return jsonify({"hata": "Bu gönderim için açık onay gerekli"}), 400
+    sid = body.get("submission_id")
+    with KILIT:
+        pending = KATKI_ONIZLEMELERI.get(sid)
+        if not pending or pending["expires"] < time.time() or pending["used"]:
+            return jsonify({"hata": "Önizleme bulunamadı veya süresi doldu; yeniden oluşturun"}), 409
+        pending["used"] = True
+    try:
+        result = contribution_client.send_payload(pending["payload"])
+        return jsonify(result)
+    except Exception as exc:
+        with KILIT:
+            pending["used"] = False
+        return jsonify({"hata": str(exc)}), 503
+
+
+@app.post("/api/katki/sil")
+def api_katki_sil():
+    if contribution_client is None:
+        return jsonify({"hata": "Katkı modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    body = request.get_json(silent=True) or {}
+    if set(body) != {"submission_id"} or not isinstance(body.get("submission_id"), str):
+        return jsonify({"hata": "Silme için yalnız gönderim kimliği gerekli"}), 400
+    try:
+        return jsonify(contribution_client.delete_submission(body["submission_id"]))
+    except Exception as exc:
+        return jsonify({"hata": str(exc)}), 503
+
+
 def _ocr_hata(exc):
     if ocr_review is not None and isinstance(exc, ocr_review.ReviewError):
         return jsonify({"hata": str(exc)}), exc.status
@@ -1860,7 +1988,7 @@ def api_iptal():
         return jsonify({"hata": "çalışan iş yok"}), 404
     IPTAL_SETI.add(is_id)
     r = subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=_child_process_env())
     log_ekle("uyari", f"İPTAL istendi: taskkill /T /F /PID {pid} → rc={r.returncode} "
                       f"{(r.stdout or r.stderr or '').strip()[:120]}")
     return jsonify({"ok": True, "pid": pid, "is_id": is_id,
@@ -2105,7 +2233,7 @@ if ($mode -eq 'dosya') {
 }
 '''
     encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
-    env = os.environ.copy()
+    env = _child_process_env()
     env["HARDSUB_PICKER_MODE"] = tur
     env["HARDSUB_PICKER_OWNER_HWND"] = str(_foreground_owner_hwnd())
     request_started_epoch_ms = int(time.time() * 1000)
@@ -2191,9 +2319,9 @@ def api_ac():
     yol = str(v.get("yol") or "").strip()
     p = Path(yol)
     if p.is_dir():
-        subprocess.Popen(["explorer", str(p)])
+        subprocess.Popen(["explorer", str(p)], env=_child_process_env())
     elif p.is_file():
-        subprocess.Popen(["explorer", "/select,", str(p)])
+        subprocess.Popen(["explorer", "/select,", str(p)], env=_child_process_env())
     else:
         return jsonify({"hata": f"yol bulunamadı: {yol}"}), 404
     return jsonify({"ok": True})
