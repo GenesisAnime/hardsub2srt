@@ -13,6 +13,7 @@ import logging
 import os
 import secrets
 import sqlite3
+import subprocess
 import time
 import uuid
 import threading
@@ -32,9 +33,11 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_BODY
 _rates: dict[str, list[float]] = {}
 _rate_lock = threading.Lock()
 logging.getLogger("werkzeug").disabled = True
+REPO_ROOT = Path(__file__).resolve().parent
 
 
 def _settings():
+    """Read mandatory configuration and fail closed on path/ACL/identity checks."""
     retention = os.environ.get("H2S_CONTRIB_RETENTION_DAYS", "").strip()
     if not retention:
         raise RuntimeError("H2S_CONTRIB_RETENTION_DAYS açıkça ayarlanmalı")
@@ -44,24 +47,167 @@ def _settings():
         raise RuntimeError("H2S_CONTRIB_RETENTION_DAYS tam sayı olmalı") from exc
     if not 1 <= retention_days <= 3650:
         raise RuntimeError("H2S_CONTRIB_RETENTION_DAYS 1..3650 aralığında olmalı")
-    db = os.environ.get("H2S_CONTRIB_DB", "").strip()
-    if not db:
+    raw_db = os.environ.get("H2S_CONTRIB_DB", "").strip()
+    if not raw_db:
         raise RuntimeError("H2S_CONTRIB_DB açıkça ayarlanmalı")
-    return Path(db), retention_days
+    db = Path(raw_db).expanduser()
+    if not db.is_absolute():
+        raise RuntimeError("H2S_CONTRIB_DB mutlak yol olmalı")
+    db = db.resolve(strict=False)
+    try:
+        db.relative_to(REPO_ROOT)
+    except ValueError:
+        pass
+    else:
+        raise RuntimeError("H2S_CONTRIB_DB depo/kaynak ağacının dışında olmalı")
+    service_account = os.environ.get("H2S_CONTRIB_SERVICE_ACCOUNT", "").strip()
+    purge_account = os.environ.get("H2S_CONTRIB_PURGE_ACCOUNT", "").strip()
+    forbidden_accounts = {
+        "localsystem", "local system", "nt authority\\system", "system",
+        "nt authority\\localservice", "nt authority\\networkservice",
+        "builtin\\administrators", "administrators", "builtin\\users", "users",
+        "everyone", "authenticated users",
+    }
+    if not service_account or service_account.casefold() in forbidden_accounts:
+        raise RuntimeError("Özel düşük yetkili H2S_CONTRIB_SERVICE_ACCOUNT zorunlu; LocalSystem kabul edilmez")
+    if not purge_account or purge_account.casefold() in forbidden_accounts:
+        raise RuntimeError("Ayrı düşük yetkili H2S_CONTRIB_PURGE_ACCOUNT zorunlu")
+    if service_account.casefold() == purge_account.casefold():
+        raise RuntimeError("API ve retention purge için ayrı hesaplar gerekli")
+    config = (db, retention_days, service_account, purge_account)
+    # Called only after the security helpers are defined at module startup.
+    validator = globals().get("_validate_storage_security")
+    if validator is not None:
+        validator(config=config, require_service_identity=__name__ != "__main__")
+    return config
 
 
-# Fail at WSGI import/startup if operator has not set a real retention policy
-# and an explicit out-of-repository database path.
-_settings()
+_ACL_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$target = $env:H2S_ACL_TARGET
+$serviceAccount = $env:H2S_CONTRIB_SERVICE_ACCOUNT
+$purgeAccount = $env:H2S_CONTRIB_PURGE_ACCOUNT
+$acl = Get-Acl -LiteralPath $target
+$sidType = [System.Security.Principal.SecurityIdentifier]
+$serviceSid = ([System.Security.Principal.NTAccount]$serviceAccount).Translate($sidType).Value
+$purgeSid = ([System.Security.Principal.NTAccount]$purgeAccount).Translate($sidType).Value
+$ownerSid = ([System.Security.Principal.NTAccount]$acl.Owner).Translate($sidType).Value
+$rules = @()
+foreach ($rule in $acl.Access) {
+  $sid = $rule.IdentityReference.Translate($sidType).Value
+  $rules += [pscustomobject]@{
+    sid = $sid
+    type = $rule.AccessControlType.ToString()
+    rights = $rule.FileSystemRights.ToString()
+    inherited = [bool]$rule.IsInherited
+  }
+}
+$currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+[pscustomobject]@{
+  owner = $ownerSid
+  protected = [bool]$acl.AreAccessRulesProtected
+  service = $serviceSid
+  purge = $purgeSid
+  current = $currentSid
+  isDirectory = [bool](Get-Item -LiteralPath $target).PSIsContainer
+  rules = @($rules)
+} | ConvertTo-Json -Compress -Depth 5
+"""
+
+
+def _acl_snapshot(path: Path) -> dict:
+    if os.name != "nt":
+        raise RuntimeError("Windows ACL/owner doğrulaması yapılamıyor; fail-closed")
+    env = os.environ.copy()
+    env["H2S_ACL_TARGET"] = str(path)
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _ACL_SCRIPT],
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10, env=env,
+        )
+        snapshot = json.loads(result.stdout)
+    except Exception as exc:
+        raise RuntimeError(f"DB ACL/owner güvenlik doğrulaması başarısız ({type(exc).__name__})") from None
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("rules"), dict):
+        snapshot["rules"] = [snapshot["rules"]]
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("rules"), list):
+        raise RuntimeError("DB ACL bilgisi okunamadı; fail-closed")
+    return snapshot
+
+
+def _check_acl(path: Path, *, is_directory: bool, required_owners: set[str],
+               service_sid: str, purge_sid: str, require_current: str | None = None):
+    snap = _acl_snapshot(path)
+    system_sid, admin_sid = "S-1-5-18", "S-1-5-32-544"
+    allowed = {service_sid, purge_sid, system_sid, admin_sid}
+    if snap.get("owner") not in required_owners:
+        raise RuntimeError("DB dizin/dosya sahibi izinli dedicated data hesabı değil")
+    if is_directory and not snap.get("protected"):
+        raise RuntimeError("DB dizininde ACL inheritance kapalı olmalı")
+    rules = snap["rules"]
+    access = {}
+    for rule in rules:
+        sid = rule.get("sid")
+        if sid not in allowed or rule.get("type") != "Allow":
+            raise RuntimeError("DB ACL içinde beklenmeyen principal veya deny ACE var")
+        if is_directory and rule.get("inherited"):
+            raise RuntimeError("DB dizini yalnız açık ACL girdileri kullanmalı")
+        rights = rule.get("rights", "")
+        access.setdefault(sid, []).append(rights)
+    def has(sid, required):
+        return any(required in rights or "FullControl" in rights for rights in access.get(sid, []))
+    if not has(service_sid, "Modify") or not has(purge_sid, "Modify"):
+        raise RuntimeError("Servis ve purge hesaplarına DB için Modify ACL gerekli")
+    if not has(system_sid, "FullControl") or not has(admin_sid, "FullControl"):
+        raise RuntimeError("SYSTEM ve Administrators için FullControl ACL gerekli")
+    if require_current and snap.get("current") != require_current:
+        raise RuntimeError("API WSGI süreci beklenen dedicated service account altında çalışmıyor")
+
+
+def _validate_storage_security(*, config, require_service_identity: bool):
+    db, _days, _service, _purge = config
+    parent = db.parent
+    if not parent.is_dir():
+        raise RuntimeError("H2S_CONTRIB_DB üst dizini önceden oluşturulmalı ve ACL ile korunmalı")
+    # Translate account names once using the parent ACL snapshot.
+    snap = _acl_snapshot(parent)
+    service_sid, purge_sid = snap.get("service"), snap.get("purge")
+    if not service_sid or not purge_sid:
+        raise RuntimeError("Dedicated account SID'leri çözümlenemedi; fail-closed")
+    broad_or_privileged_sids = {
+        "S-1-5-18", "S-1-5-19", "S-1-5-20", "S-1-5-32-544",
+        "S-1-5-32-545", "S-1-5-11", "S-1-1-0",
+    }
+    if service_sid == purge_sid or service_sid in broad_or_privileged_sids or purge_sid in broad_or_privileged_sids:
+        raise RuntimeError("API/purge kimlikleri ayrı ve düşük yetkili hesaplar olmalı")
+    current = service_sid if require_service_identity else None
+    _check_acl(parent, is_directory=True, required_owners={service_sid},
+               service_sid=service_sid, purge_sid=purge_sid, require_current=current)
+    if not require_service_identity and snap.get("current") not in {
+            service_sid, purge_sid, "S-1-5-18", "S-1-5-32-544"}:
+        raise RuntimeError("Yönetim komutu yalnız API/purge hesabı veya Administrators altında çalıştırılabilir")
+    for child in (db, Path(str(db) + "-wal"), Path(str(db) + "-shm")):
+        if child.exists():
+            owners = ({service_sid, purge_sid} if child == db else
+                      {service_sid, purge_sid, "S-1-5-18", "S-1-5-32-544"})
+            _check_acl(child, is_directory=False, required_owners=owners,
+                       service_sid=service_sid, purge_sid=purge_sid, require_current=current)
+
+
+# Fail at WSGI import/startup if path, policy, owner, ACL, or process identity
+# cannot be established. CLI admin commands receive ACL checks but may run as
+# the dedicated purge account or an administrator.
+_CONFIG = _settings()
 
 
 def _db():
-    path, _ = _settings()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = _CONFIG[0]
     con = sqlite3.connect(path, timeout=5)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA busy_timeout=5000")
+    con.execute("PRAGMA secure_delete=ON")
     con.executescript("""
       CREATE TABLE IF NOT EXISTS tokens (
         token_hash TEXT PRIMARY KEY, created_at TEXT NOT NULL, revoked_at TEXT
@@ -132,7 +278,6 @@ def _privacy_headers(response):
 @app.get("/healthz")
 def healthz():
     try:
-        _settings()
         with _connection() as con:
             con.execute("SELECT 1").fetchone()
         return jsonify({"status": "ok"})
@@ -158,7 +303,7 @@ def create_contribution():
         return _error("idempotency key mismatch", 400)
     if request.headers.get("X-H2S-Metrics-Consent") != "v1":
         return _error("explicit metrics consent required", 400)
-    _db_path, retention_days = _settings()
+    retention_days = _CONFIG[1]
     if request.headers.get("X-H2S-Retention-Policy") != str(retention_days):
         return _error("client retention notice does not match server policy", 409)
     has_cer = "cer" in clean["metrics"]
@@ -220,18 +365,33 @@ def _unique_object(pairs):
 
 
 def purge_expired() -> int:
-    _db_path, days = _settings()
+    days = _CONFIG[1]
     cutoff = datetime.fromtimestamp(time.time() - days * 86400, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     with _connection() as con:
         cur = con.execute("DELETE FROM contributions WHERE received_at < ?", (cutoff,))
-        return cur.rowcount
+        removed = cur.rowcount
+    _compact_after_purge()
+    return removed
+
+
+def _compact_after_purge():
+    """Checkpoint/truncate WAL and vacuum after retention deletes commit."""
+    con = sqlite3.connect(_CONFIG[0], timeout=30)
+    try:
+        con.execute("PRAGMA busy_timeout=30000")
+        con.execute("PRAGMA secure_delete=ON")
+        checkpoint = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if checkpoint and checkpoint[0] != 0:
+            raise RuntimeError("SQLite WAL checkpoint busy; retry the scheduled purge")
+        con.execute("VACUUM")
+    finally:
+        con.close()
 
 
 def _cli(argv=None):
     parser = argparse.ArgumentParser(description="hardsub2srt contribution API administration")
     parser.add_argument("command", choices=("issue-token", "revoke-token", "purge"))
     args = parser.parse_args(argv)
-    _settings()
     if args.command == "issue-token":
         token = "h2s_" + secrets.token_urlsafe(36)
         with _connection() as con:

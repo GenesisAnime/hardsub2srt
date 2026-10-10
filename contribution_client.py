@@ -23,6 +23,12 @@ class ContributionError(ValueError):
     pass
 
 
+def _api_endpoint(path: str) -> str:
+    """Build a fixed API path; never place it in URL query/fragment slots."""
+    base = urlsplit(os.environ["H2S_CONTRIB_URL"].strip())
+    return urlunsplit((base.scheme, base.netloc, path, "", ""))
+
+
 def _number(value, name, *, integer=False, minimum=0, maximum=10_000_000):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ContributionError(f"{name} sayısal değil")
@@ -169,7 +175,7 @@ def send_payload(payload: dict, *, cer_consent: bool = False) -> dict:
     status = config_status()
     if not status["enabled"]:
         raise ContributionError("Katkı URL'si veya token yapılandırılmamış; gönderim kapalı")
-    endpoint = urlunsplit((*urlsplit(os.environ["H2S_CONTRIB_URL"].strip())[:3], "/v1/contributions", ""))
+    endpoint = _api_endpoint("/v1/contributions")
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     if len(body) > MAX_REQUEST_BYTES:
         raise ContributionError("Katkı paketi boyut sınırını aşıyor")
@@ -209,8 +215,7 @@ def delete_submission(submission_id: str) -> dict:
     status = config_status()
     if not status["enabled"]:
         raise ContributionError("Katkı URL'si veya token yapılandırılmamış")
-    endpoint = urlunsplit((*urlsplit(os.environ["H2S_CONTRIB_URL"].strip())[:3],
-                           "/v1/contributions/" + submission_id, ""))
+    endpoint = _api_endpoint("/v1/contributions/" + submission_id)
     req = urllib.request.Request(endpoint, method="DELETE", headers={
         "Authorization": "Bearer " + os.environ["H2S_CONTRIB_TOKEN"].strip(),
         "User-Agent": "hardsub2srt-contribution/1",

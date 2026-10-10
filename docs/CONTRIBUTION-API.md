@@ -16,13 +16,43 @@ Sözleşme: [`schemas/contribution-metrics-v1.schema.json`](../schemas/contribut
 
 Canlı kurulum için VDS işletim sistemi, DNS adı, TLS sertifikası, güvenlik duvarı ve kalıcı disk konumu doğrulanmalıdır. Bu depo bunları kurmaz. API portu yalnız loopback'te dinler; internet trafiği TLS reverse proxy üzerinden gelir. Uzak istemcinin HTTPS adresi `/` köküne işaret edebilir; istemci yalnız `/v1/contributions` yolunu kullanır.
 
-1. Depoyu API için ayrılmış, yazma erişimi kısıtlı bir klasöre kurun. `py -3 -m pip install -r requirements-contribution-api.txt` çalıştırın.
-2. Servis hesabı için ortam değişkenlerini **depo dışından** tanımlayın: `H2S_CONTRIB_DB` mutlak ve yedeklenen SQLite dosya yolu; `H2S_CONTRIB_RETENTION_DAYS` ise işletmeci/hukuk incelemesinden sonra açıkça seçilmiş 1–3650 gün tam sayı olmalıdır. Bu değer yoksa/placeholder ise WSGI import aşamasında servis başlamaz. İstemcide de aynı gün sayısını `/katki` önizlemesinde göstermek için ayarlayın; API request header'ını server policy ile karşılaştırır. Örnek env dosyası değer yerine placeholder içerir; placeholder ile servis çalışmaz. `deploy/hardsub-contrib-service.xml.example` WinSW için örnektir; dosyayı dışarıda kopyalayıp tüm placeholder'ları değiştirin. WinSW servisini dedicated düşük yetkili Windows hesabıyla çalıştırın.
-3. WinSW servis tanımında şu uygulama komutu kullanılır: `waitress-serve --listen=127.0.0.1:8787 contribution_api:app`. Waitress access logging kapalı kalmalıdır; `log mode="none"` servis sarmalayıcı çıktısını kapatır. Servis hesabına yalnız DB klasörü için gereken NTFS haklarını verin. İstek gövdesi, token, istemci IP'si ve URL query loglanmamalıdır.
-4. Caddy'yi doğrulanmış alan adı/IP ve **bağımsız olarak temin edilip yenilenmesi doğrulanmış, public-trust TLS sertifikasıyla** yapılandırın. `deploy/Caddyfile.example` public certificate/key yollarını açıkça bekler. Caddy'nin bare IP için yerel CA sertifikası tarayıcılar/istemciler tarafından varsayılan güvenilir değildir; Caddy'nin tek başına IP sertifikası sağlayacağını varsaymayın. IP SAN kullanılıyorsa CA/client desteği, kısa sertifika ömrü, otomatik yenileme ve HTTP-01/TLS-ALPN için gereken inbound 80/443 erişimi ayrıca doğrulanmalıdır. Uygun Windows IP sertifika yenileyicisi/domain ve port erişimi doğrulanana kadar dağıtım blokludur. Windows Firewall'da yalnız Caddy'nin HTTPS portlarını açın; 8787 dışarı açmayın.
-5. API token'ını `py -3 contribution_api.py issue-token` ile CLI'dan üretin. Ham token yalnız bir kere gösterilir; parola yöneticisine alın ve yerel istemci tarafında `H2S_CONTRIB_TOKEN` ortam değişkenine dışarıdan verin. İstemcinin `H2S_CONTRIB_URL` değeri `https://<gerçek-alan-adı>` biçiminde olmalıdır. Token iptali: `py -3 contribution_api.py revoke-token` (gizli giriş istemi).
-6. Task Scheduler ile günde bir kez `py -3 contribution_api.py purge` komutunu, aynı `H2S_CONTRIB_DB` ve retention ortam değişkenleriyle çalıştırın. Bu komut yalnız `received_at` retention eşiğini geçen kayıtları siler. Yedeklerin de aynı saklama/silme politikasına uymasını ve aralıklarla geri yükleme/silme işlemini doğrulayın.
-7. TLS, firewall, `/healthz`, token iptali, rate limit, deletion ve retention purge doğrulandıktan sonra ancak kullanıcıların URL/token yapılandırmasını dağıtın. Bu iş dalında hiçbir VDS kurulumu, alan adı/TLS, token secret veya payload gönderimi yapılmadı.
+1. Depoyu API için ayrılmış, servis hesabına yazma verilmeyen bir uygulama klasörüne kurun. `py -3 -m pip install -r requirements-contribution-api.txt` çalıştırın. `Waitress` uygulama klasörünü yalnız okuyup çalıştırabilmelidir; `LocalSystem` ile çalıştırmayın.
+2. Saklama süresini ürün/hukuk incelemesinden sonra açıkça seçin. `H2S_CONTRIB_RETENTION_DAYS` 1–3650 arası tam sayı olmalıdır; `H2S_CONTRIB_DB` mutlak SQLite dosya yolu olmalı ve repo/kaynak ağacının dışında bulunmalıdır. API startup sırasında Windows ACL/owner ve process identity doğrular; SID/ACL okunamaz, data dizini yok, owner yanlış, geniş principal/izin var veya uygulama hesabı eşleşmiyorsa fail-closed açılmaz. İstemciye aynı gün sayısını verin; UI bunu onaydan önce gösterir ve API farklı değeri reddeder. Placeholder değerler servisi çalıştırmaz.
+3. `deploy/hardsub-contrib-service.xml.example` dosyasını WinSW executable'ının yanına aynı adla kopyalayın; Waitress executable, AppRoot, DB/log/retention ve purge account placeholder'larını değiştirin. Servisi elle kurup başlatmayın. WinSW XML'deki uygulama komutu `waitress-serve --listen=127.0.0.1:8787 contribution_api:app` olmalıdır. Yönetici PowerShell'de aşağıdaki komut WinSW servisini kurar, LocalSystem'den dedicated service account'a geçirir ve ACL'leri kurup doğrular; başarısız olursa servis başlamaz:
+
+   ```powershell
+   $retentionDays = [int](Read-Host 'Retention gün sayısı (ürün/hukuk kararı)')
+   .\deploy\configure_contribution_windows.ps1 `
+     -WinSWExe 'C:\Services\hardsub\app\hardsub-contribution-api.exe' `
+     -AppRoot 'C:\Services\hardsub\app' `
+     -DataDirectory 'D:\HardsubData\contrib' `
+     -LogDirectory 'D:\HardsubData\logs' `
+     -CertificateDirectory 'D:\HardsubData\tls' `
+     -PurgeAccount 'VDS01\hardsub-purge' `
+     -CaddyAccount 'NT SERVICE\Caddy' `
+     -RetentionDays $retentionDays
+   ```
+
+   Placeholder paths/accounts/gün sayısı canlı değer değildir. Script LocalSystem'i reddeder, servisi `NT SERVICE\hardsub-contribution-api` sanal hizmet hesabına geçirir, başlangıçtan önce identity'yi doğrular ve ACL'leri sıfırlayıp kısıtlar: app root API için RX-only, data/log API için Modify, data purge için Modify, cert/key Caddy için RX-only, SYSTEM/Administrators FullControl. Data dizininin sahibi API service SID olur; DB dosyası API veya ayrı purge SID sahibi olabilir. Purge hesabı yalnız yerel `BUILTIN\Users` üyesi olabilir ve Administrators dahil başka bir local group'a üyelik reddedilir. Script başarısız olursa servisi başlatmayın.
+4. `deploy/register_contribution_purge_task.ps1` ile her gün 03:15 için Scheduled Task kaydedin; task ayrı, non-admin `PurgeAccount` ile S4U çalışır. Hesaba yerel dosya erişimi ve `Log on as a batch job` hakkı verilmeli; Task Scheduler bunu kuramazsa deploy bloklu kalır. Örnek:
+
+   ```powershell
+   $retentionDays = [int](Read-Host 'API ile aynı retention gün sayısı')
+   .\deploy\register_contribution_purge_task.ps1 `
+     -TaskName 'hardsub2srt-retention-purge' `
+     -PurgeAccount 'VDS01\hardsub-purge' `
+     -PythonExe 'C:\Python312\python.exe' `
+     -AppRoot 'C:\Services\hardsub\app' `
+     -WinSWXml 'C:\Services\hardsub\hardsub-contribution-api.exe.xml' `
+     -DatabasePath 'D:\HardsubData\contrib\contributions.sqlite3' `
+     -RetentionDays $retentionDays `
+     -ServiceAccount 'NT SERVICE\hardsub-contribution-api'
+   ```
+
+   Komut `deploy/purge_contributions.ps1` üzerinden aynı retention süresiyle API'nin `purge` komutunu çağırır. Bu scheduled task gerçek Windows kimlik/ACL kabul testi yapılmadan canlı sayılmaz.
+5. Caddy'yi doğrulanmış alan adı/IP ve **bağımsız olarak temin edilip yenilenmesi doğrulanmış, public-trust TLS sertifikasıyla** yapılandırın. `deploy/Caddyfile.example` public certificate/key yollarını açıkça bekler. Caddy'nin bare IP için yerel CA sertifikası tarayıcılar/istemciler tarafından varsayılan güvenilir değildir; Caddy'nin tek başına IP sertifikası sağlayacağını varsaymayın. IP SAN kullanılıyorsa CA/client desteği, kısa sertifika ömrü, otomatik yenileme ve HTTP-01/TLS-ALPN için gereken inbound 80/443 erişimi ayrıca doğrulanmalıdır. Uygun Windows IP sertifika yenileyicisi/domain ve port erişimi doğrulanana kadar dağıtım blokludur. Script sertifika klasöründe yalnız Caddy hesabına Read/Execute verir. Windows Firewall'da yalnız Caddy'nin HTTPS portlarını açın; 8787 dışarı açmayın.
+6. API token'ını `py -3 contribution_api.py issue-token` ile CLI'dan üretin. Ham token yalnız bir kere gösterilir; parola yöneticisine alın ve yerel istemci tarafında `H2S_CONTRIB_TOKEN` ortam değişkenine dışarıdan verin. İstemcinin `H2S_CONTRIB_URL` değeri `https://<gerçek-alan-adı>` biçiminde olmalıdır. Token iptali: `py -3 contribution_api.py revoke-token` (gizli giriş istemi).
+7. `/healthz`, firewall, TLS renewal, token iptali, rate limit, deletion, Windows task identity, ACL ve purge doğrulandıktan sonra kullanıcıların URL/token yapılandırmasını dağıtın. Bu dalda hiçbir VDS kurulumu, domain/TLS, secret veya payload gönderimi yapılmadı.
 
 ## API güvenlik ve depolama
 
@@ -32,10 +62,11 @@ Canlı kurulum için VDS işletim sistemi, DNS adı, TLS sertifikası, güvenlik
 - Token'lar DB'de SHA-256 özeti olarak tutulur; ham token issue sırasında bir kez gösterilir. Rate limit token başına 60 istek/saat (tek proses belleğinde), submission ID primary key/replay dedupe sağlar. SQLite yalnız allowlist payload'ını ve alım/consent zamanını saklar.
 - Loglar request body, token ve IP içermez; `werkzeug` access logger kapalıdır. Proxy ve servis sarmalayıcı loglarını da privacy-safe ayarlayın. Servis yalnız loopback bind eder.
 - `H2S_CONTRIB_RETENTION_DAYS` varsayılanı yoktur. Servisin açılması için açık operatör seçimi şarttır. Silme isteği için API deletion endpoint'i vardır; gönderim yanıtındaki ID'yi kullanıcıya/yerel uygulamaya gösterin.
+- SQLite WAL modu kullanılır ve her writer connection `secure_delete=ON` açar. Kullanıcı silme isteği ana tablodaki kaydı hemen siler; WAL/checkpoint ve disk blokları anında forensic olarak silinmiş sayılmaz. Günlük retention task'i expired rows'ları siler, `wal_checkpoint(TRUNCATE)` ve `VACUUM` yapar. Bu mantıksal DB/WAL temizliğidir, depolama aygıtı üzerinde garantili güvenli overwrite değildir. SQLite backup'ları, shadow copies ve volume snapshots aynı retention süresine göre ayrı temizlenmelidir; canlı DB kopyasını tek başına kopyalamayın, SQLite online backup API kullanın veya tutarlı yedek için servisi durdurun ve DB+WAL'ı birlikte alın.
 
 ## İşletmeci yapılandırması
 
-Örnekler: [`deploy/contribution.env.example`](../deploy/contribution.env.example), [`deploy/hardsub-contrib-service.xml.example`](../deploy/hardsub-contrib-service.xml.example) ve [`deploy/Caddyfile.example`](../deploy/Caddyfile.example). Bunlar placeholder'dır; production secret veya domain değildir. Sunucu sadece loopback'e bind eder ve HTTPS sertifikası/proxy olmadan public deployment yapılmamalıdır. Caddy şablonu TLS sertifikasını dışarıdan bekler; bare-IP sertifikasının Caddy tarafından otomatik güvenilir üretildiği iddia edilmez.
+Örnekler: [`deploy/contribution.env.example`](../deploy/contribution.env.example), [`deploy/hardsub-contrib-service.xml.example`](../deploy/hardsub-contrib-service.xml.example), [`deploy/configure_contribution_windows.ps1`](../deploy/configure_contribution_windows.ps1), [`deploy/register_contribution_purge_task.ps1`](../deploy/register_contribution_purge_task.ps1), [`deploy/purge_contributions.ps1`](../deploy/purge_contributions.ps1) ve [`deploy/Caddyfile.example`](../deploy/Caddyfile.example). Bunlar placeholder'dır; production secret veya domain değildir. Sunucu sadece loopback'e bind eder ve HTTPS sertifikası/proxy olmadan public deployment yapılmamalıdır. Caddy şablonu TLS sertifikasını dışarıdan bekler; bare-IP sertifikasının Caddy tarafından otomatik güvenilir üretildiği iddia edilmez.
 
 ## Uygulanmamış
 
