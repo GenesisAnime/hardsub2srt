@@ -17,7 +17,7 @@ from pathlib import Path
 import cv2
 
 
-MAX_CROP_WIDTH = 1280
+MAX_CROP_DIMENSION = 1280
 JPEG_QUALITY = 86
 MAX_UNIQUE_CROPS = 1000
 MAX_TOTAL_CROP_BYTES = 128 * 1024 * 1024
@@ -34,8 +34,8 @@ def _encode_crop(image):
     if original_width < 1 or original_height < 1:
         raise ValueError("empty_roi")
     largest_dimension = max(original_width, original_height)
-    if largest_dimension > MAX_CROP_WIDTH:
-        scale = MAX_CROP_WIDTH / largest_dimension
+    if largest_dimension > MAX_CROP_DIMENSION:
+        scale = MAX_CROP_DIMENSION / largest_dimension
         image = cv2.resize(
             image,
             (max(1, round(original_width * scale)),
@@ -160,7 +160,7 @@ def build_review_pack(srt_path, cues, metadata, crop_provider):
             "unique_crop_count": crop_count,
             "unique_crop_bytes": crop_bytes,
             "crop_limits": {
-                "max_dimension_px": MAX_CROP_WIDTH,
+                "max_dimension_px": MAX_CROP_DIMENSION,
                 "max_unique_crops": MAX_UNIQUE_CROPS,
                 "max_total_encoded_bytes": MAX_TOTAL_CROP_BYTES,
             },

@@ -3839,8 +3839,8 @@ def main():
         denemesinin UCUZ ÖNİNDEĞERi için kullanılır — bkz. Task 4).
         Verilmezse `args.limit_seconds` (yani normal tam gidiş) kullanılır.
 
-        Döner: (merged, mikro_tasınanlar, scanned, second_votes,
-        second_takas, fade_n, cjk_blok, cjk_kayit)."""
+        Döner: OCR/cleanup çıktıları ve birleştirme öncesi özgün OCR
+        segmentlerinin (başlangıç, bitiş, örnek kare) listesi."""
         print("[1/3] altyazi bandi taraniyor...")
         t0 = time.time()
         segments, scanned, fade_n = scan_band(
