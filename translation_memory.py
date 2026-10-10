@@ -42,6 +42,24 @@ def _norm_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+def _literal_occurrences(pattern: re.Pattern, text: str):
+    """Yield literal, including overlapping, case-insensitive match spans."""
+    start = 0
+    while start < len(text):
+        match = pattern.search(text, start)
+        if match is None:
+            return
+        yield match
+        start = match.start() + 1
+
+
+def _is_cjk_script_char(char: str) -> bool:
+    if not char:
+        return False
+    name = unicodedata.name(char, "")
+    return any(script in name for script in ("CJK", "HIRAGANA", "KATAKANA", "HANGUL", "BOPOMOFO"))
+
+
 def _scope(project_key: object, source_language: object, target_language: object) -> dict:
     if not isinstance(project_key, str):
         raise ocr_review.ReviewError("Proje/seri anahtarı gerekli (ör. one-piece)", 400)
@@ -384,10 +402,10 @@ def suggest(review_id: str, cue_id: object, project_key: object, source_language
         for candidate in candidates:
             # Literal substring matching works for both space-delimited text and
             # CJK scripts, where Unicode word-boundary assertions suppress valid
-            # Japanese/Chinese phrase matches. Overlaps below are handled as
-            # ambiguity, never resolved by an arbitrary precedence rule.
+            # Japanese/Chinese phrase matches. Scan from start+1 so self-overlaps
+            # are visible and can be held for review below.
             pattern = re.compile(re.escape(candidate["source_term"]), re.IGNORECASE)
-            for found in pattern.finditer(source_text):
+            for found in _literal_occurrences(pattern, source_text):
                 occurrences[(found.start(), found.end())] = found
         if len(targets_for_term) != 1:
             collision_matches.extend(occurrences.values())
@@ -396,6 +414,16 @@ def suggest(review_id: str, cue_id: object, project_key: object, source_language
         matches.extend((m.start(), m.end(), candidates[0], target) for m in occurrences.values())
     matches.sort(key=lambda m: (m[0], -(m[1] - m[0])))
     chosen, ambiguous = [], bool(collision_matches)
+    # Without a trusted tokenizer, a matched CJK substring touching another
+    # CJK-script character may be only part of a compound. Do not guess a token
+    # boundary; surface the whole lexicon suggestion as ambiguous.
+    all_matches = list(matches) + [
+        (m.start(), m.end(), {}, "") for m in collision_matches
+    ]
+    for start, end, _event, _target in all_matches:
+        if ((start > 0 and _is_cjk_script_char(source_text[start - 1])) or
+                (end < len(source_text) and _is_cjk_script_char(source_text[end]))):
+            ambiguous = True
     for match in matches:
         if chosen and match[0] < chosen[-1][1]:
             if match[0:2] != chosen[-1][0:2] or _norm_text(match[3]) != _norm_text(chosen[-1][3]):
