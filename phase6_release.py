@@ -337,6 +337,10 @@ def validate(manifest_path: Path, report_path: Path, trust_path: Path) -> list[s
         raise GateError("compatibility.operating_systems içinde desteklenmeyen ad var")
     if any(item not in DEVICE_VALUES for item in devices):
         raise GateError("compatibility.devices yalnız gpu/cpu olabilir")
+    # The product contract is GPU by default with CPU as an explicit opt-in.
+    # A manifest cannot claim this policy while omitting validation for either mode.
+    if set(devices) != DEVICE_VALUES:
+        blockers.append("Ürün sözleşmesi gereği aday hem GPU varsayılanı hem CPU opt-in cihaz desteğini ve kanıtını taşımalı")
     evidence = trust["trusted_compatibility_evidence"]
     if not evidence:
         blockers.append("Desteklenen OS/Python/backend/device kombinasyonları için pinli doğrulama kanıtı yok")
