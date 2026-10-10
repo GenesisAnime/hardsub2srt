@@ -3539,6 +3539,10 @@ def main():
                          "(varsayılan: tam koşuda 6, test koşusunda kapalı; "
                          "0 = kapalı)")
     ap.add_argument("--qa-dir", default="qa")
+    ap.add_argument("--review-pack", action="store_true",
+                    help="yerel AI-inceleme paketi üret: final SRT + cue başına "
+                         "tek sıkıştırılmış altyazı-ROI kırpımı + manifest; "
+                         "API çağrısı/yükleme yok")
     ap.add_argument("--ust-bant", action="store_true",
                     help="diyalog taramasindan SONRA ikinci gecis: cercevenin "
                          "ust %%35'indeki yazilari (mesaj kutusu, tabela, "
@@ -3599,7 +3603,13 @@ def main():
         extract_softsub(video, out, 0)
         print(f"[OK] softsub bulundu ({info['subtitles'][0]['codec']}), "
               f"kaynaktan birebir cikarildi: {out}")
+        if args.review_pack:
+            print("[!] AI inceleme paketi atlandı: softsub girdisinde OCR kare eşlemesi yok")
         return
+
+    review_target = out.with_name(out.stem + ".review-pack")
+    if args.review_pack and review_target.exists():
+        ap.error(f"inceleme paketi zaten var, üstüne yazılmadı: {review_target}")
 
     # --- Stil: otomatik algılama (varsayılan) / elle override ---
     manual = {"band_y": args.band_y, "band_h": args.band_h,
@@ -3894,6 +3904,11 @@ def main():
         # çöp deseni filtresi: en az 3 harf ardışık + en az bir sesli harf
         results = [r for r in results
                    if word_re.search(r[2]) and vowel_re.search(r[2])]
+        # Keep the original sampled OCR frame boundaries before merging. A
+        # later final cue may span multiple reads; it must not inherit a
+        # guessed midpoint from that merged interval.
+        source_frame_evidence = [
+            (int(r[0]), int(r[1]), int((r[0] + r[1]) // 2)) for r in results]
         # ardışık aynı metin / benzer metin / çakışan okuma birleştirmesi
         # ortak fonksiyona taşındı (--ust-bant aynı zinciri kullanır); kod
         # birebir aynıdır, sıra ve yan etkiler değişmedi.
@@ -3908,12 +3923,16 @@ def main():
             print(f"    ikinci motor: {_SECOND['name']} — {second_votes} "
                   f"blokta oy verdi{ek}")
         return (merged, merged_raw, micro_moved, scanned, second_votes,
-                len(takas_kayit), takas_kayit, fade_n, cjk_blok, cjk_kayit)
+                len(takas_kayit), takas_kayit, fade_n, cjk_blok, cjk_kayit,
+                source_frame_evidence)
 
     (merged, merged_raw, micro_moved, scanned, second_votes, second_takas,
-     takas_kayit, fade_n, cjk_blok, cjk_kayit) = _extract(cfg)
+     takas_kayit, fade_n, cjk_blok, cjk_kayit,
+     main_review_evidence) = _extract(cfg)
 
+    upper_review_evidence = []
     def _ust_pass():
+        nonlocal upper_review_evidence
         """--ust-bant: üst %35 bölgesinin AYRI geçişi.
 
         Ana diyalog taraması BİTMİŞTİR — bu fonksiyon yalnız kendi bandını
@@ -4105,6 +4124,8 @@ def main():
         u_ok = [r for r in u_results if r[2].strip()]
         u_ok = [r for r in u_ok
                 if word_re.search(r[2]) and vowel_re.search(r[2])]
+        upper_review_evidence = [
+            (int(r[0]), int(r[1]), int((r[0] + r[1]) // 2)) for r in u_ok]
         u_dropped = len(u_results) - len(u_ok)
         ust = _merge_readings(u_ok, fps, SIM)
         ust = [r for r in ust if r[2].strip()]
@@ -4381,7 +4402,7 @@ def main():
                 # gecisin ciktisi; yalniz ilk penceredeki bloklar alinir.
                 orn_f = ornek_sn * fps
                 m0_ornek = [r for r in merged if r[0] < orn_f]
-                m2_ornek, _mr, _mv, _s, _v, _tk, _tkl, _fd, _cb, _ck = \
+                m2_ornek, _mr, _mv, _s, _v, _tk, _tkl, _fd, _cb, _ck, _ev = \
                     _extract(cfg2, limit_s=ornek_sn)
                 s0o, s1o = _score(m0_ornek), _score(m2_ornek)
                 esik_kayit.update({
@@ -4401,7 +4422,7 @@ def main():
                          f"YAPILMADI ({time.time() - t_esik:.0f} sn)")
                 else:
                     # Ornek kazanci gosterdi -> simdi tam gecise harcanir.
-                    m2, mr2, mv2, s2, v2, tk2, tkl2, fd2, cb2, ck2 = \
+                    m2, mr2, mv2, s2, v2, tk2, tkl2, fd2, cb2, ck2, ev2 = \
                         _extract(cfg2)
                     esik_kayit["tam_gecis_yapildi"] = True
                     s0, s1_ = _score(merged), _score(m2)
@@ -4414,6 +4435,7 @@ def main():
                         scanned, second_votes, second_takas = s2, v2, tk2
                         takas_kayit, fade_n = tkl2, fd2
                         cjk_blok, cjk_kayit = cb2, ck2
+                        main_review_evidence = ev2
                         cfg[esik_anahtari] = yeni
                         esik_denemesi = yeni
                         esik_kayit.update({"karar": "kabul",
@@ -4751,11 +4773,17 @@ def main():
     # Kullanici bu bayragi vererek "bu yapimda diyalog ustte de ciziliyor"
     # DEMEDIR; arac tahmin etmez. Hicbir blok SILINMEZ.
     ust_bant = None
+    review_regions = None
     if args.ust_bant or args.ust_ana:
         ust_bant, _ust_bloklar = _ust_pass()
         if args.ust_ana:
-            ana = sorted(ana + [list(x) for x in _ust_bloklar],
-                         key=lambda r: r[0])
+            # Keep the independently known OCR pass for each final cue. The
+            # stable sort preserves the existing main-before-upper tie order.
+            tagged = [(r, "main_band") for r in ana]
+            tagged.extend((list(x), "upper_band") for x in _ust_bloklar)
+            tagged.sort(key=lambda item: item[0][0])
+            ana = [r for r, _region in tagged]
+            review_regions = [region for _r, region in tagged]
             note(f"[ust-ana] ust bandin {len(_ust_bloklar)} "
                  f"blogu ANA SRT'ye eklendi (siniflandirma yapilmadi; "
                  f"hicbir blok silinmedi)")
@@ -5094,6 +5122,95 @@ def main():
     meta_yol.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"    meta: {meta_yol}")
+
+    if args.review_pack:
+        # Lazy import keeps importlib-based legacy tools compatible when they
+        # load this script without adding its directory to sys.path.
+        from review_bundle import build_review_pack
+
+        review_cues = []
+        for i, (a, b, text, conf) in enumerate(ana):
+            start = frame_time(a)
+            end = frame_time(b + 1)
+            if i + 1 < len(ana):
+                end = min(end, frame_time(ana[i + 1][0]))
+            region = review_regions[i] if review_regions else "main_band"
+            evidence = upper_review_evidence if region == "upper_band" \
+                else main_review_evidence
+            exact_frames = [mid for ev_a, ev_b, mid in evidence
+                            if ev_a == a and ev_b == b]
+            frame_index = exact_frames[0] if len(exact_frames) == 1 else None
+            band_y = 0 if region == "upper_band" else cfg["band_y"]
+            band_height = (ust_bant["bolge"][1] if region == "upper_band"
+                           else cfg["band_h"])
+            review_cues.append({
+                "start_ms": int(round(start * 1000)),
+                "end_ms": int(round(end * 1000)),
+                "text": text,
+                "confidence": round(float(conf), 4),
+                "frame_index": frame_index,
+                "frame_ms": (int(round(frame_time(frame_index) * 1000))
+                             if frame_index is not None else None),
+                "mapping_status": ("exact_original_ocr_segment_needs_visual_confirmation"
+                                   if frame_index is not None
+                                   else "merged_or_ambiguous_source_frame_unavailable"),
+                "source_region": region,
+                "band_y": band_y,
+                "band_height": band_height,
+            })
+        review_metadata = {
+            "tool_version": ARAC_SURUM,
+            "device": str(device),
+            "requested_ocr_mode": args.ocr,
+            "second_engine": second_used,
+            "onnxruntime_version": _ORT.get("surum"),
+            "languages": list(lang_list),
+            "batch": args.batch,
+            "upscale2x": bool(upscale2x),
+            "fps": fps,
+            "limit_seconds": args.limit_seconds or None,
+            "band_y": cfg["band_y"],
+            "band_height": cfg["band_h"],
+            "mask": cfg["mask"],
+            "white_threshold": cfg["white_thr"],
+            "tophat_threshold": cfg["tophat_thr"],
+            "confidence_threshold": args.conf_thr,
+            "postfix_enabled": bool(args.duzelt),
+            "review_frame_reader": "single_opencv_capture_sequential_cues",
+            "frame_timestamp_basis": "frame_index_over_reported_fps; source_pts_not_preserved",
+        }
+        capture = None
+
+        def _review_crop(frame_index, band_y, band_height):
+            nonlocal capture
+            if capture is None:
+                capture = cv2.VideoCapture(str(video))
+                if not capture.isOpened():
+                    capture.release()
+                    capture = None
+                    raise RuntimeError("video_capture_unavailable")
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                raise RuntimeError("representative_frame_unavailable")
+            y0 = max(0, int(band_y))
+            y1 = min(frame.shape[0], y0 + int(band_height))
+            if y1 <= y0:
+                raise RuntimeError("representative_roi_unavailable")
+            return frame[y0:y1, :]
+
+        try:
+            review_dir, review_manifest = build_review_pack(
+                out, review_cues, review_metadata, _review_crop)
+            print(f"AI inceleme paketi: {review_dir} "
+                  f"({review_manifest['unique_crop_count']} kırpım / "
+                  f"{review_manifest['cue_count']} cue; yerel, yükleme yok)")
+            print(f"AI inceleme paketi yolu: {review_dir}")
+        except Exception as exc:
+            note(f"[!] AI inceleme paketi oluşturulamadı: {type(exc).__name__}")
+        finally:
+            if capture is not None:
+                capture.release()
 
 
 if __name__ == "__main__":

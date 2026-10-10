@@ -1,0 +1,50 @@
+# Local OCR review bundle
+
+The optional review bundle is a local export for inspecting the final OCR text against subtitle-band images. It does not call GPT, DeepSeek, another AI service, or any upload endpoint. The user may choose to share the bundle manually after reviewing its contents.
+
+## Create a bundle
+
+- In the local UI, open **Gelişmiş ayarlar** and select **Yerel AI inceleme paketi oluştur**. The option is off by default.
+- For CLI processing, add `--review-pack`:
+
+  ```powershell
+  py -3 hardsub2srt.py "D:\Videolar\bolum.mp4" -o "D:\Altyazilar\bolum.srt" --review-pack
+  ```
+
+The resulting directory is `bolum.review-pack/` beside the requested SRT. It contains:
+
+```text
+bolum.review-pack/
+  README.txt
+  bolum.srt
+  manifest.json
+  crops/
+    <job-id>-cue-00001.jpg
+```
+
+The copied SRT is the final main SRT after the current correction/post-fix stage. A crop is emitted only when the final cue's exact frame interval uniquely matches one pre-merge OCR segment; merged or ambiguous cues remain in the manifest with an unavailable crop. The selected source segment's midpoint frame is read through one shared OpenCV capture session, not a new FFmpeg process per cue. The image is cropped to that cue's OCR source band; it is not a full video frame. With `--ust-ana`, the pipeline retains whether a cue came from the main or upper-band OCR pass and uses the matching band. Crops with a width or height over 1280 pixels are proportionally downscaled before JPEG encoding. Identical encoded crops are stored once and referenced by each matching cue.
+
+## Manifest fields
+
+`manifest.json` is UTF-8 JSON, schema version 1. It includes:
+
+- run-local `job_id`, cue count and unique crop count;
+- copied SRT filename and a local integrity hash;
+- available OCR metadata: tool version, selected device, requested/second OCR mode, ONNX Runtime version when available, languages, batch, scale, frame rate, band/mask thresholds, confidence threshold, and whether post-fix was enabled;
+- per cue: immutable-in-this-bundle cue ID, final SRT order, `start_ms`, `end_ms`, final `source_text_ocr`, OCR confidence, original source segment frame index/time when preserved, source region and band coordinates, crop path/hash/dimensions, and duplicate linkage;
+- explicit crop status. A missing/failed frame is marked `unavailable`; it is not silently omitted or represented by an invented image.
+
+`source_text_ocr` is the final SRT text after post-fix, not necessarily the raw recognizer string. `ocr_confidence` comes from the OCR segment and is not a calibrated probability. `mapping_status` distinguishes an exact unique original OCR interval from a merged/ambiguous interval that has no crop. Even exact interval mapping still needs visual confirmation. The frame timestamp is estimated as `frame_index / reported_fps`; source presentation timestamps are not retained, so variable-frame-rate files may not map exactly. Accept a crop/text pair as an OCR label only after a person confirms that the image shows that exact text.
+
+The pack limits output to 1,000 unique crops and 128 MiB of encoded crop data. Cues beyond either limit remain in the manifest as unavailable. The crop provider reuses one video capture session and releases it after packing; encoded image bytes are processed one cue at a time rather than retained for the whole episode.
+
+The manifest intentionally omits the source video path and video hash. It does contain the SRT filename and text, crop images, cue timing, and local crop/SRT hashes. Treat the bundle as sensitive and inspect it before any manual sharing.
+
+## Boundaries and limitations
+
+- The optional setting is off by default to avoid adding image storage to ordinary OCR runs.
+- A successful package write never overwrites an existing `<ad>.review-pack`; choose a fresh output path for another package.
+- Soft-subtitle extraction has no OCR segment/frame association, so a requested review pack is reported as skipped.
+- Each crop is linked to the exact final OCR segment's frame interval, using its midpoint. Text may have been corrected by the current post-fix stage, so visual confirmation is required before using the pair for OCR learning.
+- The feature only prepares a local review package. It has no translation-memory fields or automatic translation learning. Translation proposals and approved target text must remain a separate, user-approved workflow as described in [the learning-system plan](LEARNING-SYSTEM-PLAN.md).
+- GPU remains the default when supported; `--cpu` remains explicit. Review-package generation does not alter OCR device selection or queue order.

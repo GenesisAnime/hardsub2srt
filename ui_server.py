@@ -135,6 +135,7 @@ RE_DUSUK = re.compile(r"guveni dusuk(?: blok)? \(conf<[0-9.]+\): (\d+)/(\d+)")
 RE_YAZILDI = re.compile(r"SRT yazildi:\s*(.+?)\s*$")
 RE_ISTATISTIK = re.compile(r"istatistik:\s*(.+?)\s*$")
 RE_QA = re.compile(r"QA montajlari:\s*(.+?)\s*\((\d+) adet\)")
+RE_REVIEW_PACK = re.compile(r"^AI inceleme paketi yolu:\s*(.*)$")
 
 
 def log_ekle(seviye, metin, is_id=None):
@@ -192,6 +193,7 @@ def is_olustur(yol, sec, is_id=None, enqueue_seq=None):
         "dusuk_a": None,
         "dusuk_b": None,
         "srt": None,
+        "review_pack": None,
         "run_dir": None,
         "qa_root": None,
         "ass": None,
@@ -264,6 +266,8 @@ def is_yurut(isim):
     qa_sayi = int(sec.get("qa_sayi") or 0)
     if qa_sayi > 0:
         cmd += ["--qa", str(qa_sayi), "--qa-dir", str(qa_dir)]
+    if sec.get("review_pack", False):
+        cmd.append("--review-pack")
     limit = float(sec.get("limit_saniye") or 0)
     if limit > 0:
         cmd += ["--limit-seconds", str(limit)]
@@ -329,6 +333,9 @@ def is_yurut(isim):
             m = RE_QA.search(satir)
             if m:
                 qa_adet = int(m.group(2))
+            m = RE_REVIEW_PACK.search(satir)
+            if m:
+                isim["review_pack"] = m.group(1).strip()
         log_ekle(seviye, satir, isim["id"])
 
     rc = surec.wait()
@@ -720,6 +727,8 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
           <label for="opt-qa">QA montaj sayısı</label>
           <input type="number" id="opt-qa" value="4" min="0" max="12">
         </div>
+        <label class="chk" style="grid-column:1/-1"><input type="checkbox" id="opt-review-pack">
+          Yerel AI inceleme paketi oluştur (final SRT + cue başına tek altyazı kırpımı; otomatik paylaşım yok)</label>
         <div>
           <label for="opt-limit">Test modu — ilk N sn (0 = tüm video)</label>
           <input type="number" id="opt-limit" value="0" min="0" step="30">
@@ -837,6 +846,7 @@ function seceneklerOku(){
     ass: $("opt-ass").checked,
     dil: $("opt-dil").value.trim() || "tr,en",
     qa_sayi: parseInt($("opt-qa").value || "4", 10) || 0,
+    review_pack: $("opt-review-pack").checked,
     cikti_klasor: $("opt-cikti").value.trim(),
     limit_saniye: parseFloat($("opt-limit").value || "0") || 0,
     onek: $("opt-onek").value.trim(),
@@ -1077,6 +1087,11 @@ function sonucCiz(kuyruk){
       'onclick="klasorAc(' + JSON.stringify(i.srt).replace(/"/g, "&quot;") +
       ')">Klasörü Aç</button></div>' +
       '<div class="yol">SRT: ' + escapeHtml(i.srt) + "</div>" +
+      (i.review_pack ? '<div class="yol">Yerel AI inceleme paketi: ' +
+        escapeHtml(i.review_pack) +
+        '<button class="ikincil" style="margin-left:8px;padding:3px 8px" ' +
+        'onclick="klasorAc(' + JSON.stringify(i.review_pack).replace(/"/g, "&quot;") +
+        ')">Paketi aç</button></div>' : "") +
       (i.ass ? '<div class="yol">ASS: ' + escapeHtml(i.ass) + "</div>" : "") +
       '<div class="cipler">' +
       cip("blok", st.blocks) + cip("düşük güven", st.low_conf) +
@@ -1441,6 +1456,7 @@ def api_ekle():
         "ust_bant": bool(v.get("ust_bant")),
         "ass": bool(v.get("ass")),
         "cpu": bool(v.get("cpu", False)),
+        "review_pack": bool(v.get("review_pack", False)),
         "dil": str(v.get("dil") or "tr,en"),
         "qa_sayi": int(v.get("qa_sayi", 4) or 0),
         "cikti_klasor": str(v.get("cikti_klasor") or KLASOR),

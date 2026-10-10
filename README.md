@@ -45,6 +45,8 @@ Bir `-o ...\bolum.srt` koşumu en azından SRT ve `.stats.json` üretir; araç s
 
 OCR metnini çevirmek veya çevrinin kalitesini denetlemek bu aracın amacı değildir. `vtt-qa.py`, mevcut altyazı ile zaman uyumlu referans VTT'yi hizalama/CER ve zamanlama ölçümleri için kıyaslar. OCR regresyon kapısı `regresyon/gt_gate.py` olup video ve trusted VTT dosyalarını dışarıdan ister; eksik/belirsiz varlıklar geçiş sayılmaz. Kullanım: [regresyon/README-kisa.md](regresyon/README-kisa.md). Video, VTT ve anime kareleri depoya eklenmemelidir.
 
+İsteğe bağlı **Yerel AI inceleme paketi** ayarı (UI'de varsayılan kapalı) veya CLI `--review-pack`, başarılı hard-sub OCR koşumunda final SRT'yi, her güvenle eşleşebilen cue için altyazı-bandı kırpımını ve `manifest.json` dosyasını `<ad>.review-pack/` altında üretir. Yalnız final cue aralığı tek bir özgün OCR segmentiyle birebir eşleşirse crop alınır; birleşmiş/kararsız cue'lar manifestte `unavailable` kalır. Tek bir OpenCV video yakalama oturumu tekrar kullanılır; cue başına yeni FFmpeg süreci açılmaz. `--ust-ana` kaynak bandı korunur. Zaman, frame index / bildirilen FPS üzerinden tahmin edilir; değişken kare hızlı videolarda kaynak PTS eşleşmesi garanti edilmez. Paket en fazla 1.000 benzersiz kırpım, 128 MiB toplam veri ve crop başına 1280 piksel en uzun kenar sınırına sahiptir. Soft-sub girdisinde OCR kare eşlemesi olmadığı için paket atlanır. Var olan paket hiçbir zaman üzerine yazılmaz. Bu özellik GPT/DeepSeek API'sini çağırmaz ve dosya yüklemez; paket içeriği SRT metni ile görsel altyazı karelerini barındırır, bu nedenle dışarıya elle paylaşmadan önce gözden geçirin. Biçim ve kullanım: [yerel inceleme paketi](docs/REVIEW-BUNDLE.md).
+
 ## Bağımlılıklar ve sorun giderme
 
 `requirements.txt` Python paketlerini listeler: NumPy, OpenCV, EasyOCR, RapidOCR, ONNX Runtime ve Flask. Video okuma için FFmpeg/ffprobe ayrıca gerekir. `py -3 -m pip show torch` ve `py -3 -c "import torch; print(torch.cuda.is_available())"` ile mevcut PyTorch/CUDA durumunu kontrol edebilirsiniz. UI veya CLI `ffmpeg`/`ffprobe` bulunamadığını bildirirse FFmpeg'i PATH'e ekleyip yeni terminal açın. GPU bulunmuyorsa veya CUDA uyumsuzsa `--cpu` açık seçenektir; işlem belirgin biçimde daha yavaş olabilir.
@@ -59,6 +61,8 @@ OCR metnini çevirmek veya çevrinin kalitesini denetlemek bu aracın amacı de�
 
 - [Yerel istemci ve mimari yol haritası](docs/LOCAL-ARCHITECTURE-ROADMAP.md)
 - [Tarayıcı içi OCR teknik planı](docs/BROWSER-OCR-PORT-PLAN.md)
+- [OCR ve çeviri öğrenme sistemi planı](docs/LEARNING-SYSTEM-PLAN.md)
+- [Yerel OCR inceleme paketi biçimi](docs/REVIEW-BUNDLE.md)
 - [Katkı kuralları](CONTRIBUTING.md)
 
 ## Dosyalar
