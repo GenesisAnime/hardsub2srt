@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "purpose": "Pinned SHA-256 digests of independently reviewed Phase 5 evaluation reports and human rights-review receipts. Empty until separately approved trust-root changes are made.",
+  "trusted_receipts": [],
+  "trusted_phase5_reports": []
+}
