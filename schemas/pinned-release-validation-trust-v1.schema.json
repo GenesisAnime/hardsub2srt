@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/pinned-release-validation-trust-v1.schema.json",
+  "title": "Pinned Phase 6 validation trust registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "purpose", "trusted_rights_receipts", "trusted_phase5_reports", "trusted_compatibility_evidence"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "purpose": {"type": "string", "minLength": 1},
+    "trusted_rights_receipts": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "trusted_phase5_reports": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "trusted_compatibility_evidence": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["evidence_id", "evidence_path", "evidence_sha256", "os", "python", "backend", "device", "model_bundle_sha256", "phase5_report_sha256", "validation_passed"], "properties": {
+      "evidence_id": {"type": "string", "minLength": 1}, "evidence_path": {"type": "string", "minLength": 1}, "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "os": {"enum": ["windows", "linux", "macos"]}, "python": {"type": "string", "pattern": "^3\\.(?:[0-9]|[1-9][0-9])$"},
+      "backend": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}, "device": {"enum": ["gpu", "cpu"]},
+      "model_bundle_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "phase5_report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "validation_passed": {"const": true}
+    }}}
+  }
+}

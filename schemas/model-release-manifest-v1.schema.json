@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/model-release-manifest-v1.schema.json",
+  "title": "Local OCR model candidate release manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate", "provenance", "evaluation", "rights_review", "model_files", "compatibility", "migration", "rollback", "activation_policy"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate": {"type": "object", "additionalProperties": false, "required": ["id", "version", "model_format"], "properties": {
+      "id": {"type": "string", "minLength": 1, "maxLength": 120},
+      "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+      "model_format": {"enum": ["onnx", "safetensors", "torch-state-dict"]}
+    }},
+    "provenance": {"type": "object", "additionalProperties": false, "required": ["source_commit", "training_recipe_id", "dataset_manifest_sha256", "dataset_metadata_sha256", "training_engine"], "properties": {
+      "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+      "training_recipe_id": {"type": "string", "minLength": 1},
+      "dataset_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "dataset_metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "training_engine": {"type": "string", "minLength": 1}
+    }},
+    "evaluation": {"type": "object", "additionalProperties": false, "required": ["report_path", "report_sha256", "phase5_status", "release_gate"], "properties": {
+      "report_path": {"type": "string", "minLength": 1},
+      "report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "phase5_status": {"const": "EVALUATED"},
+      "release_gate": {"const": "PASS"}
+    }},
+    "rights_review": {"type": "object", "additionalProperties": false, "required": ["receipt_path", "receipt_sha256", "review_id"], "properties": {
+      "receipt_path": {"type": "string", "minLength": 1},
+      "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "review_id": {"type": "string", "minLength": 1}
+    }},
+    "model_files": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["path", "size_bytes", "sha256"], "properties": {
+      "path": {"type": "string", "minLength": 1},
+      "size_bytes": {"type": "integer", "minimum": 1},
+      "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }}},
+    "compatibility": {"type": "object", "additionalProperties": false, "required": ["operating_systems", "python_versions", "backends", "devices"], "properties": {
+      "operating_systems": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["windows", "linux", "macos"]}},
+      "python_versions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^3\\.[0-9]{1,2}$"}},
+      "backends": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+      "devices": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"enum": ["gpu", "cpu"]}, "allOf": [
+        {"contains": {"const": "gpu"}}, {"contains": {"const": "cpu"}}
+      ]}
+    }},
+    "migration": {"type": "object", "additionalProperties": false, "required": ["from_versions", "steps", "data_format_version"], "properties": {
+      "from_versions": {"type": "array", "items": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}},
+      "steps": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+      "data_format_version": {"type": "string", "minLength": 1}
+    }},
+    "rollback": {"type": "object", "additionalProperties": false, "required": ["supported", "steps", "data_preserved"], "properties": {
+      "supported": {"const": true}, "steps": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "data_preserved": {"const": true}
+    }},
+    "activation_policy": {"type": "object", "additionalProperties": false, "required": ["default_device", "cpu_opt_in", "automatic_replacement", "user_confirmation_required"], "properties": {
+      "default_device": {"const": "gpu"}, "cpu_opt_in": {"const": true}, "automatic_replacement": {"const": false}, "user_confirmation_required": {"const": true}
+    }}
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "purpose": "Pinned hashes and compatibility approvals. Empty until separately approved trust-root changes are made.",
+  "trusted_rights_receipts": [],
+  "trusted_phase5_reports": [],
+  "trusted_compatibility_evidence": []
+}
