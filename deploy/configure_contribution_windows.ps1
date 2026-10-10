@@ -105,17 +105,9 @@ if ($envMap['H2S_CONTRIB_DB'] -ne $expectedDb -or
 $denied = @('localsystem','local system','nt authority\system','system',
     'nt authority\localservice','nt authority\networkservice',
     'builtin\users','everyone','authenticated users')
-foreach ($account in @($serviceAccount, $PurgeAccount, $CaddyAccount)) {
+foreach ($account in @($PurgeAccount, $CaddyAccount)) {
     if (-not $account -or $account.Trim().ToLowerInvariant() -in $denied) { throw 'Geniş veya sistem hesabı reddedildi.' }
     [void](Resolve-Sid $account)
-}
-$adminSid = 'S-1-5-32-544'
-$adminMembers = Get-LocalGroupMember -SID $adminSid -ErrorAction Stop
-$adminMemberSids = @($adminMembers | ForEach-Object { Resolve-Sid $_.Name })
-if ((Resolve-Sid $serviceAccount) -in $adminMemberSids -or
-    (Resolve-Sid $PurgeAccount) -in $adminMemberSids -or
-    (Resolve-Sid $CaddyAccount) -in $adminMemberSids) {
-    throw 'API, purge ve Caddy hesapları Administrators üyesi olamaz.'
 }
 $purgeSid = Resolve-Sid $PurgeAccount
 $purgeUser = Get-LocalUser | Where-Object { $_.SID.Value -eq $purgeSid }
@@ -150,12 +142,29 @@ if ($PurgeAccount -ieq $serviceAccount -or $CaddyAccount -ieq $serviceAccount -o
 $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
 if (-not $service) {
     & $winswPath install | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw 'WinSW servisi kurulamadı.' }
-    Start-Sleep -Seconds 1
+    if ($LASTEXITCODE -ne 0) {
+        & $winswPath uninstall | Out-Host
+        throw 'WinSW servisi kurulamadı; kısmi kayıt kaldırma denendi.'
+    }
     $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
 }
-if (-not $service) { throw 'WinSW servisi bulunamadı; yapılandırma durduruldu.' }
-if ($service.State -ne 'Stopped') { Stop-Service -Name $serviceName -Force }
+if (-not $service) {
+    & $winswPath uninstall | Out-Host
+    throw 'WinSW servisi bulunamadı; kaldırma denendi ve yapılandırma durduruldu.'
+}
+if ($service.State -ne 'Stopped') {
+    Stop-Service -Name $serviceName -Force
+    Start-Sleep -Seconds 1
+    $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+    if ($service.State -ne 'Stopped') { throw 'Servis durdurulamadı; identity/ACL değiştirilmedi.' }
+}
+# WinSW registration can initially use LocalSystem. Keep the service stopped
+# and disable automatic start before changing identity or resolving its SID.
+& sc.exe config $serviceName start= disabled | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    & $winswPath uninstall | Out-Host
+    throw 'Servis disabled durumuna alınamadı; kaldırma denendi, başlatma yapılmadı.'
+}
 & sc.exe config $serviceName obj= $serviceAccount password= '' | Out-Host
 if ($LASTEXITCODE -ne 0) {
     & $winswPath uninstall | Out-Host
@@ -165,6 +174,19 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) { throw 'Dedicated service SID etkinleştirilemedi.' }
 $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
 if ($service.StartName -ine $serviceAccount) { throw 'Servis hesabı doğrulanamadı; LocalSystem ile çalıştırılmayacak.' }
+if ($service.State -ne 'Stopped' -or $service.StartMode -ne 'Disabled') {
+    throw 'Servis dedicated identity ile stopped/disabled durumda değil; fail-closed.'
+}
+$serviceSid = Resolve-Sid $serviceAccount
+$reservedSids = @('S-1-5-18','S-1-5-19','S-1-5-20','S-1-5-32-544','S-1-5-32-545','S-1-5-11','S-1-1-0')
+if ($serviceSid -in $reservedSids) { throw 'Sanal hizmet hesabı dedicated/low-privilege SID değil.' }
+$adminSid = 'S-1-5-32-544'
+$adminMembers = Get-LocalGroupMember -SID $adminSid -ErrorAction Stop
+$adminMemberSids = @($adminMembers | ForEach-Object { Resolve-Sid $_.Name })
+if ($serviceSid -in $adminMemberSids -or $purgeSid -in $adminMemberSids -or
+    (Resolve-Sid $CaddyAccount) -in $adminMemberSids) {
+    throw 'API, purge ve Caddy hesapları Administrators üyesi olamaz.'
+}
 
 $system = '*S-1-5-18'
 $admins = '*S-1-5-32-544'
