@@ -8,6 +8,7 @@
 - AI çeviri kontrolü GPT/DeepSeek'e elle aktarılıp kullanıcının seçtiği sohbet içinde yapılır. Bu faz sağlayıcı API'si eklemez.
 - Model dosyalarını hiçbir zaman yüklemez veya çalıştırmaz. Python/PyTorch pickle ağırlıklarını açmak da bu araca dahil değildir.
 - Phase 5 v1 raporunda `rights_verified` daima `false`, `experiment_run_blocked` daima `true` olur. Lisans kanıtı dosyası ya da metadata içindeki `human_review` alanı tek başına hukuki/hak onayı değildir.
+- `ocr_crop_eval.py` çıktısı olan `ocr-crop-evaluation-report-v1` hâlâ resmî Phase 5 release raporu değildir: yalnız still crop CER/WER/exact/coverage ölçer, cue detection/timing alanları null'dur ve `phase6_blocked:true` taşır. Bu rapor hiçbir zaman PASS'e yükseltilmez veya bu validator'ın Phase 5 v2 raporu yerine kullanılamaz.
 - `schemas/trusted-rights-review-receipts-v1.json` hak inceleme makbuzları, Phase 5 raporları ve OS/Python/backend/device compatibility evidence için boş pin listeleriyle gelir. Adayın yanında bulunan, kendi kendine yazılmış hak beyanı/PASS raporu güven kökü sayılmaz. İleride hash eklemek ayrı, açık insan incelemesi ve kod/değişiklik onayı gerektirir. Hash pini yalnız o tam belgenin içeriğini sabitler; hukuki görüşün veya testin doğruluğunu otomatik kanıtlamaz. Yapı [pinned trust registry schema](../schemas/pinned-release-validation-trust-v1.schema.json) ile belgelenmiştir.
 
 ## Validator

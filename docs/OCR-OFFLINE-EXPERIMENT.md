@@ -57,9 +57,82 @@ Deterministik sıralama `SHA256(seed + NUL + canonical_group_id)` ile yapılır;
 
 ## Metrik tanımları ve rapor
 
-Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json` ve `schemas/ocr-experiment-report-v1.schema.json` dosyalarındadır. `experiment-report.json` hazırlıkta daima `PREPARED_NOT_RUN`, `rights_verified:false`, `experiment_run_blocked:true` ve null metriklerle yazılır. Null, sıfır başarı demek değildir; ölçülmedi demektir. Rights dosyalarının varlığı/hash'i yalnızca kanıt dosyasını öz-beyan edilen kayda bağlar; hukuki izni doğrulamaz. Bu ilk araç sadece crop çiftlerini hazırlar; trusted timed reference manifesti ve engine adapter henüz yoktur. `vtt-qa.py`/`regresyon/gt_gate.py` video ile referans altyazıyı karşılaştırır ama bu image/text export'una doğrudan bağlanmaz.
+Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json`, `schemas/ocr-experiment-report-v1.schema.json` ve aşağıdaki crop-only ölçüm için `schemas/ocr-crop-evaluation-report-v1.schema.json` dosyalarındadır. `experiment-report.json` hazırlıkta daima `PREPARED_NOT_RUN`, `rights_verified:false`, `experiment_run_blocked:true` ve null metriklerle yazılır. Null, sıfır başarı demek değildir; ölçülmedi demektir. Rights dosyalarının varlığı/hash'i yalnızca kanıt dosyasını öz-beyan edilen kayda bağlar; hukuki izni doğrulamaz. Crop adapter'ı still metin CER/WER/exact/coverage ölçer; trusted timed reference manifesti ve tam video engine adapter'ı bulunmadığından `vtt-qa.py`/`regresyon/gt_gate.py` video değerlendirmesinden ayrı kalır.
 
-Bir sonraki değerlendirme uygulaması metrikleri şöyle hesaplamalı ve aynı tanımları kullanmalıdır:
+Still-crop ölçüm adaptörü `ocr_crop_eval.py` ile eklenmiştir. Bu adapter yalnızca
+Phase 2 insan onaylı crop + kaynak metni üzerinde OCR motorunun **crop metnini**
+ölçer. Aşağıda tanımlanan ölçüm biçimleri iki alt kümeye ayrılır:
+
+- Crop metninden gerçekten hesaplanabilenler: CER, WER, exact match ve coverage.
+- Sabit crop'tan ölçülemeyenler: cue detection/precision/recall ve zamanlama.
+
+## Crop-level metin ölçümünü çalıştırma
+
+Önce yukarıdaki hazırlama adımıyla `split-manifest.json` üretin. Hazırlık
+metadata'sındaki her kayıt için `license.human_review.status` `reviewed`
+olmalıdır. Bu yalnız hak incelemesinin kullanıcı tarafından beyan edildiğini
+gösterir; raporda `rights_verified` daima `false` kalır. Eser kullanma hakkını
+program doğrulamaz. Parent review-pack/event zinciri her engine başlamadan önce
+tekrar doğrulanır; kendi başına taşınmış/self-attested export reddedilir.
+
+```powershell
+py -3 ocr_crop_eval.py "D:\yerel\verified-ocr-dataset-..." `
+  --metadata "D:\yerel\dataset-metadata.json" `
+  --split "D:\yerel\experiment-2026-01\split-manifest.json" `
+  --out "D:\yerel-raporlar\crop-eval-2026-01.json" `
+  --engine easyocr-single `
+  --engine easyocr-consensus3 `
+  --engine rapidocr-v6-small `
+  --rapid-det-model "D:\models\det.onnx" `
+  --rapid-rec-model "D:\models\rec.onnx" `
+  --rapid-dict "D:\models\dict.txt"
+```
+
+RapidOCR seçilirse det/rec ONNX ve sözlük yolları zorunlu, yerel ve mevcut
+olmalıdır. EasyOCR yalnız mevcut model klasörünü kullanır (varsayılan
+`~/.EasyOCR/model`, değiştirilebilir `--easyocr-model-dir`) ve
+`download_enabled=False` ile kurulur. Eksik model hata verir; hiçbir model
+ağırlığı indirilmez. GPU kullanılabiliyorsa varsayılandır; `--cpu` açıkça CPU
+seçer. Raporda motor sürümü, config özeti ve gerçek cihaz/provider bilgisi
+bulunur. RapidOCR oturumundan etkin ONNX provider okunamazsa işlem durur.
+
+Her engine aynı frozen `test` split satırlarını işler ve her engine'den hemen
+önce manifest, metadata, crop SHA/decode, split ataması ve etkin Phase 2 karar
+zinciri tekrar doğrulanır. Çıktı yalnız aggregate metriklerdir; crop, OCR
+çıktısı, insan kaynak metni veya cue ID rapora yazılmaz. Rapor, dataset/review
+pack/metadata klasörlerinin dışında yeni bir JSON dosyası olmalıdır.
+
+- CER/WER referansı insan tarafından görsel olarak onaylanmış kaynak metindir;
+  metrik normalize ederken NFC + boşluk birleştirme/trim uygular, case ve
+  noktalama işaretlerini korur.
+- Exact match eşleşen normalize metin sayısını test satır sayısına böler.
+- Coverage boş olmayan OCR çıktısı / toplam test crop satırı olarak ölçülür.
+  Boş çıktı coverage'ı düşürür ve edit metriğinde boş tahmin sayılır.
+- `micro` bütün test satırlarındaki toplam edit / toplam referans birimini;
+  `group_macro` source+episode gruplarının basit ortalamasını verir. Ayrıca her
+  source+episode için aggregate değer raporlanır.
+- Her still crop zaten bir cue'nin görüntüsüdür. Bu nedenle bu adapter video
+  üzerinde cue bulma başarısını veya zaman doğruluğunu ölçmez; ilgili alanlar
+  `null` kalır. Sonuç **video doğruluğu değildir**, Phase 6 `PASS` değildir ve
+  yayın kapısını açmaz. Hazırlık `experiment-report.json` dosyasını değiştirmez;
+  ayrı şema `schemas/ocr-crop-evaluation-report-v1.schema.json` kullanılır.
+
+Çıktı ve model kimlikleri yerel hassas veridir. Raporu ve metrikleri otomatik
+olarak ağa gönderme yoktur. Model eğitimi yapılmaz. Bu adapter `vtt-qa.py` veya
+`regresyon/gt_gate.py`'nin zaman hizalı video referans değerlendirmesinin yerini
+almaz.
+
+## Tam Phase 5 hâlâ neden bloklu
+
+Crop-level CER/WER, görsel olarak onaylanmış crop metninin motor tarafından ne
+ölçüde okunduğunu kanıtlar; video OCR'ın cue recall/precision'ını, cue
+başlangıç/bitiş zamanını, aday eğitiminin faydasını veya release PASS'ini
+kanıtlamaz. Trusted timed reference corpus, model eğitim adapter'ı, hakların
+bağımsız doğrulanması ve önceden sabitlenmiş tam video regresyon gate'i hâlâ
+eksik. Bu nedenle `experiment-report.json` hazırlık/null-metric sözleşmesinde
+kalır; `ocr_crop_eval.py` ayrı crop-only rapor üretir ve Phase 6 bloke kalır.
+
+Tam video değerlendirme için daha sonra eklenmesi gereken metriklerin tanımı:
 
 - **CER:** referans karakterlerine bölünen Levenshtein karakter düzenleme sayısı; NFC + boşluk normalize edilir, harf büyüklüğü ve noktalama korunur. Empty reference örneği CER hesaplamasından çıkarılır ve ayrı raporlanır.
 - **WER:** aynı normalization sonrası Unicode whitespace ile tokenization; referans kelime sayısına bölünen kelime düzenleme sayısı. Dil özel tokenizer kullanılmıyorsa bunu WER'in sınırlaması olarak belirtin.
