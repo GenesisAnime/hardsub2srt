@@ -68,6 +68,7 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -105,6 +106,7 @@ app = Flask(__name__)
 
 # ---------------------------------------------------------------- durum ----
 KILIT = threading.Lock()
+PICKER_KILIT = threading.Lock()   # Aynı anda tek Windows dialog süreci
 ISLER = []                 # eklenme sırasıyla tüm işler (dict listesi)
 LOG = deque(maxlen=LOG_LIMIT)
 LOG_SAYAC = 0
@@ -664,7 +666,7 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
       <label for="tara-dizin">Video klasörü tara (mp4 / mkv / avi)</label>
       <div class="satir">
         <input type="text" id="tara-dizin" placeholder="ör. C:\Videos">
-        <button class="ikincil" onclick="windowsSecim('klasor')">Windows’tan klasör seç</button>
+        <button class="ikincil" data-picker-button onclick="windowsSecim('klasor')">Windows’tan klasör seç</button>
         <button class="ikincil" onclick="klasorTara()">Klasör Tara</button>
       </div>
       <div id="tarama-sonuc" class="tarama"></div>
@@ -673,7 +675,7 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
     </details>
 
     <label for="yollar">Video yolları (her satıra bir tane yapıştır)</label>
-    <button class="ikincil" onclick="windowsSecim('dosya')">Windows’tan videoları seç (çoklu)</button>
+    <button class="ikincil" data-picker-button onclick="windowsSecim('dosya')">Windows’tan videoları seç (çoklu)</button>
     <textarea id="yollar" placeholder="C:\Videos\episode-01.mp4&#10;C:\Videos\episode-02.mp4"></textarea>
 
     <div class="not">Video yollarını satır satır yapıştırın. Klasör seçici isteğe bağlıdır;
@@ -797,6 +799,7 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
 const $ = id => document.getElementById(id);
 let SON_N = 0;
 let IS_ADLARI = {};
+let pickerInFlight = false;
 
 function escapeHtml(s){
   return String(s ?? "").replace(/[&<>"']/g, c =>
@@ -866,6 +869,15 @@ async function kuyrugaEkle(){
 }
 
 async function windowsSecim(tur){
+  if (pickerInFlight) return;
+  pickerInFlight = true;
+  const pickerButtons = [...document.querySelectorAll("[data-picker-button]")];
+  const oldLabels = pickerButtons.map(b => b.textContent);
+  pickerButtons.forEach(b => { b.disabled = true; b.textContent = "Windows seçicisi açılıyor…"; });
+  ekleMesaji("Windows seçicisi hazırlanıyor…", "");
+  let slowHint = setTimeout(() => {
+    ekleMesaji("Windows seçicisi yanıt bekliyor. Pencere başka bir pencerenin arkasında görünüyorsa görev çubuğundan öne alın.", "warn");
+  }, 1800);
   try{
     const j = await api("/api/secim", {tur});
     if (tur === "klasor"){
@@ -882,6 +894,11 @@ async function windowsSecim(tur){
       ekleMesaji(j.yollar.length + " dosya seçildi; eklemeden önce listeyi gözden geçirin.", "ok");
     }
   }catch(e){ ekleMesaji("Dosya/klasör seçimi başarısız: " + e.message, "err"); }
+  finally{
+    clearTimeout(slowHint);
+    pickerButtons.forEach((b, i) => { b.disabled = false; b.textContent = oldLabels[i]; });
+    pickerInFlight = false;
+  }
 }
 
 async function klasorTara(){
@@ -1492,29 +1509,43 @@ def api_secim():
     tur = v.get("tur")
     if tur not in ("dosya", "klasor"):
         return jsonify({"hata": "tur 'dosya' veya 'klasor' olmalı"}), 400
+    if not PICKER_KILIT.acquire(blocking=False):
+        return jsonify({"hata": "Windows seçicisi zaten açık; mevcut pencereyi tamamlayın."}), 409
+    request_started = time.perf_counter()
+    request_started_epoch_ms = int(time.time() * 1000)
+    marker_path = None
     try:
         # Windows UI frameworkleri STA ister; Flask isteği kendi worker thread'inde
         # çalıştığından dosya penceresini ayrı STA PowerShell sürecinde aç.
         env = os.environ.copy()
         env["HARDSUB_PICKER_MODE"] = tur
+        marker_fd, marker_path = tempfile.mkstemp(prefix="hardsub-picker-", suffix=".started")
+        os.close(marker_fd)
+        env["HARDSUB_PICKER_STARTED"] = marker_path
         script = r'''
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Windows.Forms
 $mode = $env:HARDSUB_PICKER_MODE
+$startPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyVideos)
+if (-not $startPath -or -not (Test-Path -LiteralPath $startPath -PathType Container)) { $startPath = $env:USERPROFILE }
 if ($mode -eq 'dosya') {
   $dialog = New-Object System.Windows.Forms.OpenFileDialog
   $dialog.Title = 'Videoları seçin (çoklu seçim açık)'
   $dialog.Filter = 'Video dosyaları (*.mp4;*.mkv;*.avi)|*.mp4;*.mkv;*.avi|Tüm dosyalar (*.*)|*.*'
   $dialog.Multiselect = $true
   $dialog.CheckFileExists = $true
+  $dialog.InitialDirectory = $startPath
   $paths = @()
+  [System.IO.File]::WriteAllText($env:HARDSUB_PICKER_STARTED, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString())
   if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $paths = @($dialog.FileNames) }
   @{ yollar = $paths } | ConvertTo-Json -Compress
 } else {
   $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
   $dialog.Description = 'Video klasörünü seçin'
+  $dialog.SelectedPath = $startPath
   $path = ''
+  [System.IO.File]::WriteAllText($env:HARDSUB_PICKER_STARTED, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString())
   if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $path = $dialog.SelectedPath }
   @{ dizin = $path } | ConvertTo-Json -Compress
 }
@@ -1530,11 +1561,24 @@ if ($mode -eq 'dosya') {
         # EncodedCommand avoids Windows command-line quoting/Unicode parsing of
         # this multi-line script while preserving the separate interactive STA process.
         encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        process_started_epoch_ms = int(time.time() * 1000)
         r = subprocess.run(
             [powershell, "-NoProfile", "-STA", "-EncodedCommand", encoded_script],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            env=env, cwd=str(KLASOR),
+            env=env, cwd=str(KLASOR), timeout=300,
         )
+        dialog_started_ms = None
+        try:
+            dialog_started_ms = int(Path(marker_path).read_text(encoding="ascii").strip())
+        except (OSError, ValueError):
+            pass
+        elapsed_ms = int((time.perf_counter() - request_started) * 1000)
+        spawn_to_dialog_ms = (dialog_started_ms - process_started_epoch_ms
+                              if dialog_started_ms is not None else None)
+        request_to_dialog_ms = (dialog_started_ms - request_started_epoch_ms
+                                if dialog_started_ms is not None else None)
+        app.logger.info("picker timing mode=%s spawn_to_showdialog_ms=%s request_to_showdialog_ms=%s post_total_ms=%d exit=%d",
+                        tur, spawn_to_dialog_ms, request_to_dialog_ms, elapsed_ms, r.returncode)
         if r.returncode != 0:
             raise RuntimeError((r.stderr or r.stdout or "PowerShell seçicisi açılamadı").strip())
         result = json.loads(r.stdout.strip())
@@ -1542,8 +1586,19 @@ if ($mode -eq 'dosya') {
             return jsonify({"yollar": [str(Path(p).resolve()) for p in result.get("yollar", [])]})
         dizin = result.get("dizin") or ""
         return jsonify({"dizin": str(Path(dizin).resolve()) if dizin else ""})
+    except subprocess.TimeoutExpired:
+        app.logger.warning("picker timeout mode=%s total_ms=%d", tur,
+                           int((time.perf_counter() - request_started) * 1000))
+        return jsonify({"hata": "Windows seçicisi 5 dakika içinde tamamlanmadı; işlem kapatıldı. Yeniden deneyin."}), 504
     except Exception as e:
         return jsonify({"hata": f"Windows seçicisi açılamadı: {e}"}), 500
+    finally:
+        if marker_path:
+            try:
+                os.unlink(marker_path)
+            except OSError:
+                pass
+        PICKER_KILIT.release()
 
 
 @app.post("/api/ac")
