@@ -60,6 +60,7 @@ Kontrol paneli + toplu pano (v1.3):
 
 import atexit
 import base64
+import ctypes
 import json
 import os
 import re
@@ -162,14 +163,21 @@ def satir_seviyesi(satir):
     return "bilgi"
 
 
-def is_olustur(yol, sec, is_id=None):
+def is_olustur(yol, sec, is_id=None, enqueue_seq=None):
     global IS_SAYAC
     if is_id is None:
         with KILIT:
             IS_SAYAC += 1
             is_id = f"is-{IS_SAYAC}"
+            enqueue_seq = IS_SAYAC
+    elif enqueue_seq is None:
+        try:
+            enqueue_seq = int(is_id.rsplit("-", 1)[1])
+        except (ValueError, IndexError):
+            enqueue_seq = None
     return {
         "id": is_id,
+        "enqueue_seq": enqueue_seq,
         "yol": str(yol),
         "ad": Path(yol).name,
         "durum": "bekliyor",           # bekliyor|çalışıyor|bitti|hata|iptal
@@ -895,7 +903,7 @@ async function windowsSecim(tur){
       if (["error", "timeout", "cancelled"].includes(state.status))
         throw new Error(state.hata || "Windows seçicisi tamamlanamadı.");
       const statusText = state.status === "opening"
-        ? "Windows seçicisi açık; dosya veya klasör seçin."
+        ? "Windows seçicisi açılıyor; öne gelmezse görev çubuğundan öne alın."
         : "Windows seçicisi hazırlanıyor…";
       ekleMesaji(statusText, "");
     }
@@ -990,13 +998,14 @@ function kuyrukCiz(kuyruk, durum){
   let h = '<table><tr><th>#</th><th>Dosya / mod</th><th>Durum</th><th>İlerleme</th>' +
           '<th>Algılama / uyarılar</th></tr>';
   kuyruk.forEach((i, sira) => {
+    const enqueueSeq = Number.isInteger(i.enqueue_seq) ? i.enqueue_seq : sira + 1;
     const barText = i.durum === "çalışıyor" || i.durum === "bitti"
       ? "%" + i.yuzde + " · " + i.seg_a + "/" + i.seg_b + " seg" +
         (i.kalan_sn !== null && i.durum === "çalışıyor" ? " · ~" + i.kalan_sn + " sn kaldı" : "")
       : "";
     const uyarilar = (i.uyarilar || []).map(u =>
       '<div class="uyari">' + escapeHtml(u) + '</div>').join("");
-    h += '<tr class="' + (i.durum === "çalışıyor" ? "kuyruk-aktif" : "") + '"><td>' + (sira + 1) + "</td>" +
+    h += '<tr class="' + (i.durum === "çalışıyor" ? "kuyruk-aktif" : "") + '"><td>' + enqueueSeq + "</td>" +
       '<td style="max-width:220px;word-break:break-all">' + escapeHtml(i.ad) +
       '<div class="mod-chip ' + (i.sec.cpu ? "mod-cpu" : "mod-gpu") + '">' +
       (i.sec.cpu ? "CPU · --cpu" : "GPU · varsayılan") + "</div>" +
@@ -1388,12 +1397,15 @@ def api_durum():
         bekleyen = sum(1 for i in ISLER if i["durum"] == "bekliyor")
         isler_raw = list(ISLER[-KUYRUK_YANIT:])
         toplam = len(ISLER)
+        if aktif_raw and all(i["id"] != aktif_raw["id"] for i in isler_raw):
+            isler_raw.append(aktif_raw)
+        enqueue_order = {i["id"]: i.get("enqueue_seq", index + 1)
+                         for index, i in enumerate(ISLER)}
+        isler_raw.sort(key=lambda i: enqueue_order[i["id"]])
         log = list(LOG)[-LOG_YANIT:]
         pid = CALISAN.get("pid")
         aktif = is_snapshot(aktif_raw) if aktif_raw else None
         son_isler = [is_snapshot(i) for i in isler_raw]
-    if aktif:
-        son_isler = [aktif] + [i for i in son_isler if i["id"] != aktif["id"]]
     return jsonify({
         "sunucu": {
             "klasor": str(KLASOR),
@@ -1474,7 +1486,7 @@ def api_ekle():
             return jsonify({"hata": f"Kuyruk sınırı {MAX_AKTIF_KUYRUK} iş. Şu an {kuyruk_aktif} aktif/bekleyen, bu istekte {len(yeni)} yeni ve {bos} boş yer var. Önce bekleyen işleri bitirin veya daha küçük grup ekleyin."}), 429
         for p, _key in yeni:
             IS_SAYAC += 1
-            isim = is_olustur(p, sec, f"is-{IS_SAYAC}")
+            isim = is_olustur(p, sec, f"is-{IS_SAYAC}", IS_SAYAC)
             ISLER.append(isim)
             eklendi.append(isim["id"])
     for p, _key in yeni:
@@ -1536,6 +1548,23 @@ def _picker_terminate(process):
             process.wait(timeout=2)
         except (OSError, subprocess.TimeoutExpired):
             app.logger.exception("Windows picker helper could not be reaped")
+
+
+def _foreground_owner_hwnd():
+    """Return the current foreground window as a possible native-dialog owner."""
+    if os.name != "nt":
+        return 0
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
+        user32.GetForegroundWindow.argtypes = []
+        user32.IsWindow.argtypes = [ctypes.c_void_p]
+        user32.IsWindow.restype = ctypes.c_bool
+        handle = user32.GetForegroundWindow()
+        return int(handle) if handle and user32.IsWindow(handle) else 0
+    except (AttributeError, OSError, TypeError, ValueError):
+        app.logger.exception("could not capture foreground window for picker owner")
+        return 0
 
 
 def _picker_finish(job_id, status, result=None, error=None):
@@ -1670,6 +1699,30 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Windows.Forms
 $mode = $env:HARDSUB_PICKER_MODE
+$owner = $null
+$ownerValue = 0L
+if ([long]::TryParse($env:HARDSUB_PICKER_OWNER_HWND, [ref]$ownerValue) -and $ownerValue -gt 0) {
+  try {
+    Add-Type -ReferencedAssemblies ([System.Windows.Forms.Form].Assembly.Location) -TypeDefinition @'
+using System;
+using System.Windows.Forms;
+public sealed class HardsubPickerOwner : IWin32Window {
+  public IntPtr Handle { get; private set; }
+  public HardsubPickerOwner(long handle) { Handle = new IntPtr(handle); }
+}
+'@
+    $owner = [HardsubPickerOwner]::new($ownerValue)
+  } catch {
+    [Console]::Error.WriteLine("Picker owner unavailable; using an unowned dialog: " + $_.Exception.Message)
+  }
+}
+function Show-HardsubDialog($dialog, $owner) {
+  if ($owner) {
+    try { return $dialog.ShowDialog($owner) }
+    catch { [Console]::Error.WriteLine("Owned picker failed; retrying without owner: " + $_.Exception.Message) }
+  }
+  return $dialog.ShowDialog()
+}
 $startPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyVideos)
 if (-not $startPath -or -not (Test-Path -LiteralPath $startPath -PathType Container)) { $startPath = $env:USERPROFILE }
 if ($mode -eq 'dosya') {
@@ -1681,7 +1734,8 @@ if ($mode -eq 'dosya') {
   $dialog.InitialDirectory = $startPath
   $paths = @()
   [System.IO.File]::WriteAllText($env:HARDSUB_PICKER_STARTED, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString())
-  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $paths = @($dialog.FileNames) }
+  $dialogResult = Show-HardsubDialog $dialog $owner
+  if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) { $paths = @($dialog.FileNames) }
   @{ yollar = $paths } | ConvertTo-Json -Compress
 } else {
   $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -1689,13 +1743,15 @@ if ($mode -eq 'dosya') {
   $dialog.SelectedPath = $startPath
   $path = ''
   [System.IO.File]::WriteAllText($env:HARDSUB_PICKER_STARTED, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString())
-  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $path = $dialog.SelectedPath }
+  $dialogResult = Show-HardsubDialog $dialog $owner
+  if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) { $path = $dialog.SelectedPath }
   @{ dizin = $path } | ConvertTo-Json -Compress
 }
 '''
     encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     env = os.environ.copy()
     env["HARDSUB_PICKER_MODE"] = tur
+    env["HARDSUB_PICKER_OWNER_HWND"] = str(_foreground_owner_hwnd())
     request_started_epoch_ms = int(time.time() * 1000)
     marker_fd, marker_path = tempfile.mkstemp(prefix="hardsub-picker-", suffix=".started")
     os.close(marker_fd)
