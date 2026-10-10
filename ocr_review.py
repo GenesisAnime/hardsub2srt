@@ -330,8 +330,9 @@ def _events(info: dict) -> tuple[list[dict], list[str]]:
                     break
                 number += 1
                 if number > MAX_EVENT_RECORDS:
-                    warnings.append("50.000 olay sınırı aşıldı; sonraki kayıtlar okunmadı")
-                    break
+                    raise ReviewError(
+                        "İnceleme günlüğü 50.000 olay sınırını aşıyor; "
+                        "kısmi geçmişten karar veya veri kümesi üretilemez", 413)
                 if len(line) > MAX_EVENT_LINE_BYTES:
                     warnings.append(f"{number}. satır boyut sınırını aştı; dışlandı")
                     while line and not line.endswith(b"\n"):
