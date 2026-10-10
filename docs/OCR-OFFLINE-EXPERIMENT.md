@@ -8,6 +8,30 @@ Phase 2 dışa aktarımı yalnızca geçerli `accepted`/`corrected` kararların�
 
 ## Metadata girdisi
 
+### Boş metadata şablonu oluşturma
+
+İnsan tarafından kabul edilmiş/düzeltilmiş Phase 2 kararlarından sonra, kaynak
+ve bölüm kimliklerini veya hak durumunu hatırlamıyorsanız yalnızca başlangıç
+şablonu üretin:
+
+```powershell
+py -3 ocr_dataset_metadata.py "D:\yerel\review-pack\verified-ocr-dataset-..." `
+  --out "D:\yerel-metadata\dataset-metadata.template.json"
+```
+
+`--out` klasörü önceden var olmalı; hedef JSON daha önce bulunmamalı ve
+doğrulanmış veri kümesinin dışında olmalıdır. Araç Phase 2 manifest şemasını,
+cue ID'lerini, crop hash/decode bütünlüğünü ve üst review-pack'teki etkin insan
+kararlarına bağlantıyı kontrol eder. Bağlantı doğrulanamazsa dosya üretmez.
+Şablon yalnız cue ID'lerini taşır; SRT/kaynak metni ve mutlak yolları içermez.
+
+Üretilen dosyada `source_id`, `episode_id`, lisans tanımı ve hak kanıtı alanları
+boştur; `human_review.status` `pending` kalır. Hiçbir kimlik, lisans veya
+kullanım hakkı tahmin edilmez. Dosya bilerek deney doğrulayıcısının zorunlu
+alanlarını karşılamaz; doldurulup insan tarafından incelenmeden Phase 5
+hazırlığına verilemez. Dosyanın veya kanıt ekinin varlığı hukuki izin kanıtı
+sayılmaz. Bu komut bir kolaylık aracıdır, veri kümesi veya izin onayı değildir.
+
 Her `cue_id` için `source_id`, `episode_id` ve lisans alanı zorunludur. Lisans durumu yalnız `public_domain`, `permissive_license`, `permission_granted` veya `user_owned` değerlerinden biri olabilir. Her kayıtta metadata dosyasına göreli `evidence_path` ve SHA-256 gerekir; dosyanın varlığı ve hash'i kontrol edilir. Ayrıca `human_review` alanı gözden geçiren kişi/tarihle işaretlenebilir. Ancak kanıt dosyasının varlığı veya bu alan **hukuki doğrulama değildir**; sistem raporu daima `rights_verified:false` yazar. İnsan hak incelemesi tamamlanmadan deney çalıştırma kapısı kapalı kalır. Lisans belirsizse durun.
 
 Örnek `dataset-metadata.json`:
