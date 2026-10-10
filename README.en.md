@@ -43,7 +43,7 @@ Each UI job gets a unique folder beneath the selected output directory: `runs/vi
 
 A CLI run such as `-o ...\episode.srt` writes the SRT and at least a `.stats.json` file. A `.hardsub2srt.json` sidecar records tool/version and video-match parameters. Sidecars are not video files, but may contain local video name, size/mtime, and a partial hash; review them before sharing.
 
-This tool transcribes visible text; it does not translate subtitles or evaluate translation quality. `vtt-qa.py` compares output with a time-compatible reference VTT for alignment/CER and timing. `regresyon/gt_gate.py` reruns OCR on externally supplied video and trusted VTT assets; missing or ambiguous inputs are not counted as a pass. See [regression usage](regresyon/README-kisa.md). Videos, VTTs, and anime frames should not be added to the repository.
+The OCR engine extracts visible subtitles; it does not translate them by itself. Optionally, the local UI's `/ocr-inceleme` page can prepare a chat package for selected, visually verified cues. You may send that package to an AI service yourself and import its response. The app does not call GPT/DeepSeek APIs or send these files over the network; sharing with an external AI is a user action. Explicitly approved translations can also be saved to a local project-and-language-scoped memory, and terminology suggestions can be applied to a draft by the user. See [local review and learning workflow](docs/REVIEW-BUNDLE.md). `vtt-qa.py` and `regresyon/gt_gate.py` compare OCR text with time-aligned source-language references; they do not score translation quality. `gt_gate.py` requires externally supplied video and trusted VTT assets; missing or ambiguous inputs are not counted as a pass. See [regression usage](regresyon/README-kisa.md). Videos, VTTs, and anime frames should not be added to the repository.
 
 ## Dependencies and troubleshooting
 
@@ -59,6 +59,9 @@ Processing is local by default. Central telemetry, a VDS API, GitHub Pages OCR, 
 
 - [Local client and architecture roadmap](docs/LOCAL-ARCHITECTURE-ROADMAP.md)
 - [Browser OCR technical plan](docs/BROWSER-OCR-PORT-PLAN.md)
+- [OCR and translation learning-system plan](docs/LEARNING-SYSTEM-PLAN.md)
+- [Phase 0 source-backed baseline](docs/LEARNING-SYSTEM-BASELINE.md)
+- [Local OCR review and learning workflow](docs/REVIEW-BUNDLE.md)
 - [Contribution rules](CONTRIBUTING.md)
 
 ## Files
