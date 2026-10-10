@@ -72,6 +72,7 @@ import threading
 import time
 import tempfile
 import uuid
+from urllib.parse import urlsplit
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -109,6 +110,13 @@ except Exception as _translation_review_hatasi:
     print(f"[ui] UYARI: translation_review.py yuklenemedi — AI çeviri round-trip kapali: "
           f"{_translation_review_hatasi!r}")
 
+try:
+    import translation_memory
+except Exception as _translation_memory_hatasi:
+    translation_memory = None
+    print(f"[ui] UYARI: translation_memory.py yuklenemedi — kapsamlı çeviri belleği kapalı: "
+          f"{_translation_memory_hatasi!r}")
+
 # otomatik öğrenme (Kaydet = öğren): sınıflandırıcı ogren.py'de tek kaynaktır;
 # yüklenemezse kayıt çalışmaya devam eder, yalnız öğrenme atlanır
 sys.path.insert(0, str(KLASOR))
@@ -120,6 +128,43 @@ except Exception as _ogren_hatasi:
           f"{_ogren_hatasi!r}")
 
 app = Flask(__name__)
+
+
+def _memory_request_error():
+    """Reject DNS-rebinding Host headers and cross-origin browser mutations."""
+    allowed_hosts = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+    raw_host = request.environ.get("HTTP_HOST", "")
+    host = raw_host.lower()
+    if raw_host != raw_host.strip() or any(ch.isspace() for ch in raw_host) or host not in allowed_hosts:
+        return jsonify({"hata": "Yerel çeviri belleği yalnız localhost veya 127.0.0.1 üzerinden kullanılabilir"}), 403
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = request.headers.get("Origin")
+        if not origin:
+            referer = request.headers.get("Referer", "")
+            if referer:
+                try:
+                    parsed_referer = urlsplit(referer)
+                    origin = f"{parsed_referer.scheme}://{parsed_referer.netloc}"
+                except ValueError:
+                    origin = ""
+        try:
+            parsed = urlsplit(origin or "")
+            valid_origin = (parsed.scheme.lower() == "http" and parsed.netloc.lower() == host and
+                            parsed.hostname is not None and parsed.hostname.lower() in {"localhost", "127.0.0.1"} and
+                            parsed.port == PORT and parsed.username is None and parsed.password is None and
+                            parsed.path in ("", "/") and not parsed.query and not parsed.fragment)
+        except ValueError:
+            valid_origin = False
+        if not valid_origin:
+            return jsonify({"hata": "Bellek değişikliği için aynı localhost kaynağından gelen istek gerekli"}), 403
+    return None
+
+
+@app.before_request
+def _guard_local_translation_memory():
+    if request.path.startswith("/api/ceviri-bellegi/"):
+        return _memory_request_error()
+    return None
 
 # ---------------------------------------------------------------- durum ----
 KILIT = threading.Lock()
@@ -1600,6 +1645,86 @@ def api_ai_ceviri_karar():
                         "translation_memory_sync": record.get("translation_memory_sync")})
     except Exception as exc:
         return _translation_error(exc)
+
+
+def _translation_memory_error(exc):
+    if translation_memory is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("Scoped translation memory request failed")
+    return jsonify({"hata": "Yerel çeviri belleği işlemi tamamlanamadı"}), 500
+
+
+@app.get("/api/ceviri-bellegi/durum")
+def api_ceviri_bellegi_durum():
+    if translation_memory is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    try:
+        result = translation_memory.status(request.args.get("project_key", ""),
+                    request.args.get("source_language", ""), request.args.get("target_language", ""))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
+
+
+@app.post("/api/ceviri-bellegi/ara")
+def api_ceviri_bellegi_ara():
+    if translation_memory is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_memory.suggest(v.get("review_id", ""), v.get("cue_id", ""),
+                    v.get("project_key", ""), v.get("source_language", ""),
+                    v.get("target_language", ""), v.get("source_text", ""), v.get("draft_translation", ""))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
+
+
+@app.post("/api/ceviri-bellegi/onaylilari-ekle")
+def api_ceviri_bellegi_onaylilari_ekle():
+    if translation_memory is None or translation_review is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_memory.add_approved(v.get("review_id", ""), v.get("project_key", ""),
+                    v.get("source_language", ""), v.get("target_language", ""), v.get("decision_event_ids"))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
+
+
+@app.post("/api/ceviri-bellegi/terim")
+def api_ceviri_bellegi_terim():
+    if translation_memory is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_memory.add_lexicon(v.get("project_key", ""), v.get("source_language", ""),
+                    v.get("target_language", ""), v.get("source_term", ""), v.get("target_term", ""))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
+
+
+@app.post("/api/ceviri-bellegi/geri-al")
+def api_ceviri_bellegi_geri_al():
+    if translation_memory is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_memory.rollback(v.get("project_key", ""), v.get("source_language", ""),
+                    v.get("target_language", ""), v.get("event_id", ""))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
 
 
 @app.get("/api/durum")
