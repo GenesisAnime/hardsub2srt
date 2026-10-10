@@ -102,6 +102,13 @@ except Exception as _ocr_review_hatasi:
     print(f"[ui] UYARI: ocr_review.py yuklenemedi — OCR inceleme kapali: "
           f"{_ocr_review_hatasi!r}")
 
+try:
+    import translation_review
+except Exception as _translation_review_hatasi:
+    translation_review = None
+    print(f"[ui] UYARI: translation_review.py yuklenemedi — AI çeviri round-trip kapali: "
+          f"{_translation_review_hatasi!r}")
+
 # otomatik öğrenme (Kaydet = öğren): sınıflandırıcı ogren.py'de tek kaynaktır;
 # yüklenemezse kayıt çalışmaya devam eder, yalnız öğrenme atlanır
 sys.path.insert(0, str(KLASOR))
@@ -1503,6 +1510,96 @@ def api_ocr_inceleme_disari_aktar():
         return jsonify({"ok": True, "path": path.name, "count": count})
     except Exception as exc:
         return _ocr_hata(exc)
+
+
+def _translation_error(exc):
+    if translation_review is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("AI translation round-trip request failed")
+    return jsonify({"hata": "AI inceleme işlemi tamamlanamadı; günlükte ayrıntı var"}), 500
+
+
+@app.post("/api/ai-ceviri/istek")
+def api_ai_ceviri_istek():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_review.create_request(
+            v.get("review_id", ""), v.get("drafts"),
+            v.get("source_language"), v.get("target_language"))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.get("/api/ai-ceviri/durum")
+def api_ai_ceviri_durum():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    try:
+        result = translation_review.proposal_status(request.args.get("review_id", ""))
+        result["review_id"] = request.args.get("review_id", "")
+        try:
+            result["translation_memory_sync"] = translation_review.sync_translation_memory(
+                request.args.get("review_id", ""))
+        except Exception as exc:
+            result["translation_memory_sync"] = {
+                "status": "pending",
+                "message": "Onay kararları kaydedildi; çeviri belleği görünümü henüz onarılamadı.",
+                "error_type": type(exc).__name__,
+            }
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.post("/api/ai-ceviri/bellek-yenile")
+def api_ai_ceviri_bellek_yenile():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        return jsonify(translation_review.sync_translation_memory(v.get("review_id", "")))
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.post("/api/ai-ceviri/yanit")
+def api_ai_ceviri_yanit():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    if request.content_length and request.content_length > translation_review.MAX_RESPONSE_BYTES + 4096:
+        return jsonify({"hata": "AI yanıtı 4 MiB sınırını aşıyor"}), 413
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_review.import_response(v.get("review_id", ""), v.get("response"))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.post("/api/ai-ceviri/karar")
+def api_ai_ceviri_karar():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        record = translation_review.decide(
+            v.get("review_id", ""), v.get("proposal_id", ""),
+            v.get("decision", ""), v.get("translation"))
+        return jsonify({"ok": True, "event_id": record["event_id"],
+                        "translation_memory_sync": record.get("translation_memory_sync")})
+    except Exception as exc:
+        return _translation_error(exc)
 
 
 @app.get("/api/durum")
