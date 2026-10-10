@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 ui_server.py — hardsub2srt için yerel web arayüzü (tek dosya, Flask).
 
@@ -16,12 +16,9 @@ Kullanım:
     stderr stdout'a birleştirilerek okunur.
 
 Kuyruk işi başına çıktı:
-    <çıktı_klasörü>/<öneki><video-adı>.srt
-    <çıktı_klasörü>/<öneki><video-adı>.stats.json   (aracın kendi çıktısı)
-    <çıktı_klasörü>/qa/<öneki><video-adı>/qa_XXX_fN.png  (iş başına ayrı klasör;
-        mevcut qa/ içeriği ezilmez, montaj adları stem'siz olduğu için şart)
-    <çıktı_klasörü>/<öneki><video-adı>.srt.vtt-rapor.json  (videonun dizininde
-        <ad>.tr.vtt / <ad>.en.vtt varsa vtt-qa.py otomatik koşar)
+    <çıktı_klasörü>/runs/<video-adı>/<tarih-saat>_<iş-id>/
+    bu klasörün içinde SRT, stats, blok dökümü, öğrenme günlüğü, ASS ve VTT raporu
+    qa/ altında ise QA montajları. Her kuyruk işi kendi yeni klasörünü alır.
 
 Blok editörü (v1.1):
   - Sonuç kartındaki "İncele" → GET /api/bloklar?is=<id> (SRT blokları JSON)
@@ -84,6 +81,8 @@ VIDEO_UZANTILARI = {".mp4", ".mkv", ".avi"}
 LOG_LIMIT = 400            # bellekte tutulan toplam satır
 LOG_YANIT = 200            # /api/durum yanıtında dönen satır
 KUYRUK_YANIT = 100         # /api/durum yanıtında dönen iş sayısı
+MAX_BATCH = 100            # tek ekle isteğinin üst sınırı
+MAX_AKTIF_KUYRUK = 2000    # çalışan + bekleyen işlerin üst sınırı
 
 try:
     from flask import Flask, Response, jsonify, request, send_from_directory
@@ -154,11 +153,12 @@ def satir_seviyesi(satir):
     return "bilgi"
 
 
-def is_olustur(yol, sec):
+def is_olustur(yol, sec, is_id=None):
     global IS_SAYAC
-    with KILIT:
-        IS_SAYAC += 1
-        is_id = f"is-{IS_SAYAC}"
+    if is_id is None:
+        with KILIT:
+            IS_SAYAC += 1
+            is_id = f"is-{IS_SAYAC}"
     return {
         "id": is_id,
         "yol": str(yol),
@@ -175,6 +175,8 @@ def is_olustur(yol, sec):
         "dusuk_a": None,
         "dusuk_b": None,
         "srt": None,
+        "run_dir": None,
+        "qa_root": None,
         "ass": None,
         "stats": None,
         "qa_dosyalari": [],
@@ -224,14 +226,20 @@ def isci():
 def is_yurut(isim):
     sec = isim["sec"]
     video = Path(isim["yol"])
-    cikti_k = Path(sec["cikti_klasor"])
+    cikti_k = Path(sec["cikti_klasor"]).expanduser().resolve()
     cikti_k.mkdir(parents=True, exist_ok=True)
+    run_dir = _run_klasoru(cikti_k, video, isim["id"])
     onek = sec.get("onek") or ""
-    srt = cikti_k / f"{onek}{video.stem}.srt"
-    qa_kok = cikti_k / "qa"
-    qa_dir = qa_kok / f"{onek}{video.stem}"
+    srt = run_dir / f"{onek}{video.stem}.srt"
+    qa_dir = run_dir / "qa"
+    with KILIT:
+        isim["run_dir"] = str(run_dir)
+        isim["qa_root"] = str(qa_dir)
+        isim["srt"] = str(srt)
 
     cmd = [sys.executable, "-u", str(ARAC), str(video), "-o", str(srt)]
+    if sec.get("cpu", False):
+        cmd.append("--cpu")
     if sec.get("ust_bant"):
         cmd.append("--ust-bant")
     if sec.get("dil"):
@@ -349,7 +357,7 @@ def is_yurut(isim):
         if qa_dir.is_dir():
             for f in qa_dir.rglob("*.png"):
                 if f.stat().st_mtime >= sinir:
-                    dosyalar.append(f.relative_to(qa_kok).as_posix())
+                    dosyalar.append(f.relative_to(qa_dir).as_posix())
         isim["qa_dosyalari"] = sorted(dosyalar)
     except Exception as e:
         log_ekle("uyari", f"qa listesi okunamadı: {e!r}", isim["id"])
@@ -384,6 +392,24 @@ def is_yurut(isim):
                 isim["uyarilar"].append(f"ASS üretilemedi (rc={r.returncode})")
         except Exception as e:
             isim["uyarilar"].append(f"ASS üretim istisnası: {e!r}")
+
+
+def _run_klasoru(cikti_k, video, is_id):
+    """Her UI işi için önceki çıktılara dokunmayan yeni bir klasör açar."""
+    kok = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", video.stem).rstrip(" .")
+    kok = (kok[:80] or "video")
+    # "video-" öneki Windows'un CON/PRN/NUL gibi aygıt adlarını önler.
+    grup = cikti_k / "runs" / ("video-" + kok)
+    zaman = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    for deneme in range(1000):
+        ek = "" if deneme == 0 else f"_{deneme}"
+        hedef = grup / f"{zaman}_{is_id}{ek}"
+        try:
+            hedef.mkdir(parents=True, exist_ok=False)
+            return hedef
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"benzersiz koşu klasörü açılamadı: {grup}")
 
 
 def vtt_bul(video, onek=""):
@@ -471,8 +497,24 @@ header .klasor{color:var(--soluk);font-size:12px;max-width:44%;
 #baglanti{margin-left:auto;font-size:12px;color:var(--soluk)}
 #baglanti.ok{color:var(--yesil)} #baglanti.kopuk{color:var(--kirmizi)}
 main{padding:14px 18px 40px;display:grid;gap:14px;
-  grid-template-columns:minmax(340px,460px) 1fr}
-@media (max-width:960px){main{grid-template-columns:1fr}}
+  grid-template-columns:minmax(0,min(440px,38vw)) minmax(0,1fr)}
+@media (max-width:960px){main{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:600px){
+  header{gap:8px;padding:10px 12px;flex-wrap:wrap}
+  header h1{font-size:15px}
+  header .klasor{order:4;flex-basis:100%;max-width:100%}
+  #baglanti{margin-left:auto}
+  main{padding:10px 10px 28px;gap:10px}
+  .kart{padding:12px}
+  .secenekler{grid-template-columns:minmax(0,1fr)}
+  .device-choices{grid-template-columns:minmax(0,1fr)}
+  .satir{align-items:stretch;flex-wrap:wrap}
+  .satir>*{min-width:0}
+  .satir button{flex:1 0 100%}
+  #kuyruk-alan table{min-width:700px}
+  #log{height:34vh;min-height:150px}
+  .editor-panel{width:96vw;max-height:92vh;padding:10px}
+}
 .kart{background:var(--panel);border:1px solid var(--cizgi);
   border-radius:10px;padding:14px}
 .kart h2{font-size:14px;margin:0 0 10px;color:var(--mavi);
@@ -493,6 +535,31 @@ button:disabled{opacity:.45;cursor:not-allowed}
 button:hover:not(:disabled){filter:brightness(1.12)}
 .not{font-size:12px;color:var(--soluk);border-left:3px solid var(--sari);
   padding:6px 10px;background:#20242f;border-radius:0 6px 6px 0;margin:10px 0}
+details>summary{cursor:pointer;color:var(--metin);font-size:13px;font-weight:600}
+.katla{border-top:1px solid var(--cizgi);margin-top:12px;padding-top:10px}
+.device-box{border:1px solid var(--cizgi);border-radius:8px;padding:10px 12px;margin:10px 0;background:#171b24}
+.device-title{font-size:12px;color:var(--soluk);margin-bottom:7px}
+.device-choices{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.device-choice{display:flex;align-items:flex-start;gap:8px;padding:9px 10px;border:1px solid var(--cizgi);border-radius:7px;background:#10131a;cursor:pointer}
+.device-choice input{width:auto;margin:3px 0 0;accent-color:var(--mavi)}
+.device-choice b{display:block;color:var(--metin);font-size:13px}
+.device-choice small{display:block;color:var(--soluk);font-size:11px;font-weight:400}
+.form-msg{min-height:18px;margin-top:8px;font-size:12px;color:var(--soluk)}
+.form-msg.ok{color:var(--yesil)} .form-msg.warn{color:var(--sari)} .form-msg.err{color:var(--kirmizi)}
+.bolum-baslik{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.bolum-baslik h2{margin:0}
+#kuyruk-alan{overflow-x:auto}
+#kuyruk-alan table{min-width:760px}
+tr.kuyruk-aktif{background:#1a2840}
+.mod-chip{display:inline-block;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-top:4px}
+.mod-gpu{background:#1b355d;color:#a9c9ff}.mod-cpu{background:#423017;color:#ffd18a}
+.empty-state{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px dashed var(--cizgi);border-radius:8px;padding:12px}
+.empty-state strong{color:var(--metin)}
+.empty-state span{color:var(--soluk);font-size:12px;flex:1}
+.log-summary{padding:2px 0 8px;list-style:none}
+.log-summary::-webkit-details-marker{display:none}
+.log-summary:after{content:"▾";float:right;color:var(--soluk)}
+#log-details:not([open]) .log-summary:after{content:"▸"}
 .secenekler{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px}
 .chk{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--metin);
   margin:8px 0 0}
@@ -591,66 +658,89 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
   <section class="kart">
     <h2>Video ekleme</h2>
 
-    <label for="tara-dizin">Klasör tara (mp4 / mkv / avi)</label>
-    <div class="satir">
-      <input type="text" id="tara-dizin" placeholder="ör. C:\Videolarim">
-      <button class="ikincil" onclick="klasorTara()" style="flex:0 0 auto">Klasör Tara</button>
-    </div>
-    <div id="tarama-sonuc" class="tarama"></div>
-    <button class="ikincil" id="tarama-ekle" style="display:none;margin-top:8px"
-            onclick="secilenleriEkle()">Seçilenleri yol listesine ekle</button>
+    <details class="katla">
+      <summary>Klasörden video seç</summary>
+      <label for="tara-dizin">Video klasörü tara (mp4 / mkv / avi)</label>
+      <div class="satir">
+        <input type="text" id="tara-dizin" placeholder="ör. C:\Videos">
+        <button class="ikincil" onclick="windowsSecim('klasor')">Windows’tan klasör seç</button>
+        <button class="ikincil" onclick="klasorTara()">Klasör Tara</button>
+      </div>
+      <div id="tarama-sonuc" class="tarama"></div>
+      <button class="ikincil" id="tarama-ekle" style="display:none;margin-top:8px"
+              onclick="secilenleriEkle()">Seçilenleri yol listesine ekle</button>
+    </details>
 
     <label for="yollar">Video yolları (her satıra bir tane yapıştır)</label>
-    <textarea id="yollar" placeholder="C:\Videolarim\1. Bolum.mp4&#10;C:\Videolarim\2. Bolum.mp4"></textarea>
+    <button class="ikincil" onclick="windowsSecim('dosya')">Windows’tan videoları seç (çoklu)</button>
+    <textarea id="yollar" placeholder="C:\Videos\episode-01.mp4&#10;C:\Videos\episode-02.mp4"></textarea>
 
-    <div class="not">Sürükle-bırak yerine: bat'ler duruyor. Tarayıcılar güvenlik
-    nedeniyle dosyanın tam yolunu JavaScript'e vermez (yalnız dosya içeriğini
-    verir), bu yüzden burada yol yapıştırma + klasör tarama kullanılır.
-    Klasik yöntem (bat'lere çift tık) aynen çalışmaya devam eder.</div>
+    <div class="not">Video yollarını satır satır yapıştırın. Klasör seçici isteğe bağlıdır;
+    klasik .bat başlatıcıları da kullanılabilir.</div>
 
-    <h2 style="margin-top:14px">Seçenekler</h2>
-    <div class="secenekler">
-      <label class="chk"><input type="checkbox" id="opt-ust"> Üst yazılar da çıkarılsın (--ust-bant)</label>
-      <label class="chk"><input type="checkbox" id="opt-ass"> ASS üret (srt2ass)</label>
-      <div>
-        <label for="opt-dil">Dil (--lang)</label>
-        <input type="text" id="opt-dil" value="tr,en">
+    <fieldset class="device-box">
+      <legend class="device-title">OCR modu</legend>
+      <div class="device-choices">
+        <label class="device-choice"><input type="radio" name="ocr-mod" id="opt-gpu" checked>
+          <span><b>GPU · varsayılan</b><small>Uygun CUDA varsa GPU kullanılır.</small></span>
+        </label>
+        <label class="device-choice"><input type="radio" name="ocr-mod" id="opt-cpu">
+          <span><b>CPU · açık seçim</b><small>Seçilirse araca --cpu gönderilir; daha yavaş olabilir.</small></span>
+        </label>
       </div>
-      <div>
-        <label for="opt-qa">QA montaj sayısı</label>
-        <input type="number" id="opt-qa" value="4" min="0" max="12">
-      </div>
-      <div>
-        <label for="opt-limit">Test modu — ilk N sn (0 = tüm video)</label>
-        <input type="number" id="opt-limit" value="0" min="0" step="30">
-      </div>
-      <div>
-        <label for="opt-onek">Çıktı öneki (opsiyonel, ör. _ui-)</label>
-        <input type="text" id="opt-onek" value="">
-      </div>
-      <div style="grid-column:1/-1">
-        <label for="opt-cikti">Çıktı klasörü</label>
-        <input type="text" id="opt-cikti" placeholder="sunucu klasörü">
-      </div>
-    </div>
+    </fieldset>
 
-    <button style="margin-top:12px;width:100%" onclick="kuyrugaEkle()"
-            id="ekle-btn">Kuyruğa Ekle</button>
+    <details class="katla">
+      <summary>Gelişmiş ayarlar</summary>
+      <div class="secenekler">
+        <label class="chk"><input type="checkbox" id="opt-ust"> Üst yazıları da çıkar (--ust-bant)</label>
+        <label class="chk"><input type="checkbox" id="opt-ass"> ASS üret (srt2ass)</label>
+        <div>
+          <label for="opt-dil">Dil (--lang)</label>
+          <input type="text" id="opt-dil" value="tr,en">
+        </div>
+        <div>
+          <label for="opt-qa">QA montaj sayısı</label>
+          <input type="number" id="opt-qa" value="4" min="0" max="12">
+        </div>
+        <div>
+          <label for="opt-limit">Test modu — ilk N sn (0 = tüm video)</label>
+          <input type="number" id="opt-limit" value="0" min="0" step="30">
+        </div>
+        <div>
+          <label for="opt-onek">Çıktı öneki (opsiyonel, ör. _ui-)</label>
+          <input type="text" id="opt-onek" value="">
+        </div>
+        <div style="grid-column:1/-1">
+          <label for="opt-cikti">Çıktı klasörü</label>
+          <input type="text" id="opt-cikti" placeholder="sunucu klasörü">
+        </div>
+      </div>
+    </details>
+
+    <div id="ekle-mesaj" class="form-msg" role="status" aria-live="polite"></div>
+    <button style="margin-top:4px;width:100%" onclick="kuyrugaEkle()"
+            id="ekle-btn">Videoları kuyruğa ekle</button>
   </section>
 
   <section class="kart">
-    <h2>Kuyruk (sıralı çalışır — bir iş bitmeden diğeri başlamaz)</h2>
-    <div id="kuyruk-alan"><div class="bos">Kuyruk boş. Soldan video ekleyin.</div></div>
+    <div class="bolum-baslik">
+      <h2>Kuyruk</h2>
+      <span id="kuyruk-ozet" class="kucuk" aria-live="polite">0 iş</span>
+    </div>
+    <div id="kuyruk-alan"><div class="empty-state"><strong>Kuyruk boş</strong><span>Video yollarını ekleyince işler sırayla burada görünür.</span></div></div>
   </section>
 
   <section class="kart" style="grid-column:1/-1">
     <h2>Sonuçlar</h2>
-    <div id="sonuc-alan"><div class="bos">Henüz biten iş yok.</div></div>
+    <div id="sonuc-alan"><div class="empty-state"><strong>Henüz sonuç yok</strong><span>Tamamlanan ve hata alan işler burada görünür.</span></div></div>
   </section>
 
   <section class="kart" style="grid-column:1/-1">
-    <h2>Canlı log (son 200 satır)</h2>
-    <div id="log"></div>
+    <details id="log-details" open>
+      <summary class="log-summary">Canlı log <span class="kucuk">son 200 satır · daraltılabilir</span></summary>
+      <div id="log"></div>
+    </details>
   </section>
 
   <section class="kart" id="pano-kart" style="grid-column:1/-1;display:none">
@@ -732,24 +822,65 @@ function seceneklerOku(){
     cikti_klasor: $("opt-cikti").value.trim(),
     limit_saniye: parseFloat($("opt-limit").value || "0") || 0,
     onek: $("opt-onek").value.trim(),
+    cpu: $("opt-cpu").checked,
   };
+}
+
+function ekleMesaji(metin, tur=""){
+  const el = $("ekle-mesaj");
+  el.textContent = metin;
+  el.className = "form-msg" + (tur ? " " + tur : "");
 }
 
 async function kuyrugaEkle(){
   const yollar = $("yollar").value.split(/\r?\n/)
     .map(s => s.trim().replace(/^"|"$/g, "")).filter(Boolean);
-  if (!yollar.length){ alert("Önce video yolu yapıştırın (satır başına bir tane)."); return; }
-  const btn = $("ekle-btn"); btn.disabled = true;
+  if (!yollar.length){
+    ekleMesaji("Önce video yolu ekleyin (satır başına bir tane).", "warn");
+    $("yollar").focus();
+    return;
+  }
+  const btn = $("ekle-btn"); btn.disabled = true; btn.textContent = "Ekleniyor…";
   try{
-    const j = await api("/api/ekle", Object.assign({yollar}, seceneklerOku()));
-    let m = j.eklendi.length + " video kuyruğa eklendi.";
-    if (j.yinelenen.length) m += "\nZaten kuyrukta: " + j.yinelenen.join(", ");
-    if (j.hatali.length) m += "\nGeçersiz: " + j.hatali.map(h => h.yol + " (" + h.neden + ")").join(", ");
-    alert(m);
-    if (j.eklendi.length) $("yollar").value = "";
+    const sec = seceneklerOku(), eklendi = [], hatali = [], yinelenen = [];
+    let gonderilmeyen = [], hata = "";
+    for (let bas = 0; bas < yollar.length; bas += 100){
+      const parca = yollar.slice(bas, bas + 100);
+      try{
+        const j = await api("/api/ekle", Object.assign({yollar:parca}, sec));
+        eklendi.push(...j.eklendi); hatali.push(...j.hatali); yinelenen.push(...j.yinelenen);
+      }catch(e){ hata = e.message; gonderilmeyen = yollar.slice(bas); break; }
+    }
+    const kalan = hatali.map(h => h.yol).concat(gonderilmeyen);
+    $("yollar").value = kalan.join("\n");
+    let m = eklendi.length + " video kuyruğa eklendi.";
+    if (yinelenen.length) m += " Zaten kuyrukta: " + yinelenen.length;
+    if (hatali.length) m += " Geçersiz: " + hatali.slice(0, 5).map(h => h.yol + " (" + h.neden + ")").join(", ") +
+      (hatali.length > 5 ? " … (" + hatali.length + " toplam; yollar kutuda bırakıldı)." : " (yollar kutuda bırakıldı)." );
+    if (gonderilmeyen.length) m += " Kuyruğa girmeyen " + gonderilmeyen.length + " video kaldı: " + hata;
+    ekleMesaji(m, hatali.length || gonderilmeyen.length ? "warn" : "ok");
     poll();
-  }catch(e){ alert("Ekleme hatası: " + e.message); }
-  btn.disabled = false;
+  }catch(e){ ekleMesaji("Ekleme hatası: " + e.message, "err"); }
+  finally{ btn.disabled = false; btn.textContent = "Videoları kuyruğa ekle"; }
+}
+
+async function windowsSecim(tur){
+  try{
+    const j = await api("/api/secim", {tur});
+    if (tur === "klasor"){
+      if (!j.dizin) return;
+      $("tara-dizin").value = j.dizin;
+      await klasorTara();
+    }else if (j.yollar && j.yollar.length){
+      const mevcut = $("yollar").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const anahtar = new Set(mevcut.map(s => s.toLocaleLowerCase()));
+      for (const yol of j.yollar){
+        if (!anahtar.has(yol.toLocaleLowerCase())) { mevcut.push(yol); anahtar.add(yol.toLocaleLowerCase()); }
+      }
+      $("yollar").value = mevcut.join("\n");
+      ekleMesaji(j.yollar.length + " dosya seçildi; eklemeden önce listeyi gözden geçirin.", "ok");
+    }
+  }catch(e){ ekleMesaji("Dosya/klasör seçimi başarısız: " + e.message, "err"); }
 }
 
 async function klasorTara(){
@@ -799,15 +930,22 @@ function durumEtiketi(d){
           hata:"hata", iptal:"iptal"}[d] || d;
 }
 
-function kuyrukCiz(kuyruk){
+function kuyrukCiz(kuyruk, durum){
   IS_ADLARI = {};
   kuyruk.forEach(i => IS_ADLARI[i.id] = i.ad);
   const alan = $("kuyruk-alan");
+  const aktif = durum.aktif ? 1 : 0;
+  const bekleyen = durum.isler_bekleyen;
+  $("kuyruk-ozet").textContent = (aktif ? "1 çalışıyor · " : "") + bekleyen + " bekliyor";
+  $("kuyruk-ozet").textContent += " · gösterilen " + durum.kuyruk_gosterilen +
+    " / toplam kayıt " + durum.is_kaydi_toplam;
   if (!kuyruk.length){
-    alan.innerHTML = '<div class="bos">Kuyruk boş. Soldan video ekleyin.</div>';
+    alan.innerHTML = '<div class="empty-state"><strong>Kuyruk boş</strong>' +
+      '<span>Video yollarını ekleyince işler sırayla burada görünür.</span>' +
+      '<button class="ikincil" onclick="$(\'yollar\').focus()">Video ekle</button></div>';
     return;
   }
-  let h = '<table><tr><th>#</th><th>Dosya</th><th>Durum</th><th>İlerleme</th>' +
+  let h = '<table><tr><th>#</th><th>Dosya / mod</th><th>Durum</th><th>İlerleme</th>' +
           '<th>Algılama / uyarılar</th></tr>';
   kuyruk.forEach((i, sira) => {
     const barText = i.durum === "çalışıyor" || i.durum === "bitti"
@@ -816,8 +954,10 @@ function kuyrukCiz(kuyruk){
       : "";
     const uyarilar = (i.uyarilar || []).map(u =>
       '<div class="uyari">' + escapeHtml(u) + '</div>').join("");
-    h += "<tr><td>" + (sira + 1) + "</td>" +
+    h += '<tr class="' + (i.durum === "çalışıyor" ? "kuyruk-aktif" : "") + '"><td>' + (sira + 1) + "</td>" +
       '<td style="max-width:220px;word-break:break-all">' + escapeHtml(i.ad) +
+      '<div class="mod-chip ' + (i.sec.cpu ? "mod-cpu" : "mod-gpu") + '">' +
+      (i.sec.cpu ? "CPU · --cpu" : "GPU · varsayılan") + "</div>" +
       (i.sec.limit_saniye > 0 ? ' <span class="kucuk">(ilk ' + i.sec.limit_saniye + ' sn)</span>' : "") +
       (i.sec.onek ? ' <span class="kucuk">[' + escapeHtml(i.sec.onek) + ']</span>' : "") +
       "</td>" +
@@ -861,7 +1001,8 @@ function sonucCiz(kuyruk){
   const hatalilar = kuyruk.filter(i => i.durum === "hata" || i.durum === "iptal")
                           .slice(-3).reverse();
   if (!bittiler.length && !hatalilar.length){
-    alan.innerHTML = '<div class="bos">Henüz biten iş yok.</div>';
+    alan.innerHTML = '<div class="empty-state"><strong>Henüz sonuç yok</strong>' +
+      '<span>Tamamlanan ve hata alan işler burada görünür.</span></div>';
     return;
   }
   let h = "";
@@ -870,6 +1011,8 @@ function sonucCiz(kuyruk){
     const cip = (etiket, deger) => deger === undefined || deger === null ? "" :
       '<span class="cip">' + etiket + ' <b>' + deger + "</b></span>";
     h += '<div class="sonuc"><div class="baslik"><span class="durum d-bitti">bitti</span>' +
+      '<span class="mod-chip ' + (i.sec.cpu ? "mod-cpu" : "mod-gpu") + '">' +
+      (i.sec.cpu ? "CPU · --cpu" : "GPU · varsayılan") + "</span>" +
       "<b>" + escapeHtml(i.ad) + "</b>" +
       (i.sure_sn !== null ? '<span class="kucuk">' + i.sure_sn + " sn</span>" : "") +
       (st.low_conf > 0 ? '<button style="margin-left:auto;padding:4px 10px" ' +
@@ -910,6 +1053,10 @@ function sonucCiz(kuyruk){
 function logCiz(log){
   const kutu = $("log");
   const sondayiz = kutu.scrollTop + kutu.clientHeight >= kutu.scrollHeight - 70;
+  if (!log.length){
+    kutu.innerHTML = '<div class="bos">Bir iş başlayınca canlı çıktı burada görünür.</div>';
+    return;
+  }
   kutu.innerHTML = log.map(l =>
     '<div class="lg"><span class="lg-t">' + l.t + '</span>' +
     (l.is && IS_ADLARI[l.is] ? '<span class="lg-is">[' + escapeHtml(IS_ADLARI[l.is]) + ']</span>' : "") +
@@ -1109,18 +1256,26 @@ function panoCiz(j){
                              : '<span class="kucuk">—</span>') + "</td>" +
       "<td>" + escapeHtml(s.tarih || "—") + "</td>" +
       "<td>" + (s.bloklar_var
-        ? '<a href="#" onclick="inceleAc(' + JSON.stringify(s.ad)
-          .replace(/"/g, "&quot;") + ');return false">İncele</a>' : "") +
+        ? '<a href="#" class="pano-incele" data-stats="' +
+          escapeHtml(s.stats_rel) + '" data-ad="' + escapeHtml(s.ad) +
+          '">İncele</a>' : "") +
       "</td></tr>";
   });
-  $("pano-alan").innerHTML = h + "</table>" +
+  const pano = $("pano-alan");
+  pano.innerHTML = h + "</table>" +
     '<div class="kucuk" style="margin-top:6px">low-conf% > %' +
     j.esik + " olanlar üstte ve kırmızı işaretlidir.</div>";
+  pano.querySelectorAll("a.pano-incele").forEach(link => {
+    link.addEventListener("click", ev => {
+      ev.preventDefault();
+      inceleAc(link.dataset.stats, link.dataset.ad);
+    });
+  });
 }
 
-async function inceleAc(ad){
+async function inceleAc(statsRel, ad){
   try{
-    const j = await api("/api/pano/incele?ad=" + encodeURIComponent(ad) +
+    const j = await api("/api/pano/incele?stats=" + encodeURIComponent(statsRel) +
                         "&klasor=" + encodeURIComponent(PANO_KLASOR));
     $("incele-ad").textContent = ad + " · " + j.bloklar.length + " blok";
     $("incele-durum").textContent = "eşik conf<" + (j.conf_thr ?? 0.75) +
@@ -1162,7 +1317,7 @@ async function poll(){
       $("tara-dizin").value = j.sunucu.klasor;
     $("sunucu-klasor").textContent = j.sunucu ? j.sunucu.klasor : "";
     $("iptal-btn").disabled = !j.pid;
-    kuyrukCiz(j.kuyruk);
+    kuyrukCiz(j.kuyruk, j);
     sonucCiz(j.kuyruk);
     logCiz(j.log);
   }catch(e){
@@ -1187,9 +1342,16 @@ def kok():
 @app.get("/api/durum")
 def api_durum():
     with KILIT:
-        isler = [is_snapshot(i) for i in ISLER[-KUYRUK_YANIT:]]
+        aktif_raw = next((i for i in ISLER if i["durum"] == "çalışıyor"), None)
+        bekleyen = sum(1 for i in ISLER if i["durum"] == "bekliyor")
+        isler_raw = list(ISLER[-KUYRUK_YANIT:])
+        toplam = len(ISLER)
         log = list(LOG)[-LOG_YANIT:]
         pid = CALISAN.get("pid")
+        aktif = is_snapshot(aktif_raw) if aktif_raw else None
+        son_isler = [is_snapshot(i) for i in isler_raw]
+    if aktif:
+        son_isler = [aktif] + [i for i in son_isler if i["id"] != aktif["id"]]
     return jsonify({
         "sunucu": {
             "klasor": str(KLASOR),
@@ -1200,53 +1362,80 @@ def api_durum():
             "surum": "1.3",
         },
         "pid": pid,
-        "aktif": next((i for i in isler if i["durum"] == "çalışıyor"), None),
-        "isler_bekleyen": sum(1 for i in isler if i["durum"] == "bekliyor"),
-        "kuyruk": isler,
+        "aktif": aktif,
+        "isler_bekleyen": bekleyen,
+        "is_kaydi_toplam": toplam,
+        "kuyruk_gosterilen": len(son_isler),
+        "kuyruk": son_isler,
         "log": log,
     })
 
 
 @app.post("/api/ekle")
 def api_ekle():
+    global IS_SAYAC
     v = request.get_json(force=True, silent=True) or {}
     yollar = v.get("yollar")
     if yollar is None and v.get("yol"):
         yollar = [v["yol"]]
     if not isinstance(yollar, list) or not yollar:
         return jsonify({"hata": "yollar listesi gerekli (satır başına bir video yolu)"}), 400
+    if len(yollar) > MAX_BATCH:
+        return jsonify({"hata": f"Tek istekte en fazla {MAX_BATCH} video eklenebilir; seçilen: {len(yollar)}. Listeyi parçalara bölün."}), 413
 
     sec = {
         "ust_bant": bool(v.get("ust_bant")),
         "ass": bool(v.get("ass")),
+        "cpu": bool(v.get("cpu", False)),
         "dil": str(v.get("dil") or "tr,en"),
         "qa_sayi": int(v.get("qa_sayi", 4) or 0),
         "cikti_klasor": str(v.get("cikti_klasor") or KLASOR),
         "limit_saniye": float(v.get("limit_saniye") or 0),
         "onek": str(v.get("onek") or ""),
     }
+    if any(c in sec["onek"] for c in '<>:"/\\|?*\x00\r\n'):
+        return jsonify({"hata": "çıktı öneki dosya yolu ayıracı veya geçersiz karakter içeremez"}), 400
 
-    with KILIT:
-        kuyruktaki = {i["yol"] for i in ISLER if i["durum"] in ("bekliyor", "çalışıyor")}
-    eklendi, hatali, yinelenen = [], [], []
+    adaylar, hatali, yinelenen = [], [], []
+    bu_istek = set()
     for yol in yollar:
         yol = str(yol).strip().strip('"')
-        p = Path(yol)
+        p = Path(yol).expanduser()
         if not p.exists():
             hatali.append({"yol": yol, "neden": "dosya bulunamadı"})
+            continue
+        if not p.is_file():
+            hatali.append({"yol": yol, "neden": "dosya değil"})
             continue
         if p.suffix.lower() not in VIDEO_UZANTILARI:
             hatali.append({"yol": yol, "neden": f"uzantı desteklenmiyor ({p.suffix or 'yok'})"})
             continue
         p = p.resolve()
-        if str(p) in kuyruktaki:
+        anahtar = os.path.normcase(os.path.normpath(str(p)))
+        if anahtar in bu_istek:
             yinelenen.append(p.name)
             continue
-        kuyruktaki.add(str(p))
-        isim = is_olustur(p, sec)
-        with KILIT:
+        bu_istek.add(anahtar)
+        adaylar.append((p, anahtar))
+
+    eklendi = []
+    with KILIT:
+        kuyruktaki = {
+            os.path.normcase(os.path.normpath(str(Path(i["yol"]).resolve())))
+            for i in ISLER if i["durum"] in ("bekliyor", "çalışıyor")
+        }
+        yeni = [(p, key) for p, key in adaylar if key not in kuyruktaki]
+        yinelenen.extend(p.name for p, key in adaylar if key in kuyruktaki)
+        kuyruk_aktif = sum(1 for i in ISLER if i["durum"] in ("bekliyor", "çalışıyor"))
+        if kuyruk_aktif + len(yeni) > MAX_AKTIF_KUYRUK:
+            bos = max(0, MAX_AKTIF_KUYRUK - kuyruk_aktif)
+            return jsonify({"hata": f"Kuyruk sınırı {MAX_AKTIF_KUYRUK} iş. Şu an {kuyruk_aktif} aktif/bekleyen, bu istekte {len(yeni)} yeni ve {bos} boş yer var. Önce bekleyen işleri bitirin veya daha küçük grup ekleyin."}), 429
+        for p, _key in yeni:
+            IS_SAYAC += 1
+            isim = is_olustur(p, sec, f"is-{IS_SAYAC}")
             ISLER.append(isim)
-        eklendi.append(isim["id"])
+            eklendi.append(isim["id"])
+    for p, _key in yeni:
         ek_not = f" (ilk {sec['limit_saniye']:.0f} sn)" if sec["limit_saniye"] > 0 else ""
         log_ekle("bilgi", f"kuyruğa eklendi: {p.name}{ek_not}")
     return jsonify({"eklendi": eklendi, "hatali": hatali, "yinelenen": yinelenen,
@@ -1281,7 +1470,7 @@ def api_klasortara():
         return jsonify({"hata": f"klasör bulunamadı: {dizin}"}), 404
     videolar = []
     try:
-        for f in sorted(p.iterdir()):
+        for f in sorted(p.iterdir(), key=lambda x: natural_sort_key(x.name)):
             if f.is_file() and f.suffix.lower() in VIDEO_UZANTILARI:
                 try:
                     mb = round(f.stat().st_size / (1024 * 1024), 1)
@@ -1291,6 +1480,58 @@ def api_klasortara():
     except OSError as e:
         return jsonify({"hata": f"klasör okunamadı: {e}"}), 400
     return jsonify({"dizin": str(p.resolve()), "videolar": videolar})
+
+
+@app.post("/api/secim")
+def api_secim():
+    """Yerel Windows dosya/klasör penceresi; medya tarayıcıya yüklenmez."""
+    if os.name != "nt":
+        return jsonify({"hata": "Windows seçicisi yalnız Windows sunucusunda kullanılabilir; yolu elle girin."}), 501
+    v = request.get_json(force=True, silent=True) or {}
+    tur = v.get("tur")
+    if tur not in ("dosya", "klasor"):
+        return jsonify({"hata": "tur 'dosya' veya 'klasor' olmalı"}), 400
+    try:
+        # Windows UI frameworkleri STA ister; Flask isteği kendi worker thread'inde
+        # çalıştığından dosya penceresini ayrı STA PowerShell sürecinde aç.
+        env = os.environ.copy()
+        env["HARDSUB_PICKER_MODE"] = tur
+        script = r'''
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+Add-Type -AssemblyName System.Windows.Forms
+$mode = $env:HARDSUB_PICKER_MODE
+if ($mode -eq 'dosya') {
+  $dialog = New-Object System.Windows.Forms.OpenFileDialog
+  $dialog.Title = 'Videoları seçin (çoklu seçim açık)'
+  $dialog.Filter = 'Video dosyaları (*.mp4;*.mkv;*.avi)|*.mp4;*.mkv;*.avi|Tüm dosyalar (*.*)|*.*'
+  $dialog.Multiselect = $true
+  $dialog.CheckFileExists = $true
+  $paths = @()
+  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $paths = @($dialog.FileNames) }
+  @{ yollar = $paths } | ConvertTo-Json -Compress
+} else {
+  $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+  $dialog.Description = 'Video klasörünü seçin'
+  $path = ''
+  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $path = $dialog.SelectedPath }
+  @{ dizin = $path } | ConvertTo-Json -Compress
+}
+'''
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-STA", "-Command", script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=env, cwd=str(KLASOR),
+        )
+        if r.returncode != 0:
+            raise RuntimeError((r.stderr or r.stdout or "PowerShell seçicisi açılamadı").strip())
+        result = json.loads(r.stdout.strip())
+        if tur == "dosya":
+            return jsonify({"yollar": [str(Path(p).resolve()) for p in result.get("yollar", [])]})
+        dizin = result.get("dizin") or ""
+        return jsonify({"dizin": str(Path(dizin).resolve()) if dizin else ""})
+    except Exception as e:
+        return jsonify({"hata": f"Windows seçicisi açılamadı: {e}"}), 500
 
 
 @app.post("/api/ac")
@@ -1309,7 +1550,7 @@ def api_ac():
 
 @app.get("/qa/<path:dosya>")
 def api_qa(dosya):
-    """/qa/<is-id>/<rel-yol> → o işin qa klasörü; /qa/<rel-yol> → son qa klasörü."""
+    """/qa/<is-id>/<rel-yol> → o işin QA klasörü; eski işler için kök fallback."""
     kok_qa = None
     rel = dosya
     parca = dosya.split("/", 1)
@@ -1317,12 +1558,14 @@ def api_qa(dosya):
         if len(parca) == 2 and parca[0].startswith("is-"):
             isim = next((i for i in ISLER if i["id"] == parca[0]), None)
             if isim is not None:
-                kok_qa = Path(isim["sec"]["cikti_klasor"]) / "qa"
+                kok_qa = Path(isim.get("qa_root") or
+                              (Path(isim["sec"]["cikti_klasor"]) / "qa"))
                 rel = parca[1]
         if kok_qa is None:
             for i in reversed(ISLER):
                 if i["qa_dosyalari"]:
-                    kok_qa = Path(i["sec"]["cikti_klasor"]) / "qa"
+                    kok_qa = Path(i.get("qa_root") or
+                                  (Path(i["sec"]["cikti_klasor"]) / "qa"))
                     break
     if kok_qa is None:
         kok_qa = KLASOR / "qa"
@@ -1369,7 +1612,7 @@ def srt_parse(metin):
 
 def is_srt_bul(is_id):
     """İşin SRT'sini bulur. Yol güvenliği: kayıt yalnız kuyruktaki işten gelir
-    ve çözümlenen yol işin kendi çıktı klasörü içinde olmak zorundadır.
+    ve çözümlenen yol işin kendi koşu klasörü içinde olmak zorundadır.
     Dönüş: (snapshot, srt_path, (hata, http_kod) | None)."""
     with KILIT:
         isim = next((i for i in ISLER if i["id"] == is_id), None)
@@ -1379,16 +1622,26 @@ def is_srt_bul(is_id):
     if not snap["srt"]:
         return snap, None, ("işin SRT kaydı yok", 400)
     srt = Path(snap["srt"])
-    cikti = Path(snap["sec"]["cikti_klasor"]).resolve()
+    cikti = Path(snap.get("run_dir") or
+                 snap["sec"]["cikti_klasor"]).expanduser().resolve()
     try:
         srt = srt.resolve()
     except OSError:
         return snap, None, ("SRT yolu çözülemedi", 400)
-    if srt.parent != cikti or srt.suffix.lower() != ".srt":
-        return snap, None, ("SRT yolu işin çıktı klasörü dışında — reddedildi", 403)
+    if not _yol_altinda(srt, cikti) or srt.suffix.lower() != ".srt":
+        return snap, None, ("SRT yolu işin koşu klasörü dışında — reddedildi", 403)
     if not srt.exists():
         return snap, None, (f"SRT bulunamadı: {srt}", 404)
     return snap, srt, None
+
+
+def _yol_altinda(yol, kok):
+    """Çözümlenmiş yolun kök klasör içinde kaldığını doğrular."""
+    try:
+        yol.relative_to(kok)
+        return True
+    except ValueError:
+        return False
 
 
 @app.get("/api/bloklar")
@@ -1667,7 +1920,7 @@ def api_kontrol():
 
 @app.get("/api/pano")
 def api_pano():
-    """Toplu kalite panosu: klasördeki TÜM *.stats.json taranır
+    """Toplu kalite panosu: klasörde ve alt klasörlerdeki *.stats.json taranır
     (varsayılan: sunucu klasörü; ?klasor= ile değiştirilir).
 
     Tablo: dosya | blok | low-conf% | konuşma sn | hardsub_shr | altyazısız? |
@@ -1682,7 +1935,12 @@ def api_pano():
     except OSError:
         pass
     satirlar = []
-    for sp in sorted(klasor.glob("*.stats.json")):
+    for sp in sorted(klasor.rglob("*.stats.json")):
+        try:
+            sp = sp.resolve()
+            stats_rel = sp.relative_to(klasor).as_posix()
+        except (OSError, ValueError):
+            continue
         kok_ad = sp.name[:-len(".stats.json")]
         if not kok_ad:
             continue
@@ -1710,7 +1968,8 @@ def api_pano():
         except OSError:
             tarih = ""
         satirlar.append({
-            "ad": kok_ad, "stats": sp.name,
+            "ad": (sp.parent / kok_ad).relative_to(klasor).as_posix(),
+            "stats": sp.name, "stats_rel": stats_rel,
             "blok": blok, "low_conf": low, "low_pct": low_pct,
             "low_yuksek": bool(low_pct is not None and
                                low_pct > PANO_LOW_YUZDE),
@@ -1718,7 +1977,7 @@ def api_pano():
             "altyazisiz": st.get("altyazisiz_rip_muhtemel") is True,
             "eski_format": not ("blocks" in st and "low_conf" in st and
                                 "conf_thr" in st),
-            "bloklar_var": (klasor / (kok_ad + ".bloklar.json")).exists(),
+            "bloklar_var": sp.with_name(kok_ad + ".bloklar.json").exists(),
             "tarih": tarih,
         })
     satirlar.sort(key=lambda r: (not r["low_yuksek"],
@@ -1742,14 +2001,11 @@ def api_pano():
 
 @app.get("/api/pano/incele")
 def api_pano_incele():
-    """Pano satırının blok dökümü: /api/pano/incele?ad=<stem>&klasor=<dir>.
+    """Pano satırının blok dökümü: /api/pano/incele?stats=<rel-yol>&klasor=<dir>.
 
     SALT-OKUNUR görüntüleyicidir — düzenleme kuyruktaki iş üzerinden
     (/api/kontrol + /api/blokkaydet) yapılır. .bloklar.json varsa koşu anındaki
     döküm döner; yoksa SRT conf'suz listelenir (eski çıktı yolu)."""
-    ad = (request.args.get("ad") or "").strip()
-    if not ad or "/" in ad or "\\" in ad or ad in (".", ".."):
-        return jsonify({"hata": "geçersiz ad"}), 400
     klasor = Path(request.args.get("klasor") or KLASOR)
     if not klasor.is_dir():
         return jsonify({"hata": f"klasör bulunamadı: {klasor}"}), 404
@@ -1757,12 +2013,40 @@ def api_pano_incele():
         klasor = klasor.resolve()
     except OSError:
         pass
-    srt = (klasor / (ad + ".srt")).resolve()
-    try:
-        if srt.parent != klasor:
+    stats_rel = (request.args.get("stats") or "").strip()
+    if stats_rel:
+        stats_input = Path(stats_rel)
+        if stats_input.is_absolute() or not stats_rel.endswith(".stats.json"):
+            return jsonify({"hata": "geçersiz stats yolu"}), 400
+        try:
+            stats_path = (klasor / stats_input).resolve()
+        except (OSError, RuntimeError):
+            return jsonify({"hata": "stats yolu çözülemedi"}), 400
+        if not _yol_altinda(stats_path, klasor):
             return jsonify({"hata": "yol klasör dışına çıkıyor"}), 403
-    except OSError:
-        return jsonify({"hata": "yol çözülemedi"}), 400
+        kok_ad = stats_path.name[:-len(".stats.json")]
+        ad = (stats_path.parent / kok_ad).relative_to(klasor).as_posix()
+        srt = stats_path.with_name(kok_ad + ".srt")
+    else:
+        # Önceki arayüz sürümünün API çağrıları için geriye dönük uyum.
+        ad = (request.args.get("ad") or "").strip()
+        if not ad or "/" in ad or "\\" in ad or ad in (".", ".."):
+            return jsonify({"hata": "geçersiz ad"}), 400
+        srt = (klasor / (ad + ".srt")).resolve()
+        if not _yol_altinda(srt, klasor):
+            return jsonify({"hata": "yol klasör dışına çıkıyor"}), 403
+    try:
+        srt = srt.resolve()
+        stats_companion = srt.with_suffix(".stats.json").resolve()
+        bloklar_companion = srt.with_name(srt.stem + ".bloklar.json").resolve()
+    except (OSError, RuntimeError):
+        return jsonify({"hata": "koşu dosyalarının yolu çözülemedi"}), 400
+    if not _yol_altinda(srt, klasor):
+        return jsonify({"hata": "SRT yolu klasör dışına çıkıyor"}), 403
+    if not _yol_altinda(stats_companion, klasor):
+        return jsonify({"hata": "stats yolu klasör dışına çıkıyor"}), 403
+    if not _yol_altinda(bloklar_companion, klasor):
+        return jsonify({"hata": "bloklar.json yolu klasör dışına çıkıyor"}), 403
     conf_thr = _stats_conf_thr(srt)
     ana_bj, ekran_bj = _bloklar_json_oku(srt)
 
@@ -1813,8 +2097,10 @@ def api_vttrapor():
     if not yol or not Path(yol).exists():
         return jsonify({"hata": "bu iş için VTT raporu yok"}), 404
     p = Path(yol).resolve()
-    if p.parent != Path(snap["sec"]["cikti_klasor"]).resolve():
-        return jsonify({"hata": "rapor yolu işin çıktı klasörü dışında"}), 403
+    run_dir = Path(snap.get("run_dir") or
+                   snap["sec"]["cikti_klasor"]).expanduser().resolve()
+    if not _yol_altinda(p, run_dir):
+        return jsonify({"hata": "rapor yolu işin koşu klasörü dışında"}), 403
     return send_from_directory(p.parent, p.name, mimetype="application/json")
 
 

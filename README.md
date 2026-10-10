@@ -1,94 +1,80 @@
 # hardsub2srt
 
-> Hardsub (videoya gömülü) altyazıyı OCR ile Türkçe `.srt` dosyasına çevirir —
-> iki motorlu OCR, Türkçe düzeltme katmanı, otomatik öğrenme döngüsü ve kalite
-> güvence araçlarıyla.
+hardsub2srt, videoya gömülü altyazıları OCR ile zamanlı Türkçe `.srt` dosyasına dönüştüren yerel bir Windows/Python aracıdır. Video ve OCR işlemi bu makinede çalışır.
 
 **Türkçe** · [English](README.en.md)
 
----
+## Hızlı başlangıç (Windows)
 
-## Ne yapar?
+1. Python 3.10+ ve FFmpeg kurun; `ffmpeg` ile `ffprobe` komutlarının PATH üzerinde olduğunu doğrulayın.
+2. Depo klasöründe bağımlılıkları yükleyin:
 
-Gömülü altyazılı (hardsub) bir video alır, altyazı bandını otomatik bulur,
-kare kare OCR'lar ve zamanlanmış Türkçe `.srt` üretir. Oynatıcı uyumluluğu için
-SRT dosyasına hiçbir özel işaret girmez; eşleşme bilgisi yan dosyaya yazılır.
+   ```powershell
+   py -3 -m pip install -r requirements.txt
+   ```
 
-| Katman | Açıklama |
+   EasyOCR/PyTorch ilk çalıştırmada model dosyalarını indirebilir. NVIDIA GPU kullanımı PyTorch/CUDA kurulumuna bağlıdır; CUDA'lı PyTorch paketini makine ve sürücünüze uygun biçimde ayrıca kurmanız gerekebilir. Bu depo bir `.exe` veya kilitli/tekrar üretilebilir ortam paketi içermez.
+
+3. Tek video için:
+
+   ```powershell
+   py -3 hardsub2srt.py "D:\Videolar\bolum.mp4" -o "D:\Altyazilar\bolum.srt"
+   ```
+
+   OCR, CUDA destekli Torch kullanılabilir durumdaysa GPU'yu seçer; aksi halde CPU'ya düşer. `--cpu` GPU'yu açıkça kapatır:
+
+   ```powershell
+   py -3 hardsub2srt.py "D:\Videolar\bolum.mp4" -o "D:\Altyazilar\bolum.srt" --cpu
+   ```
+
+   `cikar.bat` sürükle-bırak için, `toplu.bat` klasördeki toplu işler için Windows başlatıcılarıdır. CLI çıkış yolu `-o` ile belirtilir.
+
+## Yerel web arayüzü
+
+`arayuz.bat` başlatıcısını çalıştırın veya `py -3 ui_server.py` komutunu kullanın. Arayüz `http://127.0.0.1:8765` adresinde yalnızca bu bilgisayara bağlı yerel Flask sunucusunu açar. Tarayıcı arayüzdür; Python OCR motorunu yerel sunucunun başlattığı alt süreç çalıştırır.
+
+Arayüzden birden çok video dosyası veya klasör seçilebilir. Windows seçicileri yerel dosya yollarını sunucuya verir; video içeriği tarayıcıya yüklenmez. Dosya/klasör seçicisi Windows'a özgüdür; diğer sistemlerde yolu elle girin.
+
+Kuyruk tek işçiyle sırayla çalışır. Bir `/api/ekle` isteği en fazla 100 video alır; arayüz daha büyük listeleri 100'lük parçalara böler. Çalışan ve bekleyen toplam iş sayısı üst sınırı 2.000'dir. Durum yanıtı son 100 kaydı gösterir ve çalışan işi ayrıca sabitler. Aynı kaynak dosyanın bekleyen/çalışan tekrarları elenir. **Kuyruk bellektedir:** sunucu kapatılır veya yeniden başlatılırsa bekleyen işler ve oturum içi geçmiş kalıcı değildir.
+
+Her UI işi, seçilen çıktı klasöründe `runs/video-<ad>/<tarih-saat>_<iş-kimliği>/` altında ayrı bir klasör alır; yeni iş eski koşum çıktısının üstüne yazmaz. Arayüz SRT'nin yanında istatistik/koşum JSON'ları ve istenmişse `qa/` görselleri, VTT karşılaştırma raporu veya ASS üretir. CLI'de ise belirtilen `-o` yolu kullanılır.
+
+## Çıktılar ve kalite kontrolü
+
+Bir `-o ...\bolum.srt` koşumu en azından SRT ve `.stats.json` üretir; araç sürümü, video eşleşme bilgisi ve parametreler `.hardsub2srt.json` yan dosyasında tutulur. Yan dosyalar video dosyası değildir; ancak yerel video adı, boyutu/mtime ve kısmi hash gibi eşleştirme bilgileri içerebilir. Bunları paylaşmadan önce inceleyin.
+
+OCR metnini çevirmek veya çevrinin kalitesini denetlemek bu aracın amacı değildir. `vtt-qa.py`, mevcut altyazı ile zaman uyumlu referans VTT'yi hizalama/CER ve zamanlama ölçümleri için kıyaslar. OCR regresyon kapısı `regresyon/gt_gate.py` olup video ve trusted VTT dosyalarını dışarıdan ister; eksik/belirsiz varlıklar geçiş sayılmaz. Kullanım: [regresyon/README-kisa.md](regresyon/README-kisa.md). Video, VTT ve anime kareleri depoya eklenmemelidir.
+
+## Bağımlılıklar ve sorun giderme
+
+`requirements.txt` Python paketlerini listeler: NumPy, OpenCV, EasyOCR, RapidOCR, ONNX Runtime ve Flask. Video okuma için FFmpeg/ffprobe ayrıca gerekir. `py -3 -m pip show torch` ve `py -3 -c "import torch; print(torch.cuda.is_available())"` ile mevcut PyTorch/CUDA durumunu kontrol edebilirsiniz. UI veya CLI `ffmpeg`/`ffprobe` bulunamadığını bildirirse FFmpeg'i PATH'e ekleyip yeni terminal açın. GPU bulunmuyorsa veya CUDA uyumsuzsa `--cpu` açık seçenektir; işlem belirgin biçimde daha yavaş olabilir.
+
+- UI açılmıyorsa `arayuz.bat` terminal çıktısına ve Flask kurulumuna bakın; 8765 portunun başka süreçte dolu olup olmadığını kontrol edin.
+- Kuyruk sayacı/iş hata mesajlarını izleyin. Bir iş hata aldıysa işin log ve koşum klasörüne bakın. Sunucuyu yeniden başlatmak bekleyen kuyruğu kurtarmaz.
+- Model ilk indirmeleri ve GPU/PyTorch paket boyutu internet, Python ve sürücü sürümüne göre değişir.
+
+## Gizlilik ve gelecek işler
+
+İşleme varsayılan olarak yereldir. Bu sürümde merkezi telemetry, VDS API'si, GitHub Pages üzerinden OCR veya kullanıcı dosyalarının otomatik yüklenmesi **uygulanmış değildir**. Gelecekte ölçüm/paylaşım eklenecekse açık kullanıcı tercihi ve gözden geçirilebilir gönderim özeti gereklidir; video, ham SRT, tam altyazı cümleleri ve kişisel yollar varsayılan olarak gönderilmemelidir. Tasarım notları:
+
+- [Yerel istemci ve mimari yol haritası](docs/LOCAL-ARCHITECTURE-ROADMAP.md)
+- [Tarayıcı içi OCR teknik planı](docs/BROWSER-OCR-PORT-PLAN.md)
+- [Katkı kuralları](CONTRIBUTING.md)
+
+## Dosyalar
+
+| Dosya | Amaç |
 |---|---|
-| **Bant algılama** | Piksel-ölçümlü otomatik altyazı bandı; dar bantları genişletir, beyaz-fon videolarda koruma |
-| **İki motorlu OCR** | Ana motor (EasyOCR) + PaddleOCR (PP-OCRv6) ikinci motor: düşük güvenli bloklarda oy ve takas |
-| **Düzeltme** | Türkçe diakritik, harf-yutma, apostrof tablosu, kullanıcı sözlüğü (`kullanici-sozlugu.txt`) |
-| **Öğrenme** | `ogren.py` + arayüzde "Kaydet = öğren" — her düzeltme gelecekteki koşumları iyileştirir |
-| **Kalite güvence** | QA montaj kareleri, gürültü ayrımı (`_ekran.srt`), blok istatistikleri, video-hash meta (`.hardsub2srt.json`) |
-| **Ölçüm** | `vtt-qa.py` GT kıyası + 12 noktalık regresyon seti (`regresyon/`) |
+| `hardsub2srt.py` | CLI çıkarım/OCR motoru |
+| `ui_server.py` | localhost Flask UI, iş kuyruğu, yerel alt süreçler |
+| `srt_format.py` | SRT zaman biçimi yardımcıları |
+| `cikar.bat`, `arayuz.bat`, `toplu.bat` | Windows başlatıcıları |
+| `srt2ass.py` | SRT'den ASS üretimi |
+| `vtt-qa.py` | SRT/VTT metin ve zaman kıyası |
+| `ogren.py`, `kullanici-sozlugu.txt` | Yerel düzeltme/öğrenme araçları ve sözlük |
+| `regresyon/` | Kare regresyonu ve video+GT OCR kapısı |
+| `docs/` | Mimari ve geliştirme notları |
 
-## Hızlı başlangıç
+## Lisans
 
-```sh
-py -3 hardsub2srt.py "dizi.mp4"          # dizi.srt üretir
-py -3 hardsub2srt.py "dizi.mp4" --cpu    # GPU'suz makinede
-py -3 ui_server.py                       # arayüz: http://127.0.0.1:8765
-toplu.bat                                # klasördeki tüm videolar (Windows, sürükle-bırak)
-```
-
-Koşum sonunda ürettiği dosyalar: `dizi.srt` + `dizi.stats.json` (istatistik) +
-`dizi.hardsub2srt.json` (video-hash, parametreler — video-SRT eşleşme kilidi).
-
-## Ölçüm
-
-Doğruluk iddiası GT (doğru altyazı) kıyasıyla ölçülür, tahminle söylenmez:
-
-| Test | Sonuç |
-|---|---|
-| E02 GT kıyası (vtt-qa) | CER %0,48, recall %100 |
-| BLEND-S (stilize font) | CER %1,49 |
-| Regresyon seti (12 nokta) | `py -3 regresyon.py --karsilastir <yeni.json>` — kötüleşme eşiği geçilirse çıkış 1 |
-
-## Topluluk öğrenme döngüsü (yapım aşaması)
-
-Düşüncem şu: kullanıcıların düzeltmeleri altyazı metni toplanmadan geri aksın.
-Program anonim bir "öğrenme paketi" üretir, kullanıcı bunu GitHub'da bir
-Issue'ya ekler, paketler oylamayla birleştirilip sözlüğe işlenir ve yeni
-sürümle herkese dağılır. Nasıl çalışacağı
-[TOPLULUK-OGRENME-TASARIMI.md](TOPLULUK-OGRENME-TASARIMI.md)'de yazıyor.
-
-Bu repoya altyazı metni ya da anime karesi yüklenmiyor; paylaşılacak şey
-yalnız istatistik, kelime düzeyi sözlük girişleri ve ölçüm verileri.
-Kurallar [CONTRIBUTING.md](CONTRIBUTING.md)'de.
-
-## Dosya haritası
-
-| Dosya | Ne |
-|---|---|
-| `cikar.bat` | **Ana giriş**: video sürükle-bırak çıkarma (tek/çoklu dosya veya klasör) |
-| `arayuz.bat` | Arayüz başlatıcı (tarayıcıyı açar, sunucuyu koşturur) |
-| `hardsub2srt.py` | Çıkarım motoru (CLI) |
-| `ui_server.py` | Flask arayüz: koşum, düzeltme, öğrenme, kalite panosu |
-| `ogren.py` | Otomatik öğrenme CLI (güvenli çift sınıflandırıcı) |
-| `vtt-qa.py` | GT/VTT kıyas ölçümü |
-| `srt2ass.py` | SRT → ASS dönüştürücü (stil/konum koruyan çıktı) |
-| `paket-uret.py` | Anonim öğrenme paketi üreticisi (topluluk döngüsü) |
-| `birlestir.py` | Gelen paketleri oylamayla sözlüğe işleyen birleştirici |
-| `toplu.bat` | Toplu koşum + done-listesi (koşulmuşları atlar, `--yeni` ile bypass) |
-| `regresyon/` | 12 nokta OCR regresyon seti + kıyas betiği |
-| `docs/` | Gelişim günlüğü, karar kayıtları ve öğrenmeler |
-| `kullanici-sozlugu.txt` | Kelime-düzeyi düzeltme sözlüğü (toplulukla büyür) |
-
-## Dokümantasyon
-
-Projenin nasıl geliştiğini ve neden böyle inşa edildiğini merak ederseniz:
-
-- [Gelişim günlüğü](docs/GELISTIRME-GUNLUGU.md) — her adım ne zaman, ne için
-  ve hangi ölçümle atıldı
-- [Karar kayıtları](docs/NASIL-VE-NEDEN.md) — telif duvarından düzeltme
-  kurallarına, 10 önemli kararın gerekçesi
-- [Öğrenmeler](docs/OGRENMELER.md) — geliştirme sırasında yakalanan tuzaklar
-  ve dersler
-
-## Yol haritası
-
-1. Öğrenme paketi dışa aktarma + `birlestir.py` (oylamalı birleştirme)
-2. Low-conf blok kurtarma turu (upscale/kontrast ikinci deneme)
-3. Karışım madenciliği: font profili başına en iyi motor/parametre seçimi
-4. Tek dosyalık `.exe` dağıtımı (CPU varsayılan, GPU opsiyonel)
+MIT. OCR modellerinin, PyTorch/CUDA'nın, FFmpeg'in ve diğer üçüncü taraf bileşenlerin ayrı lisans ve dağıtım koşulları olabilir; model ağırlıkları bu depoda dağıtılmaz.

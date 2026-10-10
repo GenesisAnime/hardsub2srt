@@ -1,50 +1,26 @@
-# Katkı kuralları (CONTRIBUTING)
+# Katkı kuralları
 
-## Kırmızı çizgi: telif
+## Gizlilik ve telif
 
-Bu repo telifli içerik dağıtmaz. Aşağıdakiler **asla** gönderilmez
-(Issue, PR, ekran görüntüsü — hiçbir yolla):
+Bu depoya şu içerikleri eklemeyin:
 
-1. Altyazı metni (SRT çıktısı, cümle/replik düzeyi düzeltme örnekleri)
-2. Tam video kareleri / anime görüntüsü
-3. Video dosyaları veya video yolları
+- Video, anime karesi, QA ekran görüntüsü veya telifli başka medya.
+- Ham `.srt`/`.vtt`, replikler, cümle düzeyinde OCR örneği veya kişisel altyazı dosyası.
+- Video/çıktıların mutlak yerel yolu, kullanıcı adı, tam dosya adı ya da bunlardan türetilmiş hash gibi yerel iş akışını tanımlayabilecek metadata.
 
-## Gönderilebilen veri (telif sorunu olmayan)
+OCR çıktılarını veya koşum yan ürünlerini issue/PR ekine koymayın. İstatistik paylaşımı gerekiyorsa önce alanları kendiniz gözden geçirin ve yalnız gerekli, gizlilikten arındırılmış özetleri paylaşın. Bu depoda kullanıcı koşumlarını otomatik alan telemetry API'si veya otomatik yükleme özelliği yoktur.
 
-| Veri | Nasıl |
-|---|---|
-| **Öğrenme paketi** | Programın "paket dışa aktar" çıktısı: kelime-düzeyi sözlük girişleri + OCR hata istatistikleri + karışım matrisi. Issue'ya ek olarak → şablon: `ogrenme-paketi` |
-| **Sözlük PR'ı** | Teknik kullanıcılar `kullanici-sozlugu.txt`'ye satır ekleyip PR açabilir (yanlış→doğru kelime; cümle değil) |
-| **Hata raporu** | Koşum istatistikleri (stats.json içeriği — metin değil), araç sürümü, `--cpu/--gpu` |
+## Kod ve dokümantasyon katkısı
 
-Zor kare paylaşımı (kırpılmış altyazı-bant PNG) yalnız geliştiricinin özel
-talebiyle ve açık onayla olur — varsayılan olarak kapalıdır.
+- Değişiklik amacını ve kullanıcıya etkisini açıkça yazın.
+- OCR davranışını değiştiriyorsanız GT referanslı `regresyon/gt_gate.py` ölçümünü ve hangi koşum/ayarların kullanıldığını belirtin. Kaynak video ve trusted VTT depoya eklenmez; kullanılabilir değillerse bunu açıkça yazın, ölçülmemiş sonucu başarı gibi göstermeyin.
+- `regresyon/README-kisa.md` içindeki iki regresyon yönteminin kapsamını birbirine karıştırmayın: sabit kare kıyası OCR bileşenini ölçer; `gt_gate.py` sabit video penceresindeki transkripsiyon metnini zaman uyumlu VTT referansına karşı ölçer.
+- Değiştirilen Python dosyalarında `py -3 -m py_compile <dosya>` ile sözdizimi kontrolü yapın. Gerekiyorsa test komutlarını ve sonuçlarını PR'da raporlayın; gerçek videoya erişim yoksa OCR doğruluğu iddiası ileri sürmeyin.
 
-## Kod PR'ı
+## Sözlük değişiklikleri
 
-1. `py -3 -m py_compile <değişen dosya>` geçmeli.
-2. **Regresyon seti zorunlu:**
-   ```sh
-   py -3 regresyon/regresyon.py --cikti yeni.json
-   py -3 regresyon/regresyon.py --karsilastir yeni.json
-   ```
-   `KÖTÜLEŞME ŞÜPHESİ` çıktısı alınan PR alınmaz. (Kareler repoda yoktur;
-   `--kare-cikar` ile kendi kopyanı üretirsin — videolar sende olmak zorunda,
-   bu nedenle regresyon koşumu bakım-içidir, PR ön koşulu değil.)
-3. Değişiklik ölçümle açıklanmalı: "daha iyi" iddiası GT-CER veya low-conf
-   oranı düşüşüyle desteklenmelidir. İki denemenin aynı sonucu vermesi,
-   testin ayırt edici olmadığını gösterir.
-4. OCR davranışını değiştiren her değişiklik stats'a alan yazar
-   (sessiz davranış değişikliği yok).
+`kullanici-sozlugu.txt` yalnız kelime düzeyindeki düzeltmeleri içermelidir. Replik, cümle veya bağlamlı altyazı metni eklemeyin. Her kuralın neden güvenli ve genel olduğunu PR açıklamasında belirtin.
 
-## Öğrenme paketinin işlenmesi
+## Lisans ve üçüncü taraf modeller
 
-Paketler oylamalı birleştiriciyle işlenir: ≥2 bağımsız kullanıcı aynı düzeltmeyi
-verdiyse otomatik kabul; tek oy "aday" havuzuna düşer, bakımcı onaylar. Onaylanan
-girişler bir sonraki sürümdeki `kullanici-sozlugu.txt`'ye gider; her sürümün
-regresyon CER trendi README'de yayınlanır.
-
-## Davranış
-
-Hata raporunda araç sürümünü, stats.json içeriğini ve ne gördüğünü yaz.
-Tartışmada tahminden çok ölçüme bakalım.
+Kod MIT lisanslıdır. Üçüncü taraf OCR kütüphaneleri/model ağırlıkları, PyTorch/CUDA ve FFmpeg ayrı lisans ve dağıtım şartlarına tabidir. Model ağırlıklarını bu depoya eklemeyin; dağıtım veya yeni model kaynağı önermeden önce lisansını ve boyutunu belgeleyin.

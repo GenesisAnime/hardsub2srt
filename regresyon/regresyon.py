@@ -21,7 +21,7 @@ binarize|ham (mask'e göre) -> isteğe bağlı 2x LANCZOS -> 3 varyant
 --bant-yenile ile aracın kendi detect_style+_dar_bant_genislet zincirinden
 gelir ve noktalar.json'da dondurulur).
 
-Girdi sabitliği kuralı (_op-rapor.md §c.1 dersi): OCR girdisi VİDEO değil
+Girdi sabitliği: OCR girdisi VİDEO değil
 kareler/*.png'dir — video sonradan değişse bile baseline kıyası geçerli kalır.
 """
 from __future__ import annotations

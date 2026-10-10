@@ -162,8 +162,8 @@ ile kapatılır. Test koşularında (--limit-seconds > 0) varsayılan kapalıdı
      denenir). Sözlük: turkce-sozluk.txt
      (OPUS OpenSubtitles v2018 tr frekans listesi, freq>=5, ~987K kelime);
      dosya yoksa gömülü ~300 kelimelik çekirdek devreye girer.
-     Ölçüm (BLEND-S S01E01, _gt2-blends.vtt): diyalog CER %5.41 -> %3.15
-     (36 -> 21 edit / 666 karakter; kalibrasyon _pf-kalibrasyon3.py).
+     Ölçüm (BLEND-S S01E01, samples/references/BLEND-S/S01E01/_gt2-blends.vtt): diyalog CER %5.41 -> %3.15
+     (36 -> 21 edit / 666 karakter; kalibrasyon arsiv/11-deneyler/_pf-kalibrasyon3.py).
   2) EKRAN-YAZI SINIFLANDIRICISI (_split_noise üstüne): mevcut conf/süre/
      harf profili KORUNUR; eklenen kurallar bloğu <ad>_ekran.srt'ye taşır:
      (a) CJK oranı >%15; (b1) >=4-harfli kelimelerin <%30'u sözlükte VE
@@ -179,7 +179,7 @@ ile kapatılır. Test koşularında (--limit-seconds > 0) varsayılan kapalıdı
      geçildiği ilk kareye taşınır (ölçüm: B12 start ~1.4 sn erkendi).
      stats.fade_duzeltilen sayar.
   4) UPSCALE2X EŞİĞİ 45 -> 50 px (UPSCALE_TEXT_H): algılanan satır
-     yüksekliği <50 px ise OCR girişi 2x. Ölçüm (_pf-texth-probe.json):
+     yüksekliği <50 px ise OCR girişi 2x. Ölçüm (arsiv/11-deneyler/_pf-texth-probe.json):
      4 test videosunda text_h 60-80 px -> dördünde de davranış değişmedi.
 
 04.10.2026 — KULLANICI SÖZLÜĞÜ ENTEGRASYONU: UI'daki 'Öğret' hedefi
@@ -187,7 +187,7 @@ kullanici-sozlugu.txt (`eski<TAB>yeni`) post-fix zincirine bağlandı; kural
 ham OCR ve post-fix yüzeyinde uygulanır, günlüğe "kullanici" sınıfıyla
 yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
 
-04.10.2026 — 8. TUR (algılama kalitesi; ölçüm zemini _kal-oku.py):
+04.10.2026 — 8. TUR (algılama kalitesi; ölçüm zemini arsiv/11-deneyler/_kal-oku.py):
   * DÜŞÜK-KONSENSUS TAKASI: ikinci motorun okuması, konsensus fiilen
     çökmüşken (conf<0.30) ve net üstünken (>=0.80, fark>=0.50) metni
     devralır; metin kısa parça olamaz (>=%60 uzunluk — tam bölüm koşusunda
@@ -235,7 +235,7 @@ yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
   değişiklik yoktur (parite korunur). Eski çıktılarda bu dosya YOKTUR; ui
   paneli conf'suz listeyle zarifçe düşer ve "yeniden koşun" der.
 
-05.10.2026 — WANO TEŞHİS DÜZELTMELERİ (ölçümlü; inceleme _op-rapor.md,
+05.10.2026 — WANO TEŞHİS DÜZELTMELERİ (ölçümlü; inceleme arsiv/11-deneyler/_op-rapor.md,
   One Piece 124 bölümlük batch E1017-E1080 çöküşü):
   1) DAR BANT SAĞLIK KONTROLÜ (_dar_bant_genislet): algılanan bant
      h<150px (1080p tabanında ölçekli) ise taban ekran tabanında kalmak
@@ -272,8 +272,8 @@ yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
   1) EŞİK TAVANI 246 → 240 (THR_TAVAN sabiti): Eleber ripinde glif
      çekirdeği gri 242-252 ölçüldü; eski koşuda fiilen kullanılan 250
      eşiği maskenin %41'ini eritiyordu. Piksel sayımı (E1049 t=715,
-     _wn-full-1049-715.png, bant 810-1080): >240: 5008 · >246: 4564 ·
-     >250: 2939 piksel — _wn-mask-1049-715-thr240.png katı glifler,
+     qa/evidence/_wn-full-1049-715.png, bant 810-1080): >240: 5008 · >246: 4564 ·
+     >250: 2939 piksel — qa/evidence/_wn-mask-1049-715-thr240.png katı glifler,
      -thr250.png paramparça. min(240, core-6) artık üç yerde:
      detect_style, detect_style_upper, _candidate_band.
      DEFAULT_WHITE_THR 250 → 240 (--no-auto ve algılama-başarısızlığı
@@ -282,7 +282,7 @@ yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
      (önce -5). Ölçümlü vaka E1049: low-conf 10/17 (%59) iken deneme
      hiç tetiklenmemişti (auto_esik_kayit.denendi=false).
   2) DAR BANT TETİĞİ 150 → 180: ölçüm (E1049 t=1145,
-     _wn-full-1049-1145.png, thr240 satır profili ≥8 piksel): iki
+     qa/evidence/_wn-full-1049-1145.png, thr240 satır profili ≥8 piksel): iki
      satırlı diyalog y=945..1039 (üst satır 945-975, alt satır
      1000-1039). E1071'in ölçülen (976,104) bandı üst satırı 945'ten
      BİÇER (31 px kayıp); E1007'nin (952,128) bandı 7 px biyer. Taban
@@ -313,7 +313,7 @@ yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
   4) VIDEO KİMLİĞİ stats["video"] SÖZLÜĞÜ: tur 1'in ayrı "video_kimlik"
      anahtarı yerine "video" artık {ad, mtime, boyut, sha1_ilk_1MB}
      sözlüğü (E02 vakasının kalıcı önlemi; görev spesifikasyonu).
-     "video"yu düz isim olarak okuyan kod YOK (ölçüldü: _op-katman1.py
+     "video"yu düz isim olarak okuyan kod YOK (ölçüldü: arsiv/11-deneyler/_op-katman1.py
      kendi "video" alanını üretiyor, ui_server okumuyor); isim bilgi
      kaybı olmasın diye sözlüğün "ad" alanında yaşar.
 
@@ -386,6 +386,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from srt_format import fmt_ts
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
@@ -441,7 +442,7 @@ BEYAZ_FON_SON_PENCERE_SN = 11.0  # son pencere uzunluğu (mutlak saniye)
 BEYAZ_FON_SON_ORNEK = 37         # son pencere örnek sayısı (~0.3s aralık)
 
 # OCR girişi 2x büyütme eşiği (04.10.2026: 45 -> 50 px, görev fix 4).
-# ÖLÇÜM (_pf-texth-probe.json): 4 test videosunun algılanan text_h'i
+# ÖLÇÜM (arsiv/11-deneyler/_pf-texth-probe.json): 4 test videosunun algılanan text_h'i
 # 60-80 px (BLEND-S 70, ep1 60, ep2 60, 86tr 80) -> bu değişiklik dört test
 # videosunda davranış DEĞİŞTİRMEZ; 45-49 px bandındaki videolar için.
 UPSCALE_TEXT_H = 50
@@ -529,7 +530,7 @@ LOW_CONF_THR = 0.75    # bu eşiğin altındaki segmentlere ikinci motor oy veri
                        # değiştirilebilir)
 
 # --- 8. tur (04.10.2026): DÜŞÜK-KONSENSUS TAKASI --------------------------
-# Ölçüm zemini _kal-oku.py (BLEND-S GT 24 cue; aynı karede 3-varyant
+# Ölçüm zemini arsiv/11-deneyler/_kal-oku.py (BLEND-S GT 24 cue; aynı karede 3-varyant
 # konsensus vs PP-OCRv6):
 #   00:10:25 "ama sana göre değil gibb seni zolamayacağım 1 Mafka"
 #             konsensus conf=0.20 CER=0.132   ← fiilen çökmüş okuma
@@ -753,7 +754,7 @@ def _video_kimlik(video):
 
     Ölçümlü vaka: E02 SRT'si farklı bir ripten üretilmişti; video dosyası
     koşudan SONRA değişmişti (mtime 30.09 15:04) ve kayıtta hiçbir iz
-    yoktu — uyumsuzluk ancak görsel örneklemeyle yakalandı (_op-rapor.md
+    yoktu — uyumsuzluk ancak görsel örneklemeyle yakalandı (arsiv/11-deneyler/_op-rapor.md
     §c.1). Bu kayıt sonrakilerin aynısını önler: SRT ile video
     eşleşmesi sonradan sha1+boyut+mtime üçlüsüyle doğrulanabilir.
 
@@ -1328,7 +1329,7 @@ def _candidate_band(path, width, height, duration, probe_seconds=60.0):
 
 
 # 05.10.2026 — DAR BANT SAĞLIK KONTROLÜ (Wano E1017-E1080 çöküşü) ----------
-# Ölçülen arıza imzaları (stats.json, 124 bölümlük batch; _op-rapor.md b.3):
+# Ölçülen arıza imzaları (stats.json, 124 bölümlük batch; arsiv/11-deneyler/_op-rapor.md b.3):
 #   E1071 (976,104) · E1007 (952,128) · E1074/75 (940,140) · E1076 (932,148)
 # 95px fontta iki satırlı diyalog ~200px yer kaplar; h<150 bandı ikinci
 # satırı KESER ve kendi kendini güçlendiren döngü başlar: üst satır hiç
@@ -1341,7 +1342,7 @@ def _candidate_band(path, width, height, duration, probe_seconds=60.0):
 # satır rahat sığar) — düzeltme yalnız şüpheli-dar durumu etkiler, sağlıklı
 # videoların bandı bit-bit aynı kalır (parite).
 # TUR 2 (05.10.2026): tetik 150 → 180. Yeni ölçüm (E1049 t=1145,
-# _wn-full-1049-1145.png, thr240 satır profili ≥8 piksel): iki satırlı
+# qa/evidence/_wn-full-1049-1145.png, thr240 satır profili ≥8 piksel): iki satırlı
 # diyalog beyaz-çekirdek span'ı y=945..1039 — üst satır 945-975, alt satır
 # 1000-1039. E1071'in (976,104) bandı üst satırı 945'ten BİÇER (31 px
 # kayıp), E1007'nin (952,128) bandı 7 px biyer; 150 tabanıyla üretilen
@@ -2113,7 +2114,7 @@ def _split_noise(blocks, fps, ayir=True, conf_thr=0.45, dur_thr=0.6,
       (c)  <=2 harf dışı tamamen sembol
     conf<0.15 tabanı probe2 ölçümü: ekran bloklarının conf'u 0.033-0.077,
     GT diyalog conf'larının en düşüğü 0.248. Denge (kalibrasyon
-    _pf-kalibrasyon3.py, önceki SRT'nin 310 bloğu): GT'nin 4 ekran bloğu
+    arsiv/11-deneyler/_pf-kalibrasyon3.py, önceki SRT'nin 310 bloğu): GT'nin 4 ekran bloğu
     ayrıldı, 20 GT diyalog bloğunun hiçbiri ayrılmadı. `istatistik` verilirse
     kural bazlı sayılar oraya yazılır."""
     if not ayir:
@@ -2254,7 +2255,7 @@ def _split_repeat(ana, gurultu, fps, sim=REP_SIM, win=REP_WIN,
 # --- 8. tur (04.10.2026): --jenerik: zaman aralığıyla kredi ayırma -------
 # Kayan jenerik/kredi blokları İÇERİK kuralıyla yakalanamaz: BLEND-S
 # 00:22:14'teki Vietnamca kredi bloğu sözlük eşiğini geçiyor ve ekran
-# sınıflandırıcısından kaçıyor (ölçüm: _pf2-cer-rapor.json 'ekran' çifti —
+# sınıflandırıcısından kaçıyor (ölçüm: arsiv/11-deneyler/_pf2-cer-rapor.json 'ekran' çifti —
 # ana SRT'de kalmıştı). Kayan kredi OCR'a göre karakter karakter değişir;
 # güvenilir sinyal İÇERİK değil ZAMANDIR. Kullanıcı jenerik penceresini
 # işaretler; aralıkta BAŞLAYAN bloklar ana SRT'ye girmez, <ad>_ekran.srt'ye
@@ -2322,7 +2323,7 @@ def _jenerik_ayir(bloklar, araliklar, fps):
 
 
 # =====================================================================
-# İNCELEME TURU (04.10.2026, _rev-RAPOR.md bulguları) — beş kural --------
+# İNCELEME TURU (04.10.2026, arsiv/11-deneyler/_rev-RAPOR.md bulguları) — beş kural --------
 # Derinlik incelemesi (25 ana SRT + 21 kare kanıt) ölçümlü boşluklar
 # buldu; hepsi TAŞIMA/TEMİZLİK kuralıdır, hiçbiri SİLMEZ (Kural 1):
 #
@@ -2338,7 +2339,7 @@ def _jenerik_ayir(bloklar, araliklar, fps):
 #     oranı >= 0.6 + >= 2 sesli + sözlükte kelime taşıyan satırlar
 #     ("Türkçe-karakter ağırlıklı") ana SRT'ye geri konur; ardışık
 #     kırıntılar tek blok olur; kalan çöp satırlar _ekran'da kalır.
-#     Denge (GT, _pf2-blends_ekran.srt): Japonca kredi / "OurpıIse" /
+#     Denge (GT, arsiv/11-deneyler/_pf2-blends_ekran.srt): Japonca kredi / "OurpıIse" /
 #     "inya" GERİ DÖNMEZ (CJK ve sözlük eşiği); ölçüm README'de.
 #  3) TEK BAŞINA CJK KALINTISI (6+ örnek: 中/テ/著/二 diyalog satırında):
 #     post-fix'te çevresi boşluk/satır sınırı olan TEK CJK karakter
@@ -2424,7 +2425,7 @@ def _diyalog_kirintisi(satir, sozluk):
     Dört şart BİRLİKTE: CJK içermemesi, harf oranı >= MIKRO_GERI_HARF,
     >= MIKRO_GERI_SESLI sesli harf ve >=3 harfli en az bir kelimenin
     sözlükte FREQ_MIN üstü frekansla bulunması ("Türkçe-karakter
-    ağırlıklı"). Ölçüm tabanı (_pf2-blends_ekran.srt + _ekran Kaya Bocchi):
+    ağırlıklı"). Ölçüm tabanı (arsiv/11-deneyler/_pf2-blends_ekran.srt + _ekran Kaya Bocchi):
     "Kes şunu!" / "Beni öldürüyorsun." True; "OurpıIse", "inya", "JI I
     VII", "IijUi", "Anhi", "V:+ 47t 4 R 17", "49" False."""
     if _CJK_RE.search(satir):
@@ -2611,9 +2612,9 @@ def _mikro_geri(ana, adaylar, fps, sozluk):
 # =====================================================================
 # TÜRKÇE POST-FIX KATMANI + EKRAN-YAZI SINIFLANDIRICISI (04.10.2026) ---
 #
-# BLEND-S GT ölçümü (_gt2-rapor.json): diyalog CER %5.41, ekran %58.
+# BLEND-S GT ölçümü (arsiv/11-deneyler/_gt2-rapor.json): diyalog CER %5.41, ekran %58.
 # Hata sınıfları: kelime kaynaşması %31, ekran-yazısı %31, diakritik %23,
-# harf yutma %15. Bu bölümün motoru _pf-kalibrasyon3.py'de ÖLÇÜMLÜ
+# harf yutma %15. Bu bölümün motoru arsiv/11-deneyler/_pf-kalibrasyon3.py'de ÖLÇÜMLÜ
 # geliştirildi ve birebir taşındı:
 #   * diyalog CER: %5.41 -> %3.15 (36 -> 21 edit / 666 GT karakter)
 #   * ekran ayrımı: GT'nin 4 ekran bloğu ayrılıyor, 20 GT diyalog bloğunun
@@ -2963,7 +2964,7 @@ def _kelime_duzelt(token, sozluk):
         # komşu >= ZAYIF_SOZLUK_DOMINANS kat daha sık ise komşu kazanır
         # ('gibi' 2.430.246 / 'gibb' 133 -> 18 272x). Lowercase şartı ve
         # yalnız DEĞİŞTİRME (ekle/sil YOK) — mevcut güvenlik kurallarıyla
-        # aynı aile. Ölçüm: _kal-oku.py token testi + GT koşusu.
+        # aynı aile. Ölçüm: arsiv/11-deneyler/_kal-oku.py token testi + GT koşusu.
         f0 = sozluk[kucuk]
         if core.islower() and f0 < ZAYIF_SOZLUK_FREQ:
             en_iyi = None
@@ -3051,7 +3052,7 @@ def _duzelt_metin(metin, sozluk, kayit=None, zaman=None):
     for satir in metin.split("\n"):
         orijinal = satir
         # --- ekran-kalinti (inceleme turu 3): tek başına duran CJK harf ---
-        # Ölçüm (_rev-RAPOR.md (c)-2): 6+ örnek — "…söylemiştim. 中",
+        # Ölçüm (arsiv/11-deneyler/_rev-RAPOR.md (c)-2): 6+ örnek — "…söylemiştim. 中",
         # "テ Amanın…", "著 / Karides.", "二 Horeket etti!". Yalnız
         # çevresi boşluk/satır sınırı olan TEK CJK karakter (U+3000-U+9FFF)
         # kaldırılır; CJK'lı uzun satırlar (tam Japonca satır) DOKUNULMAZ —
@@ -3443,14 +3444,6 @@ def get_second_engine(lang_list, gpu_flag, ocr_mode="auto",
         _SECOND["state"] = "failed"
         note(f"[i] ikinci motor kurulamadi: {type(e).__name__}: {e}")
         return _SECOND
-
-
-def fmt_ts(seconds):
-    ms = int(round(seconds * 1000))
-    h, rem = divmod(ms, 3600000)
-    m, rem = divmod(rem, 60000)
-    s, ms = divmod(rem, 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def main():
@@ -4578,7 +4571,7 @@ def main():
     ana, gurultu = _split_noise(merged, fps, ayir=args.ayir_gurultu,
                                 sozluk=sozluk, istatistik=ekran_ist)
     # --- inceleme turu 5: SFX çöp profili (eşiğin genişletmesi) ---
-    # Ölçüm (_rev-RAPOR.md (b) BOCCHI): "V;+ 4+ @ R k7" gibi SFX çöpü
+    # Ölçüm (arsiv/11-deneyler/_rev-RAPOR.md (b) BOCCHI): "V;+ 4+ @ R k7" gibi SFX çöpü
     # mevcut profili (conf<0.45 ∧ dur<0.6) kaçırabiliyor. Genişletme:
     # harf oranı < SFX_HARF ∧ süre < SFX_DUR ∧ komşu metin bağı yok.
     # Ön ölçüm (eski ana SRT'ler): BLEND-S 1 aday (22:04 çöp bloğu),
@@ -4703,7 +4696,7 @@ def main():
                          "tasinan": len(_jn_tasan), "bloklar": _jn_bilgi}
 
     # --- inceleme turu 2: mikro-fragman geri birleştirme ---------------
-    # Ölçüm (_rev-RAPOR.md (b) BOCCHI): gerçek diyalog "Kes şunu!"
+    # Ölçüm (arsiv/11-deneyler/_rev-RAPOR.md (b) BOCCHI): gerçek diyalog "Kes şunu!"
     # (12:08.4-12:09.3) _ekran'da 0.125 sn'lik kırıntılarda kalmıştı.
     # Aday havuz: micro_moved + gurultu (tekrar ve jenerik ile taşınanlar
     # — kullanıcı beyanı/aday-tarama çıktısı — DÖNMEZ). Uygun kırıntılar
