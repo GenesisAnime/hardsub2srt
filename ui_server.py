@@ -1739,7 +1739,21 @@ if ($mode -eq 'dosya') {
         app.logger.exception("Windows picker helper could not start")
         return jsonify({"hata": f"Windows seçicisi başlatılamadı: {exc}"}), 500
 
-    watcher.start()
+    try:
+        watcher.start()
+    except Exception as exc:
+        _picker_terminate(process)
+        try:
+            process.communicate()
+        except (OSError, ValueError):
+            app.logger.exception("Windows picker helper output could not be closed")
+        _picker_finish(job_id, "error", error=f"Windows seçicisi izleyicisi başlatılamadı: {exc}")
+        try:
+            os.unlink(marker_path)
+        except OSError:
+            pass
+        app.logger.exception("Windows picker watcher could not start")
+        return jsonify({"hata": f"Windows seçicisi izlenemedi: {exc}"}), 500
     app.logger.info("picker started mode=%s job_id=%s spawn_ms=%d",
                     tur, job_id, process_started_epoch_ms - request_started_epoch_ms)
     return jsonify({"job_id": job_id, "status": "starting"}), 202
