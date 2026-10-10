@@ -82,6 +82,8 @@ for ($i=0; $i -lt $dirs.Count; $i++) {
 }
 
 $xml = [xml](Get-Content -LiteralPath $xmlPath -Raw -Encoding UTF8)
+$envMap = @{}
+foreach ($item in $xml.service.env) { $envMap[$item.name] = $item.value }
 if (-not [System.IO.Path]::IsPathRooted($xml.service.executable) -or
     -not (Test-Path -LiteralPath $xml.service.executable -PathType Leaf) -or
     $xml.service.id -ne $serviceName -or
@@ -91,8 +93,6 @@ if (-not [System.IO.Path]::IsPathRooted($xml.service.executable) -or
     $envMap['PYTHONDONTWRITEBYTECODE'] -ne '1') {
     throw 'WinSW service id veya loopback Waitress uygulama komutu beklenen değer değil.'
 }
-$envMap = @{}
-foreach ($item in $xml.service.env) { $envMap[$item.name] = $item.value }
 $expectedDb = Join-Path $dataPath 'contributions.sqlite3'
 if ($envMap['H2S_CONTRIB_DB'] -ne $expectedDb -or
     $envMap['H2S_CONTRIB_SERVICE_ACCOUNT'] -ne $serviceAccount -or
