@@ -20,11 +20,21 @@
           "license": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["status", "identifier", "evidence_ref"],
+            "required": ["status", "identifier", "evidence_path", "evidence_sha256", "human_review"],
             "properties": {
               "status": {"enum": ["public_domain", "permissive_license", "permission_granted", "user_owned"]},
               "identifier": {"type": "string", "minLength": 1},
-              "evidence_ref": {"type": "string", "minLength": 1, "description": "Local relative document identifier; never an absolute path."}
+              "evidence_path": {"type": "string", "minLength": 1, "description": "Local relative evidence file; never an absolute path."},
+              "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "human_review": {
+                "type": "object", "additionalProperties": false,
+                "required": ["status", "reviewer", "reviewed_at"],
+                "properties": {
+                  "status": {"enum": ["pending", "reviewed"]},
+                  "reviewer": {"type": ["string", "null"]},
+                  "reviewed_at": {"type": ["string", "null"]}
+                }
+              }
             }
           }
         }

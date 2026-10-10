@@ -4,24 +4,35 @@
   "title": "Local OCR experiment report v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "experiment_id", "status", "dataset", "data_policy", "experiment", "metrics", "stop_gate"],
+  "required": ["schema_version", "experiment_id", "status", "dataset", "provenance", "data_policy", "experiment", "metrics", "stop_gate"],
   "properties": {
     "schema_version": {"const": 1},
     "experiment_id": {"type": "string", "minLength": 1},
     "status": {"enum": ["PREPARED_NOT_RUN", "EVALUATED", "BLOCKED"]},
     "dataset": {
-      "type": "object", "required": ["manifest_sha256", "metadata_sha256", "rows", "groups", "split_counts"],
+      "type": "object", "required": ["manifest_sha256", "metadata_sha256", "rows", "groups", "row_split_counts", "group_split_counts"],
       "properties": {
         "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "rows": {"type": "integer", "minimum": 1}, "groups": {"type": "integer", "minimum": 3},
-        "split_counts": {"type": "object", "required": ["train", "validation", "test"], "properties": {
+        "row_split_counts": {"type": "object", "required": ["train", "validation", "test"], "properties": {
+          "train": {"type": "integer", "minimum": 1}, "validation": {"type": "integer", "minimum": 1}, "test": {"type": "integer", "minimum": 1}
+        }},
+        "group_split_counts": {"type": "object", "required": ["train", "validation", "test"], "properties": {
           "train": {"type": "integer", "minimum": 1}, "validation": {"type": "integer", "minimum": 1}, "test": {"type": "integer", "minimum": 1}
         }}
       }
     },
-    "data_policy": {"type": "object", "required": ["labels", "license_gate", "local_only", "training_performed"], "properties": {
-      "labels": {"const": "human_accepted_or_corrected_only"}, "license_gate": {"const": "passed_per_row"},
+    "provenance": {"type": "object", "required": ["status", "active_rows_verified"], "properties": {
+      "status": {"enum": ["verified_against_parent_review_pack", "self_attested"]},
+      "active_rows_verified": {"type": "integer", "minimum": 0},
+      "reason": {"type": "string"}, "review_manifest_sha256": {"type": "string"},
+      "review_srt_sha256": {"type": "string"}, "review_events_sha256": {"type": "string"}
+    }},
+    "data_policy": {"type": "object", "required": ["labels", "license_gate", "rights_verified", "human_rights_review_complete", "local_only", "training_performed"], "properties": {
+      "labels": {"enum": ["active_local_review_events_linked", "self_attested_unverified"]},
+      "license_gate": {"const": "evidence_present_self_attested"}, "rights_verified": {"const": false},
+      "human_rights_review_complete": {"type": "boolean"},
       "local_only": {"const": true}, "training_performed": {"const": false}
     }},
     "experiment": {"type": "object", "required": ["baseline_id", "candidate_id", "device_backend_config", "normalization", "predeclared_gate"], "properties": {
@@ -44,9 +55,12 @@
       }},
       "translation": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string"}}}
     }},
-    "stop_gate": {"type": "object", "required": ["must_have_train_validation_test", "trusted_reference_required", "engine_and_config_required", "no_regression_gate_predeclared", "metrics_claimable", "reason"], "properties": {
+    "stop_gate": {"type": "object", "required": ["must_have_train_validation_test", "trusted_reference_required", "engine_and_config_required", "no_regression_gate_predeclared", "human_provenance_verified", "human_rights_review_required", "human_rights_review_complete", "rights_verified", "experiment_run_blocked", "metrics_claimable", "reason"], "properties": {
       "must_have_train_validation_test": {"type": "boolean"}, "trusted_reference_required": {"type": "boolean"},
       "engine_and_config_required": {"type": "boolean"}, "no_regression_gate_predeclared": {"type": "boolean"},
+      "human_provenance_verified": {"type": "boolean"}, "human_rights_review_required": {"const": true},
+      "human_rights_review_complete": {"type": "boolean"}, "rights_verified": {"const": false},
+      "experiment_run_blocked": {"const": true},
       "metrics_claimable": {"type": "boolean"}, "reason": {"type": "string"}
     }}
   }

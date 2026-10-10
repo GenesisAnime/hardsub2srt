@@ -4,11 +4,11 @@
 
 `ocr_experiment.py`, Phase 2'nin `verified-ocr-dataset-*/manifest.jsonl` dışa aktarımını ve ona karşılık gelen ayrı metadata dosyasını yerelde doğrular. Geçerli girdiler için `split-manifest.json` ve `experiment-report.json` oluşturur. Araç OCR çalıştırmaz, model eğitmez, veri kümesini değiştirmez ve ağa bağlanmaz. Metadata, split ve rapor çıktıları hassas yerel dosyalardır; paylaşılabilir paket sayılmaz.
 
-Phase 2 dışa aktarımı yalnızca geçerli, etkin insan `accepted`/`corrected` OCR kararlarından türetilen görsel/metin çiftlerini içerir. Bu araca verilen dosyayı hazırlayan kişi de dışa aktarımın gerçekten yerel UI'den geldiğini ve etkin kararları temsil ettiğini doğrulamalıdır; manifest imzalı değildir. AI önerisi bu veri akışına giremez.
+Phase 2 dışa aktarımı yalnızca geçerli `accepted`/`corrected` kararlarını hedefler. Araç, export klasörünün doğrudan üst dizinindeki `.review-pack` ile `manifest.json`, SRT ve `review-events.jsonl` zincirini tekrar doğrular; event'in aktif son karar olduğunu, event/cue/hash/metin/zaman/confidence eşleşmelerini kontrol eder. Zincir doğrulanamazsa çıktıdaki provenance `self_attested` olur ve `experiment_run_blocked` true kalır. Başarılı yerel bağlantı da hesabın/kişinin kimliğini kanıtlamaz; yerel UI journal'ına bağlı olduğunu gösterir. AI önerileri export'a alınmaz.
 
 ## Metadata girdisi
 
-Her `cue_id` için `source_id`, `episode_id` ve lisans alanı zorunludur. Lisans durumu yalnız `public_domain`, `permissive_license`, `permission_granted` veya `user_owned` değerlerinden biri olabilir. `identifier` lisans/izin türünü, `evidence_ref` ise mutlak yol içermeyen yerel göreli kanıt belge kimliğini belirtir. Bu alanları doldurmak tek başına hukuki doğrulama değildir; veri kümesi sorumlusu kullanım ve deney için yeterli hakkı ayrıca teyit etmelidir. Lisans belirsizse çalışmayı durdurun.
+Her `cue_id` için `source_id`, `episode_id` ve lisans alanı zorunludur. Lisans durumu yalnız `public_domain`, `permissive_license`, `permission_granted` veya `user_owned` değerlerinden biri olabilir. Her kayıtta metadata dosyasına göreli `evidence_path` ve SHA-256 gerekir; dosyanın varlığı ve hash'i kontrol edilir. Ayrıca `human_review` alanı gözden geçiren kişi/tarihle işaretlenebilir. Ancak kanıt dosyasının varlığı veya bu alan **hukuki doğrulama değildir**; sistem raporu daima `rights_verified:false` yazar. İnsan hak incelemesi tamamlanmadan deney çalıştırma kapısı kapalı kalır. Lisans belirsizse durun.
 
 Örnek `dataset-metadata.json`:
 
@@ -23,7 +23,13 @@ Her `cue_id` için `source_id`, `episode_id` ve lisans alanı zorunludur. Lisans
       "license": {
         "status": "permission_granted",
         "identifier": "permission-record-2026-001",
-        "evidence_ref": "rights/permission-record-2026-001.txt"
+        "evidence_path": "rights/permission-record-2026-001.txt",
+        "evidence_sha256": "<64-lowercase-hex-digest-of-file>",
+        "human_review": {
+          "status": "pending",
+          "reviewer": null,
+          "reviewed_at": null
+        }
       }
     }
   ]
@@ -45,13 +51,13 @@ py -3 ocr_experiment.py "D:\yerel\verified-ocr-dataset-..." `
   --timing-tolerance-ms 500
 ```
 
-Komut crop dosyalarının göreli ve kök dışına taşmayan yol olduğunu, SHA-256 değerlerinin eşleştiğini ve OpenCV ile görüntünün çözülebildiğini denetler. `cue_id` tekrarını, yanlış manifest şemasını, eksik/ekstra metadata satırını, boş insan doğrulanmış metni, lisans belirsizliğini ve bozuk crop'u reddeder. Phase 2 export şemasındaki `review_event_id` kabul edilmiş/düzeltilmiş insan kararını göstermelidir. Çıktıdaki grup ataması `source_id + episode_id` birleşimini bölünemez kabul eder. Aynı gruptaki hiçbir cue farklı split'e düşmez. En az üç ayrı grup yoksa veya herhangi bir split boş kalacaksa çıktı üretimi durur.
+Komut crop dosyalarının göreli ve kök dışına taşmayan yol olduğunu, SHA-256 değerlerinin eşleştiğini ve önce JPEG boyut marker'larının güvenli sınırlar içinde olduğunu, ardından OpenCV ile görüntünün çözülebildiğini denetler. Tek crop en çok 1280×1280 ve benzersiz crop toplamı en çok 128 MiB'dir; metadata 16 MiB, her rights evidence 16 MiB ve toplam kanıt dosyaları 64 MiB ile sınırlıdır. `cue_id` tekrarını, `ocr_confidence` alanı da dahil yanlış Phase 2 manifest şemasını, eksik/ekstra metadata satırını, boş insan doğrulanmış metni, lisans kanıtı dosyası/hash'i eksikliğini ve bozuk crop'u reddeder. `review_event_id` tek başına yeterli değildir: üst `.review-pack` ile `review-events.jsonl` içinde halen etkin karara ve aynı cue/crop/hash/SRT/zaman/metin/confidence değerlerine bağlanmalıdır. Bu zincir bulunmazsa provenance self-attested kalır ve deney bloklanır. Grup anahtarı NFC + boşluk birleştirme + casefold sonrası `source_id + episode_id` birleşimidir. Aynı gruptaki hiçbir cue farklı split'e düşmez. En az üç ayrı grup yoksa veya split boş kalacaksa çıktı üretimi durur.
 
-Deterministik sıralama `SHA256(seed + NUL + canonical_group_id)` ile yapılır; sıralanmış gruplar sabit 80/10/10 hedefli grup adetlerine ayrılır. Bu, grup sayısına göre bölmedir; örnek/cue sayısına göre tam 80/10/10 garantisi vermez. Kısıtlı grup sayısında oranlar yaklaşık olur ve gerçek adetler raporda yazılır. Yeni veri geldikçe mevcut test gruplarını sessizce değiştirmeyin: deney manifestini dondurun ve yeni bir deney sürümü açın.
+Deterministik sıralama `SHA256(seed + NUL + canonical_group_id)` ile yapılır; sıralanmış gruplar sabit 80/10/10 hedefli grup adetlerine ayrılır. Bu, grup sayısına göre bölmedir; örnek/cue sayısına göre tam 80/10/10 garantisi vermez. Kısıtlı grup sayısında oranlar yaklaşık olur; rapor hem grup hem cue satır sayılarını ayrı verir. Yeni veri geldikçe mevcut test gruplarını sessizce değiştirmeyin: deney manifestini dondurun ve yeni bir deney sürümü açın.
 
 ## Metrik tanımları ve rapor
 
-Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json` ve `schemas/ocr-experiment-report-v1.schema.json` dosyalarındadır. `experiment-report.json` hazırlıkta `PREPARED_NOT_RUN` ve null metriklerle yazılır. Null, sıfır başarı demek değildir; ölçülmedi demektir. Bu ilk araç sadece crop çiftlerini hazırlar; trusted timed reference manifesti ve engine adapter henüz yoktur. `vtt-qa.py`/`regresyon/gt_gate.py` video ile referans altyazıyı karşılaştırır ama bu image/text export'una doğrudan bağlanmaz.
+Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json` ve `schemas/ocr-experiment-report-v1.schema.json` dosyalarındadır. `experiment-report.json` hazırlıkta daima `PREPARED_NOT_RUN`, `rights_verified:false`, `experiment_run_blocked:true` ve null metriklerle yazılır. Null, sıfır başarı demek değildir; ölçülmedi demektir. Rights dosyalarının varlığı/hash'i yalnızca kanıt dosyasını öz-beyan edilen kayda bağlar; hukuki izni doğrulamaz. Bu ilk araç sadece crop çiftlerini hazırlar; trusted timed reference manifesti ve engine adapter henüz yoktur. `vtt-qa.py`/`regresyon/gt_gate.py` video ile referans altyazıyı karşılaştırır ama bu image/text export'una doğrudan bağlanmaz.
 
 Bir sonraki değerlendirme uygulaması metrikleri şöyle hesaplamalı ve aynı tanımları kullanmalıdır:
 
@@ -73,7 +79,8 @@ Rapor çalıştırılmadan önce `--max-cer-regression` sabitlenir. Aday, dondur
 ## Kesin durma koşulları
 
 - İnsan accepted/corrected export doğrulanamıyorsa; crop hash/decode, cue ID veya schema hatalıysa: hazırlığı reddet.
-- source/episode grup bilgisi veya kanıtlanabilir uygun lisans/izin yoksa: split ve rapor üretme.
+- source/episode grup bilgisi veya hash'i eşleşen lisans kanıt dosyası yoksa split üretme. Kanıt varlığı hukuki uygunluk sayılmaz; insan rights review tamamlanmamışsa deney çalıştırma.
+- Parent review-pack zinciri doğrulanamıyorsa provenance `self_attested` yazılır ve deney çalıştırma kapısı kapalı kalır.
 - Üçten az bağımsız grup varsa: train/validation/test kurma; değerlendirmeyi yetersiz veri olarak durdur.
 - Trusted, zamanla uyumlu source-language reference yoksa: OCR accuracy, model gain veya regression pass raporlama.
 - Baseline/aday engine, config, device/backend, metrik normalization/alignment veya predeclared gate eksikse: sonuç üretimini reddet.
