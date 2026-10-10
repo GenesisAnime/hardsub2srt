@@ -90,10 +90,17 @@ MAX_BATCH = 100            # tek ekle isteğinin üst sınırı
 MAX_AKTIF_KUYRUK = 2000    # çalışan + bekleyen işlerin üst sınırı
 
 try:
-    from flask import Flask, Response, jsonify, request, send_from_directory
+    from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 except ImportError:
     print("[HATA] Flask kurulu degil. Kurulum: py -3 -m pip install flask")
     sys.exit(2)
+
+try:
+    import ocr_review
+except Exception as _ocr_review_hatasi:
+    ocr_review = None
+    print(f"[ui] UYARI: ocr_review.py yuklenemedi — OCR inceleme kapali: "
+          f"{_ocr_review_hatasi!r}")
 
 # otomatik öğrenme (Kaydet = öğren): sınıflandırıcı ogren.py'de tek kaynaktır;
 # yüklenemezse kayıt çalışmaya devam eder, yalnız öğrenme atlanır
@@ -1405,6 +1412,99 @@ def kok():
     return Response(HTML, mimetype="text/html")
 
 
+@app.get("/ocr-inceleme")
+def ocr_inceleme_sayfasi():
+    if ocr_review is None:
+        return Response("Yerel OCR inceleme modülü yüklenemedi.", status=503)
+    return Response(ocr_review.REVIEW_HTML, mimetype="text/html")
+
+
+def _ocr_hata(exc):
+    if ocr_review is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("OCR review request failed")
+    return jsonify({"hata": "OCR inceleme işlemi tamamlanamadı; günlükte ayrıntı var"}), 500
+
+
+@app.post("/api/ocr-inceleme/ac")
+def api_ocr_inceleme_ac():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        review_id, pack = ocr_review.open_pack(v.get("path"))
+        pack["review_id"] = review_id
+        return jsonify(pack)
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.get("/api/ocr-inceleme/durum")
+def api_ocr_inceleme_durum():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    try:
+        return jsonify(ocr_review.pack_status(request.args.get("review_id", "")))
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.get("/api/ocr-inceleme/<review_id>/crop/<cue_id>")
+def api_ocr_inceleme_crop(review_id, cue_id):
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    try:
+        path, mimetype = ocr_review.image_bytes_path(review_id, cue_id)
+        return send_file(path, mimetype=mimetype, conditional=True, max_age=0)
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.post("/api/ocr-inceleme/karar")
+def api_ocr_inceleme_karar():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        record = ocr_review.append_review(v.get("review_id", ""), v.get("cue_id", ""),
+                                          v.get("status", ""), v.get("correction", ""))
+        return jsonify({"ok": True, "event_id": record["event_id"]})
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.post("/api/ocr-inceleme/geri-al")
+def api_ocr_inceleme_geri_al():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        record = ocr_review.undo_review(v.get("review_id", ""), v.get("cue_id", ""))
+        return jsonify({"ok": True, "event_id": record["event_id"]})
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.post("/api/ocr-inceleme/disari-aktar")
+def api_ocr_inceleme_disari_aktar():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        path, count = ocr_review.export_dataset(v.get("review_id", ""))
+        return jsonify({"ok": True, "path": path.name, "count": count})
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
 @app.get("/api/durum")
 def api_durum():
     with KILIT:
@@ -1698,8 +1798,8 @@ def api_secim():
         return jsonify({"hata": "UI sunucusu kapanıyor; başlatıcıyı yeniden açın."}), 503
     v = request.get_json(force=True, silent=True) or {}
     tur = v.get("tur")
-    if tur not in ("dosya", "klasor"):
-        return jsonify({"hata": "tur 'dosya' veya 'klasor' olmalı"}), 400
+    if tur not in ("dosya", "klasor", "inceleme"):
+        return jsonify({"hata": "tur 'dosya', 'klasor' veya 'inceleme' olmalı"}), 400
 
     powershell = shutil.which("powershell.exe")
     if not powershell:
@@ -1755,7 +1855,8 @@ if ($mode -eq 'dosya') {
   @{ yollar = $paths } | ConvertTo-Json -Compress
 } else {
   $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-  $dialog.Description = 'Video klasörünü seçin'
+  if ($mode -eq 'inceleme') { $dialog.Description = 'Yerel .review-pack klasörünü seçin' }
+  else { $dialog.Description = 'Video klasörünü seçin' }
   $dialog.SelectedPath = $startPath
   $path = ''
   [System.IO.File]::WriteAllText($env:HARDSUB_PICKER_STARTED, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString())
