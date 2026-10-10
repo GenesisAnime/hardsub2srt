@@ -90,6 +90,12 @@ KUYRUK_YANIT = 100         # /api/durum yanıtında dönen iş sayısı
 MAX_BATCH = 100            # tek ekle isteğinin üst sınırı
 MAX_AKTIF_KUYRUK = 2000    # çalışan + bekleyen işlerin üst sınırı
 
+
+def _child_process_env():
+    """Preserve normal settings but never delegate contribution config/secrets."""
+    return {key: value for key, value in os.environ.items()
+            if not key.upper().startswith("H2S_CONTRIB_")}
+
 try:
     from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 except ImportError:
@@ -351,7 +357,7 @@ def is_yurut(isim):
     if limit > 0:
         cmd += ["--limit-seconds", str(limit)]
 
-    ortam = dict(os.environ)
+    ortam = _child_process_env()
     ortam["PYTHONUNBUFFERED"] = "1"
     ortam["PYTHONIOENCODING"] = "utf-8"
 
@@ -483,6 +489,7 @@ def is_yurut(isim):
                  "-o", str(ass_yol)],
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=120, cwd=str(KLASOR),
+                env=_child_process_env(),
             )
             cikti = (r.stdout or "") + (r.stderr or "")
             for ln in cikti.splitlines():
@@ -544,6 +551,7 @@ def vtt_kiyas(isim, srt_yol, video):
              "-o", str(rapor)],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=300, cwd=str(KLASOR),
+            env=_child_process_env(),
         )
         if r.returncode == 0 and rapor.exists():
             j = json.loads(rapor.read_text(encoding="utf-8"))
@@ -1980,7 +1988,7 @@ def api_iptal():
         return jsonify({"hata": "çalışan iş yok"}), 404
     IPTAL_SETI.add(is_id)
     r = subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=_child_process_env())
     log_ekle("uyari", f"İPTAL istendi: taskkill /T /F /PID {pid} → rc={r.returncode} "
                       f"{(r.stdout or r.stderr or '').strip()[:120]}")
     return jsonify({"ok": True, "pid": pid, "is_id": is_id,
@@ -2225,7 +2233,7 @@ if ($mode -eq 'dosya') {
 }
 '''
     encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
-    env = os.environ.copy()
+    env = _child_process_env()
     env["HARDSUB_PICKER_MODE"] = tur
     env["HARDSUB_PICKER_OWNER_HWND"] = str(_foreground_owner_hwnd())
     request_started_epoch_ms = int(time.time() * 1000)
@@ -2311,9 +2319,9 @@ def api_ac():
     yol = str(v.get("yol") or "").strip()
     p = Path(yol)
     if p.is_dir():
-        subprocess.Popen(["explorer", str(p)])
+        subprocess.Popen(["explorer", str(p)], env=_child_process_env())
     elif p.is_file():
-        subprocess.Popen(["explorer", "/select,", str(p)])
+        subprocess.Popen(["explorer", "/select,", str(p)], env=_child_process_env())
     else:
         return jsonify({"hata": f"yol bulunamadı: {yol}"}), 404
     return jsonify({"ok": True})

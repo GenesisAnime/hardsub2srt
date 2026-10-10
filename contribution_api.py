@@ -98,7 +98,7 @@ foreach ($rule in $acl.Access) {
   $rules += [pscustomobject]@{
     sid = $sid
     type = $rule.AccessControlType.ToString()
-    rights = $rule.FileSystemRights.ToString()
+    rights = [int]$rule.FileSystemRights
     inherited = [bool]$rule.IsInherited
   }
 }
@@ -118,7 +118,11 @@ $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Val
 def _acl_snapshot(path: Path) -> dict:
     if os.name != "nt":
         raise RuntimeError("Windows ACL/owner doğrulaması yapılamıyor; fail-closed")
-    env = os.environ.copy()
+    env = {key: value for key, value in os.environ.items()
+           if not key.upper().startswith("H2S_CONTRIB_")}
+    for name in ("H2S_CONTRIB_SERVICE_ACCOUNT", "H2S_CONTRIB_PURGE_ACCOUNT"):
+        if name in os.environ:
+            env[name] = os.environ[name]
     env["H2S_ACL_TARGET"] = str(path)
     try:
         result = subprocess.run(
@@ -153,13 +157,20 @@ def _check_acl(path: Path, *, is_directory: bool, required_owners: set[str],
             raise RuntimeError("DB ACL içinde beklenmeyen principal veya deny ACE var")
         if is_directory and rule.get("inherited"):
             raise RuntimeError("DB dizini yalnız açık ACL girdileri kullanmalı")
-        rights = rule.get("rights", "")
-        access.setdefault(sid, []).append(rights)
-    def has(sid, required):
-        return any(required in rights or "FullControl" in rights for rights in access.get(sid, []))
-    if not has(service_sid, "Modify") or not has(purge_sid, "Modify"):
+        rights = rule.get("rights")
+        if not isinstance(rights, int) or isinstance(rights, bool) or rights < 0:
+            raise RuntimeError("ACL rights mask okunamadı; fail-closed")
+        access[sid] = access.get(sid, 0) | rights
+    # FileSystemRights enum masks: accept exactly Modify (and its optional
+    # Synchronize bit); service/purge FullControl must not satisfy Modify.
+    modify_mask = 0x301BF
+    sync_mask = 0x100000
+    full_mask = 0x1F01FF
+    exact_modify = {modify_mask, modify_mask | sync_mask}
+    exact_full = {full_mask, full_mask | sync_mask}
+    if access.get(service_sid) not in exact_modify or access.get(purge_sid) not in exact_modify:
         raise RuntimeError("Servis ve purge hesaplarına DB için Modify ACL gerekli")
-    if not has(system_sid, "FullControl") or not has(admin_sid, "FullControl"):
+    if access.get(system_sid) not in exact_full or access.get(admin_sid) not in exact_full:
         raise RuntimeError("SYSTEM ve Administrators için FullControl ACL gerekli")
     if require_current and snap.get("current") != require_current:
         raise RuntimeError("API WSGI süreci beklenen dedicated service account altında çalışmıyor")
