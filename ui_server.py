@@ -1420,7 +1420,10 @@ def ocr_inceleme_sayfasi():
 
 
 def _ocr_hata(exc):
-    return jsonify({"hata": str(exc)}), getattr(exc, "status", 400)
+    if ocr_review is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("OCR review request failed")
+    return jsonify({"hata": "OCR inceleme işlemi tamamlanamadı; günlükte ayrıntı var"}), 500
 
 
 @app.post("/api/ocr-inceleme/ac")
