@@ -1,6 +1,6 @@
 # Yerel istemci, API sınırı ve mimari yol haritası
 
-Bu belge planı anlatır. VDS API, telemetry gönderimi, GitHub Pages arayüzü ve merkezi kullanıcı hesabı bu kod tabanında uygulanmış özellikler değildir.
+Bu belge mevcut yerel istemciyi, isteğe bağlı katkı API prototipini ve dağıtım öncesi kalan işleri ayırır. VDS API kodu vardır; **VDS'ye dağıtılmamıştır**. Telemetry varsayılan kapalıdır. GitHub Pages OCR çalıştırmaz ve bu dalda Pages sitesi/merkezi hesap uygulanmamıştır.
 
 ## Bugünkü çalışma şekli
 
@@ -10,7 +10,7 @@ Bu belge planı anlatır. VDS API, telemetry gönderimi, GitHub Pages arayüzü 
 - Kuyruk bellektedir: tek API isteği en fazla 100 girdi; UI bu boyutta parçalara böler; toplam bekleyen+çalışan tavanı 2.000. `/api/durum` son 100 kayıtla birlikte çalışan işi ayrıca verir. Sunucu yeniden başlatılırsa kuyruk kalıcılaştırılmaz.
 - Her UI işi seçilen çıktı klasörü altında çakışmayan yeni `runs/video-<ad>/<timestamp>_<id>/` yoluna yazılır. CLI açık `-o` hedefini kullanır.
 - Araç stats/run metadata, altyazı, istenirse QA görüntüleri, ASS veya referans VTT kıyas raporu üretebilir. Bazı metadata yerel video adı/mtime/boyut/kısmi hash içerir. Bu veriler kullanıcı dosyalarının kendisi değildir, fakat paylaşılmadan önce gözden geçirilmelidir.
-- Bugünkü sistemde sayısal kullanıcı telemetrisi yükleyen API veya arka uç şeması yoktur. `README.md` ve `CONTRIBUTING.md` gelecekteki katkı kurallarını anlatır; kendiliğinden veri gönderimi değildir.
+- İsteğe bağlı türetilmiş metrik sözleşmesi `schemas/contribution-metrics-v1.schema.json`, istemci allowlist'i `contribution_client.py`, ayrı Flask WSGI alıcısı `contribution_api.py` içindedir. UI `/katki` sayfası önizleme ve ayrı gönderim onayı sağlar. `H2S_CONTRIB_URL` (HTTPS) veya token yoksa gönderim kapalıdır. Uzak sunucuya payload gönderimi bu geliştirmede yapılmadı.
 
 ## Önerilen dağıtım sınırı
 
@@ -20,26 +20,26 @@ GitHub Pages yalnız statik HTML/CSS/JavaScript dosyaları sunar; Python/FFmpeg/
 2. **Yerel worker — işleme.** Mevcut Python motoru yerel kurulum/portable paket içinde kalır; GPU seçimi ve `--cpu` seçeneği korunur. Browser UI ile bağ için localhost üzerinde dar yetkili bir yerel servis veya mevcut Flask UI kullanılabilir. CORS, Origin kontrolü, CSRF benzeri yerel istek riski ve sadece loopback bind gözden geçirilmelidir.
 3. **VDS API — yalnız opsiyonel katkı alımı.** Kimlik doğrulamalı, rate limitli bir endpoint kullanıcı onayından sonra türetilmiş ve asgariye indirilmiş ölçüm alabilir. İş kuyruğu, sürüm uyumluluğu, veri saklama/silme politikası ve reddedilen girdilerin davranışı API tasarımının parçası olmalıdır.
 
-## Telemetry paylaşım tasarımı (gelecek; henüz yok)
+## Telemetry paylaşım tasarımı (kod prototipi hazır; VDS yayını bekliyor)
 
 İlk paylaşım biçimi doğrudan otomatik yükleme yerine şu özellikleri olan kullanıcı tarafından başlatılan bir “önizle, dışa aktar, onayla, gönder” akışı olmalı:
 
-- **Kapsam görünür:** araca/model/OS sürümüne ilişkin bilgiler, OCR cihaz sınıfı (`cuda`, `cpu` gibi), parametrelerin gizlilikten arındırılmış alt kümesi, toplam süre ve ölçülebilir aşama süreleri, taranan kare/blok sayıları, güven/low-conf oranları, hata sınıfı ve rapor şeması sürümü.
+- **Kapsam görünür:** v1 yalnız gönderim başına UUID/zamanı, toplam süre, taranan kare/cue/düşük güven sayıları ve oranı, `cuda`/`cpu`/`unknown` aygıt sınıfı, `easyocr`/`rapidocr`/`unknown` OCR motor sınıfı, konuşma süresi ve şema sürümünü alır. Kullanılamayan alan uydurulmaz; video adı, model sürümü, OS, OCR parametreleri ve aşama süreleri şu an gönderilmez.
 - **İçerik hariç:** video, kare, ham SRT/VTT, replik veya kelime listesi, mutlak dosya yolu, kullanıcı adı, video hash'i ve rastgele tanımlanabilir tam video adı gönderilmez. CER ancak kullanıcının kendi güvenilir referansı yerelde seçilip, yalnız sayısal özet üretilerek ve bu alan ayrıca onaylanarak eklenebilir.
-- **Açık rıza:** gönderim öncesinde alanlar, amaç, saklama süresi ve silme yolu gösterilir. Reddetme yerel OCR ve uygulama kullanımını etkilemez. İlk sürümde anonim telemetri için uzun ömürlü cihaz ID'si yerine gönderim başına rastgele ID kullanılır.
+- **Açık rıza:** `/katki` önizlemesi lokal çalışır; gönderim ayrı checkbox + düğme ile yapılır. Endpoint/token yokken sıfır istek yapılır. Saklama politikası ekranda sunucu tarafı politika olarak açıklanır; gerçek gün sayısı işletmeci tarafından `H2S_CONTRIB_RETENTION_DAYS` ile seçilmelidir. Bu değer boş/placeholder ise API başlamaz.
 - **Güvenlik:** HTTPS, kısa ömürlü/token başına scope, replay/idempotency anahtarı, boyut ve oran sınırı, JSON şema doğrulaması, kötü amaçlı içerik kontrolü, gizli anahtarı statik sitede tutmama. CORS kimlik doğrulama yerine geçmez.
-- **MVP veri yolu:** yerel istemci tek bir özet JSON oluşturur; kullanıcı preview ekranından gönderir; API ham dosya kabul etmez ve sadece şemaya uygun alanları saklar. Ayrı bir veri sözleşmesi ve saklama politikası olmadan endpoint yayımlanmaz.
+- **MVP veri yolu:** sürümlü tam allowlist JSON, önizleme, açık gönderim, HTTPS-only/redirectsiz istemci ve SQLite'ye yalnız izinli alanları kaydeden ayrı Flask WSGI API kodlandı. API bearer token özetlerini saklar, 16 KiB/rate sınırı uygular, idempotency key/replay dedupe yapar, aynı token'a scoped silme sağlar ve retention purge CLI sunar. VDS/domain/TLS/servis hesabı/kalıcı disk/token dağıtımı yapılmadı; endpoint yayımlanmadı.
 
 ## Aşamalar ve riskler
 
-| Aşama | Kapsam | Başarı ölçütü | Risk |
+| Aşama | Kapsam/durum | Başarı ölçütü | Kalan risk/iş |
 |---|---|---|---|
 | 0 — istemciyi dağıtılabilir yap | Python/CUDA/FFmpeg kurulum matrisini belgelemek; bağımlılıkları kilitlemek/işletim sistemi bazında kurulum doğrulamak; portable/installer denemesi | temiz Windows VM'de CPU; destekli makinede CUDA; kullanıcı videosu çıkışını koruma | PyTorch/CUDA paket boyutu, driver uyumu, model indirme ve lisans koşulları |
-| 1 — sürüm/feedback şeması | paylaşılacak alanlar, consent UX, retention, threat model ve API sözleşmesi | örnek JSON'da kaynak yolu/altyazı/video kimliği yok; kullanıcı açık onayı olmadan network çağrısı yok | yeniden tanımlanabilir metadata ve anahtar kötüye kullanımı |
-| 2 — opt-in API pilotu | VDS'de yalnız türetilmiş JSON kabulü; auth, rate-limit, saklama/silme, gözlemlenebilirlik | test fixture ile schema ve privacy doğrulaması; kullanıcı kapatınca sıfır çağrı | kötüye kullanım, auth, maliyet, kişisel veri yükümlülükleri |
-| 3 — dağıtım sitesi | Pages üzerinde statik sürüm/kurulum/indirilebilir paket; API aynı origin varsayılmaz | HTTPS, checksum/signature, CORS ve release provenance | supply chain, tarayıcıda saklanan sırlar, yanlış release |
+| 1 — sürüm/feedback şeması | **Yerel prototip kodlandı:** strict v1 schema, allowlist/redaction, preview ve açık onay; CER varsayılan dışarıda ve ayrı consent gerektirir | Unknown fields/raw content reddi; env yokken UI send disabled; preview ağsız | Uçtan uca tarayıcı kabul testi ve privacy review henüz yapılmadı |
+| 2 — opt-in API pilotu | **API kodu hazır, pilot dağıtımı yapılmadı:** bearer token hash, rate/size limits, replay dedupe, token-scoped delete, explicit retention purge, loopback WSGI app | VDS'de TLS, schema, deletion, retention ve privacy ölçümleri | Domain/TLS, Windows service account, DB backup/ACL, retention karar ve deployment gerekli |
+| 3 — dağıtım sitesi | **Uygulanmadı.** Bu dal API/yerel client prototipiyle sınırlı | Pages release/setup ve paket provenance | Ayrı website/release işi gerekli; statik site secret taşıyamaz |
 
-**Önerilen ilk adım:** mevcut Python motorunu koruyup temiz Windows kurulumunu/portable dağıtımı ölçmek; ondan sonra kullanıcı onaylı ve ham içerik almayan telemetry tasarımını prototiplemek. VDS OCR veya otomatik SRT/video yüklemesi bu mimari için gerekli değildir.
+**Sıradaki adım:** VDS işletim sistemi ve DNS/TLS erişimini doğrulayın; retention süresini açıkça kararlaştırın; sonra Windows servis hesabı, kalıcı SQLite yolu, Caddy/IIS TLS proxy, firewall, token ve scheduled purge kurun. Bu bilgiler ve dış erişim olmadan canlı deploy/payload gönderimi yapılmaz. VDS OCR veya otomatik SRT/video yüklemesi bu mimari için gerekli değildir.
 
 ## Birincil kaynaklar
 

@@ -53,11 +53,14 @@ The OCR engine extracts visible subtitles; it does not translate them by itself.
 - Watch queue counts and per-job errors. Inspect the job log and run folder for a failed job. Restarting the server does not restore pending jobs.
 - Model downloads and GPU/PyTorch package sizes vary by internet connection, Python version, and driver.
 
-## Privacy and future work
+## Privacy and optional metrics contribution
 
-Processing is local by default. Central telemetry, a VDS API, GitHub Pages OCR, and automatic user-file uploads are **not implemented** in this release. Any future measurement-sharing feature should require explicit user choice and a reviewable submission summary; video, raw SRT, full subtitle sentences, and personal paths should not be uploaded by default. See:
+OCR and AI review remain local. There are no GPT/DeepSeek API calls. An optional contribution API prototype is included, but **it has not been deployed to the VDS** and no remote submission has been made. The local `/katki` page first builds a network-free preview for a completed run; only its separate consent checkbox and **Send** click starts an HTTPS request. Without URL, token, and retention-day configuration, sending is disabled; the displayed retention days must match the API policy. The v1 JSON contains only numeric timing/frame/cue/low-confidence summaries and OCR device/engine classes. Video, images, SRT/VTT/text, filenames/paths, usernames, hashes, and persistent device IDs are not accepted. CER is disabled in the UI; the API contract requires a trusted local VTT and separate CER consent. The API refuses to start until an operator explicitly configures a retention period.
+
+See [the optional contribution API and VDS preparation](docs/CONTRIBUTION-API.md) for deployment steps, token lifecycle, retention/deletion, and TLS proxy boundaries. Live deployment needs a real domain/TLS setup, Windows service account, persistent backed-up storage, firewall rules, and a retention decision. GitHub Pages does not run OCR or host this API. See also:
 
 - [Local client and architecture roadmap](docs/LOCAL-ARCHITECTURE-ROADMAP.md)
+- [Optional contribution API and VDS preparation](docs/CONTRIBUTION-API.md)
 - [Browser OCR technical plan](docs/BROWSER-OCR-PORT-PLAN.md)
 - [OCR and translation learning-system plan](docs/LEARNING-SYSTEM-PLAN.md)
 - [Phase 0 source-backed baseline](docs/LEARNING-SYSTEM-BASELINE.md)
@@ -70,6 +73,8 @@ Processing is local by default. Central telemetry, a VDS API, GitHub Pages OCR, 
 |---|---|
 | `hardsub2srt.py` | CLI extraction/OCR engine |
 | `ui_server.py` | localhost Flask UI, job queue, local subprocesses |
+| `contribution_client.py`, `contribution_api.py` | Opt-in, consent-gated numeric contribution client and WSGI API |
+| `schemas/contribution-metrics-v1.schema.json` | Strict v1 contribution payload contract |
 | `srt_format.py` | SRT timestamp formatting helpers |
 | `cikar.bat`, `arayuz.bat`, `toplu.bat` | Windows launchers |
 | `srt2ass.py` | SRT-to-ASS conversion |

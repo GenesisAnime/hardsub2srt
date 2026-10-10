@@ -1,0 +1,13 @@
+<!-- WinSW template. Copy/rename outside the repository and replace every placeholder. -->
+<service>
+  <id>hardsub-contribution-api</id>
+  <name>hardsub2srt Contribution API</name>
+  <description>Optional minimized OCR metrics API; loopback only.</description>
+  <executable>C:\Program Files\Python312\Scripts\waitress-serve.exe</executable>
+  <arguments>--listen=127.0.0.1:8787 contribution_api:app</arguments>
+  <workingdirectory>__DEPLOYED_REPOSITORY_DIRECTORY__</workingdirectory>
+  <env name="PYTHONPATH" value="__DEPLOYED_REPOSITORY_DIRECTORY__" />
+  <env name="H2S_CONTRIB_DB" value="__ABSOLUTE_DATA_DIRECTORY_OUTSIDE_REPOSITORY__\contributions.sqlite3" />
+  <env name="H2S_CONTRIB_RETENTION_DAYS" value="__OPERATOR_MUST_CHOOSE_NUMERIC_DAYS__" />
+  <log mode="none" />
+</service>
