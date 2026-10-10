@@ -12,10 +12,11 @@
       "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
       "model_format": {"enum": ["onnx", "safetensors", "torch-state-dict"]}
     }},
-    "provenance": {"type": "object", "additionalProperties": false, "required": ["source_commit", "training_recipe_id", "dataset_manifest_sha256", "training_engine"], "properties": {
+    "provenance": {"type": "object", "additionalProperties": false, "required": ["source_commit", "training_recipe_id", "dataset_manifest_sha256", "dataset_metadata_sha256", "training_engine"], "properties": {
       "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
       "training_recipe_id": {"type": "string", "minLength": 1},
       "dataset_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "dataset_metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
       "training_engine": {"type": "string", "minLength": 1}
     }},
     "evaluation": {"type": "object", "additionalProperties": false, "required": ["report_path", "report_sha256", "phase5_status", "release_gate"], "properties": {

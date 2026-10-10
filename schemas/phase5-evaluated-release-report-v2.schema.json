@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/phase5-evaluated-release-report-v2.schema.json",
+  "title": "Phase 5 evaluated OCR release report v2",
+  "description": "Future contract only. Current ocr_experiment.py emits v1 PREPARED_NOT_RUN and cannot produce this report.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "experiment_id", "dataset", "provenance", "data_policy", "experiment", "metrics", "stop_gate", "candidate", "release_gate"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "status": {"const": "EVALUATED"},
+    "experiment_id": {"type": "string", "minLength": 1},
+    "dataset": {"type": "object", "additionalProperties": false, "required": ["manifest_sha256", "metadata_sha256"], "properties": {
+      "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }},
+    "provenance": {"type": "object", "additionalProperties": false, "required": ["source_commit", "training_recipe_id", "training_engine", "model_files", "model_bundle_sha256"], "properties": {
+      "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+      "training_recipe_id": {"type": "string", "minLength": 1},
+      "training_engine": {"type": "string", "minLength": 1},
+      "model_files": {"$ref": "model-release-manifest-v1.schema.json#/properties/model_files"},
+      "model_bundle_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }},
+    "data_policy": {"type": "object", "additionalProperties": false, "required": ["rights_verified", "human_rights_review_complete", "training_performed", "local_only"], "properties": {
+      "rights_verified": {"const": true}, "human_rights_review_complete": {"const": true},
+      "training_performed": {"const": true}, "local_only": {"const": true}
+    }},
+    "experiment": {"type": "object", "additionalProperties": false, "required": ["baseline_id", "candidate_id"], "properties": {
+      "baseline_id": {"type": "string", "minLength": 1}, "candidate_id": {"type": "string", "minLength": 1}
+    }},
+    "metrics": {"type": "object", "additionalProperties": false, "required": ["ocr"], "properties": {
+      "ocr": {"type": "object", "additionalProperties": false, "required": ["cer", "wer", "exact_match_cue_rate", "cue_precision", "cue_recall", "timing_start_abs_error_ms", "timing_end_abs_error_ms", "coverage", "per_group"], "properties": {
+        "cer": {"type": "number", "minimum": 0, "maximum": 1}, "wer": {"type": "number", "minimum": 0, "maximum": 1},
+        "exact_match_cue_rate": {"type": "number", "minimum": 0, "maximum": 1}, "cue_precision": {"type": "number", "minimum": 0, "maximum": 1},
+        "cue_recall": {"type": "number", "minimum": 0, "maximum": 1}, "timing_start_abs_error_ms": {"type": "number", "minimum": 0},
+        "timing_end_abs_error_ms": {"type": "number", "minimum": 0}, "coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "per_group": {"type": "array", "minItems": 1}
+      }}
+    }},
+    "candidate": {"type": "object", "additionalProperties": false, "required": ["id", "version", "source_commit", "training_recipe_id", "training_engine", "model_files", "model_bundle_sha256"], "properties": {
+      "id": {"type": "string", "minLength": 1}, "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+      "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+      "training_recipe_id": {"type": "string", "minLength": 1}, "training_engine": {"type": "string", "minLength": 1},
+      "model_files": {"$ref": "model-release-manifest-v1.schema.json#/properties/model_files"},
+      "model_bundle_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }},
+    "stop_gate": {"type": "object", "additionalProperties": false, "required": ["experiment_run_blocked", "human_provenance_verified", "human_rights_review_complete", "rights_verified", "metrics_claimable", "trusted_reference_required"], "properties": {
+      "experiment_run_blocked": {"const": false}, "human_provenance_verified": {"const": true},
+      "human_rights_review_complete": {"const": true}, "rights_verified": {"const": true},
+      "metrics_claimable": {"const": true}, "trusted_reference_required": {"const": true}
+    }},
+    "release_gate": {"type": "object", "additionalProperties": false, "required": ["status", "criteria_predeclared", "no_regressions", "baseline_candidate_same_conditions", "frozen_test_split_sha256", "trusted_reference_sha256", "coverage_passed"], "properties": {
+      "status": {"const": "PASS"}, "criteria_predeclared": {"const": true}, "no_regressions": {"const": true},
+      "baseline_candidate_same_conditions": {"const": true}, "coverage_passed": {"const": true},
+      "frozen_test_split_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "trusted_reference_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }}
+  }
+}
