@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-experiment-report-v1.schema.json",
+  "title": "Local OCR experiment report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "experiment_id", "status", "dataset", "provenance", "data_policy", "experiment", "metrics", "stop_gate"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "experiment_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["PREPARED_NOT_RUN", "EVALUATED", "BLOCKED"]},
+    "dataset": {
+      "type": "object", "required": ["manifest_sha256", "metadata_sha256", "rows", "groups", "row_split_counts", "group_split_counts"],
+      "properties": {
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "rows": {"type": "integer", "minimum": 1}, "groups": {"type": "integer", "minimum": 3},
+        "row_split_counts": {"type": "object", "required": ["train", "validation", "test"], "properties": {
+          "train": {"type": "integer", "minimum": 1}, "validation": {"type": "integer", "minimum": 1}, "test": {"type": "integer", "minimum": 1}
+        }},
+        "group_split_counts": {"type": "object", "required": ["train", "validation", "test"], "properties": {
+          "train": {"type": "integer", "minimum": 1}, "validation": {"type": "integer", "minimum": 1}, "test": {"type": "integer", "minimum": 1}
+        }}
+      }
+    },
+    "provenance": {"type": "object", "required": ["status", "active_rows_verified"], "properties": {
+      "status": {"enum": ["verified_against_parent_review_pack", "self_attested"]},
+      "active_rows_verified": {"type": "integer", "minimum": 0},
+      "reason": {"type": "string"}, "review_manifest_sha256": {"type": "string"},
+      "review_srt_sha256": {"type": "string"}, "review_events_sha256": {"type": "string"}
+    }},
+    "data_policy": {"type": "object", "required": ["labels", "license_gate", "rights_verified", "human_rights_review_complete", "local_only", "training_performed"], "properties": {
+      "labels": {"enum": ["active_local_review_events_linked", "self_attested_unverified"]},
+      "license_gate": {"const": "evidence_present_self_attested"}, "rights_verified": {"const": false},
+      "human_rights_review_complete": {"type": "boolean"},
+      "local_only": {"const": true}, "training_performed": {"const": false}
+    }},
+    "experiment": {"type": "object", "required": ["baseline_id", "candidate_id", "device_backend_config", "normalization", "predeclared_gate"], "properties": {
+      "baseline_id": {"type": "string"}, "candidate_id": {"type": "string"},
+      "device_backend_config": {"type": ["object", "null"]}, "normalization": {"type": "string"},
+      "predeclared_gate": {"type": "object", "required": ["max_candidate_corpus_cer_increase", "timing_tolerance_ms", "require_no_test_group_regression"], "properties": {
+        "max_candidate_corpus_cer_increase": {"type": "number", "minimum": 0},
+        "timing_tolerance_ms": {"type": ["integer", "null"], "minimum": 0},
+        "require_no_test_group_regression": {"type": "boolean"}
+      }}
+    }},
+    "metrics": {"type": "object", "required": ["ocr", "translation"], "properties": {
+      "ocr": {"type": "object", "required": ["cer", "wer", "exact_match_cue_rate", "cue_precision", "cue_recall", "timing_start_abs_error_ms", "timing_end_abs_error_ms", "timing_within_tolerance_rate", "coverage", "per_group", "micro", "macro"], "properties": {
+        "cer": {"type": ["number", "null"]}, "wer": {"type": ["number", "null"]},
+        "exact_match_cue_rate": {"type": ["number", "null"]}, "cue_precision": {"type": ["number", "null"]},
+        "cue_recall": {"type": ["number", "null"]}, "timing_start_abs_error_ms": {"type": ["number", "null"]},
+        "timing_end_abs_error_ms": {"type": ["number", "null"]}, "timing_within_tolerance_rate": {"type": ["number", "null"]},
+        "coverage": {"type": ["number", "null"]}, "per_group": {"type": "array"},
+        "micro": {"type": ["object", "null"]}, "macro": {"type": ["object", "null"]}
+      }},
+      "translation": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string"}}}
+    }},
+    "stop_gate": {"type": "object", "required": ["must_have_train_validation_test", "trusted_reference_required", "engine_and_config_required", "no_regression_gate_predeclared", "human_provenance_verified", "human_rights_review_required", "human_rights_review_complete", "rights_verified", "experiment_run_blocked", "metrics_claimable", "reason"], "properties": {
+      "must_have_train_validation_test": {"type": "boolean"}, "trusted_reference_required": {"type": "boolean"},
+      "engine_and_config_required": {"type": "boolean"}, "no_regression_gate_predeclared": {"type": "boolean"},
+      "human_provenance_verified": {"type": "boolean"}, "human_rights_review_required": {"const": true},
+      "human_rights_review_complete": {"type": "boolean"}, "rights_verified": {"const": false},
+      "experiment_run_blocked": {"const": true},
+      "metrics_claimable": {"type": "boolean"}, "reason": {"type": "string"}
+    }}
+  }
+}

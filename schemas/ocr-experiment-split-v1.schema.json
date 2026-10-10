@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-experiment-split-v1.schema.json",
+  "title": "Local OCR experiment group split v1",
+  "type": "object",
+  "required": ["schema_version", "dataset_manifest_sha256", "metadata_sha256", "seed", "algorithm", "group_split", "rows", "invariants"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "dataset_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "seed": {"type": "string", "minLength": 1},
+    "algorithm": {"type": "string"},
+    "group_split": {"type": "object", "additionalProperties": {"enum": ["train", "validation", "test"]}},
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cue_id", "group_id", "split", "source_id", "episode_id", "license", "crop_path", "crop_sha256_local", "ocr_confidence", "width", "height", "review_event_id"],
+        "properties": {
+          "cue_id": {"type": "string"}, "group_id": {"type": "string"},
+          "split": {"enum": ["train", "validation", "test"]},
+          "source_id": {"type": "string"}, "episode_id": {"type": "string"},
+          "license": {"type": "object"}, "crop_path": {"type": "string"},
+          "crop_sha256_local": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "ocr_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "width": {"type": "integer", "minimum": 1}, "height": {"type": "integer", "minimum": 1},
+          "review_event_id": {"type": "string"}
+        }
+      }
+    },
+    "invariants": {"type": "object", "required": ["all_rows_assigned_once", "group_leakage", "phase2_provenance_verified", "rights_evidence_present_self_attested", "rights_verified", "human_rights_review_complete"]}
+  }
+}
