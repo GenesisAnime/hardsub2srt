@@ -12,6 +12,7 @@ import threading
 import uuid
 import cv2
 import numpy as np
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -23,9 +24,12 @@ MAX_CROP_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_CROP_BYTES = 128 * 1024 * 1024
 MAX_CROP_DIMENSION = 1280
 MAX_EVENTS_BYTES = 64 * 1024 * 1024
+MAX_EVENT_RECORDS = 50_000
+MAX_EVENT_LINE_BYTES = 256 * 1024
 MAX_TEXT_CHARS = 20_000
 _LOCK = threading.RLock()
-_PACKS: dict[str, Path] = {}
+MAX_REVIEW_SESSIONS = 8
+_PACKS = OrderedDict()
 
 
 class ReviewError(ValueError):
@@ -44,6 +48,19 @@ def _contained(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _stat_signature(path: Path) -> tuple[int, int, int] | None:
+    try:
+        stat = path.stat()
+        return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+    except OSError:
+        return None
+
+
+def _source_signatures(info: dict) -> tuple:
+    return (_stat_signature(info["pack"] / "manifest.json"),
+            _stat_signature(info["srt_path"]))
 
 
 def _manifest_bytes(pack: Path) -> bytes:
@@ -189,7 +206,7 @@ def _validated_pack(pack: Path) -> dict:
 
     seen = set()
     normalized = []
-    crop_path_cache = {}
+    crop_sizes = {}
     total_crop_bytes = 0
     for index, cue in enumerate(cues):
         if not isinstance(cue, dict):
@@ -233,26 +250,23 @@ def _validated_pack(pack: Path) -> dict:
                                 crop_path.suffix.lower() != ".jpg"):
                             crop_ok = False
                         else:
-                            cache_key = (str(crop_path), crop_hash)
-                            if cache_key in crop_path_cache:
-                                crop_ok = crop_path_cache[cache_key]
+                            size = crop_path.stat().st_size
+                            if size < 1 or size > MAX_CROP_BYTES:
+                                crop_ok = False
+                            elif str(crop_path) in crop_sizes:
+                                crop_ok = crop_sizes[str(crop_path)] == size
+                            elif total_crop_bytes + size > MAX_TOTAL_CROP_BYTES:
+                                crop_ok = False
                             else:
-                                size = crop_path.stat().st_size
-                                if (size < 1 or size > MAX_CROP_BYTES or
-                                        total_crop_bytes + size > MAX_TOTAL_CROP_BYTES):
-                                    crop_ok = False
-                                else:
-                                    data = _read_bounded(crop_path, MAX_CROP_BYTES, "Altyazı kırpımı")
-                                    crop_ok = (_sha256(data) == crop_hash and
-                                               _validate_crop_bytes(data, cue))
-                                    if crop_ok:
-                                        total_crop_bytes += size
-                                crop_path_cache[cache_key] = crop_ok
+                                crop_sizes[str(crop_path)] = size
+                                total_crop_bytes += size
                     except (OSError, RuntimeError, ReviewError):
                         crop_ok = False
         normalized.append({**cue, "crop_valid": bool(crop_ok and cue_mapping_ok),
                            "crop_abs": crop_path if crop_ok else None})
-    return {"pack": pack, "manifest": manifest, "manifest_sha256": _sha256(mbytes),
+    return {"pack": pack, "srt_path": srt_path,
+            "source_signatures": None,
+            "manifest": manifest, "manifest_sha256": _sha256(mbytes),
             "srt_sha256": srt_digest, "cues": normalized,
             "events_path": pack / "review-events.jsonl"}
 
@@ -262,34 +276,76 @@ def open_pack(path: str) -> tuple[str, dict]:
         raise ReviewError("Paket yolu geçersiz", 400)
     info = _validated_pack(Path(path).expanduser())
     review_id = uuid.uuid4().hex
-    _PACKS[review_id] = info["pack"]
+    info["review_id"] = review_id
+    info["source_signatures"] = _source_signatures(info)
+    with _LOCK:
+        _PACKS[review_id] = {"path": info["pack"], "info": info}
+        _PACKS.move_to_end(review_id)
+        while len(_PACKS) > MAX_REVIEW_SESSIONS:
+            _PACKS.popitem(last=False)
     return review_id, public_pack(info)
 
 
-def _get_pack(review_id: str) -> dict:
-    pack = _PACKS.get(review_id)
-    if not pack:
-        raise ReviewError("İnceleme oturumu bulunamadı; paketi yeniden açın", 404)
-    return _validated_pack(pack)
+def _get_pack(review_id: str, force_sources: bool = False) -> dict:
+    with _LOCK:
+        session = _PACKS.get(review_id)
+        if not session:
+            raise ReviewError("İnceleme oturumu bulunamadı; paketi yeniden açın", 404)
+        _PACKS.move_to_end(review_id)
+        info = session["info"]
+        signatures = _source_signatures(info)
+        if signatures != info["source_signatures"]:
+            raise ReviewError("Manifest veya SRT paketi açtıktan sonra değişti; paketi yeniden açın", 409)
+        if force_sources:
+            manifest_path = (info["pack"] / "manifest.json").resolve(strict=True)
+            srt_path = info["srt_path"].resolve(strict=True)
+            if (not _contained(manifest_path, info["pack"]) or
+                    not _contained(srt_path, info["pack"])):
+                raise ReviewError("Manifest veya SRT paket dışına yönleniyor", 403)
+            manifest_bytes = _read_bounded(manifest_path, MAX_MANIFEST_BYTES, "Manifest")
+            srt_bytes = _read_bounded(srt_path, MAX_SRT_BYTES, "SRT")
+            if (_sha256(manifest_bytes) != info["manifest_sha256"] or
+                    _sha256(srt_bytes) != info["srt_sha256"]):
+                raise ReviewError("Manifest veya SRT içeriği değişti; paketi yeniden açın", 409)
+        return info
 
 
 def _events(info: dict) -> tuple[list[dict], list[str]]:
     path = info["events_path"]
     if not path.exists():
+        info["event_record_count"] = 0
+        info["event_signature"] = None
         return [], []
     if path.is_symlink() or not _contained(path.resolve(), info["pack"]):
         raise ReviewError("İnceleme günlüğü paket dışına yönleniyor", 403)
-    with _LOCK:
-        data = _read_bounded(path, MAX_EVENTS_BYTES, "İnceleme günlüğü")
     events, warnings = [], []
-    for number, line in enumerate(data.splitlines(), 1):
-        try:
-            event = json.loads(line.decode("utf-8"))
-            if not isinstance(event, dict):
-                raise ValueError
-            events.append(event)
-        except (UnicodeError, json.JSONDecodeError, ValueError):
-            warnings.append(f"{number}. satır bozuk; dışa aktarmada yok sayıldı")
+    with _LOCK:
+        if path.stat().st_size > MAX_EVENTS_BYTES:
+            raise ReviewError("İnceleme günlüğü 64 MiB sınırını aşıyor", 413)
+        with path.open("rb") as stream:
+            number = 0
+            while True:
+                line = stream.readline(MAX_EVENT_LINE_BYTES + 1)
+                if not line:
+                    break
+                number += 1
+                if number > MAX_EVENT_RECORDS:
+                    warnings.append("50.000 olay sınırı aşıldı; sonraki kayıtlar okunmadı")
+                    break
+                if len(line) > MAX_EVENT_LINE_BYTES:
+                    warnings.append(f"{number}. satır boyut sınırını aştı; dışlandı")
+                    while line and not line.endswith(b"\n"):
+                        line = stream.readline(MAX_EVENT_LINE_BYTES + 1)
+                    continue
+                try:
+                    event = json.loads(line.decode("utf-8"))
+                    if not isinstance(event, dict):
+                        raise ValueError
+                    events.append(event)
+                except (UnicodeError, json.JSONDecodeError, ValueError):
+                    warnings.append(f"{number}. satır bozuk; dışa aktarmada yok sayıldı")
+    info["event_record_count"] = number
+    info["event_signature"] = _stat_signature(path)
     return events, warnings
 
 
@@ -331,7 +387,16 @@ def _event_schema(event: dict) -> bool:
     return False
 
 
-def _active(info: dict) -> tuple[dict[str, dict], list[str]]:
+def _active(info: dict, force: bool = False) -> tuple[dict[str, dict], list[str]]:
+    with _LOCK:
+        return _active_locked(info, force)
+
+
+def _active_locked(info: dict, force: bool = False) -> tuple[dict[str, dict], list[str]]:
+    signature = _stat_signature(info["events_path"])
+    cached = info.get("active_cache")
+    if not force and cached and signature == cached["signature"]:
+        return cached["active"], cached["warnings"]
     events, warnings = _events(info)
     cue_by_id = {c["cue_id"]: c for c in info["cues"]}
     active: dict[str, dict] = {}
@@ -377,6 +442,8 @@ def _active(info: dict) -> tuple[dict[str, dict], list[str]]:
             review_ids.add(event_id)
         else:
             warnings.append("şeması veya görseli geçersiz olay dışlandı")
+    info["active_cache"] = {"signature": _stat_signature(info["events_path"]),
+                             "active": active, "warnings": warnings}
     return active, warnings
 
 
@@ -404,20 +471,49 @@ def pack_status(review_id: str) -> dict:
     return result
 
 
+def _verify_crop(info: dict, cue: dict) -> tuple[Path, int] | None:
+    if not cue.get("crop_valid"):
+        return None
+    rel = cue.get("crop_path")
+    if not isinstance(rel, str):
+        return None
+    parsed = PurePosixPath(rel)
+    if parsed.is_absolute() or len(parsed.parts) != 2 or parsed.parts[0] != "crops" or ".." in parsed.parts:
+        return None
+    try:
+        path = (info["pack"] / Path(*parsed.parts)).resolve(strict=True)
+        if (not _contained(path, info["pack"]) or not path.is_file() or
+                path.suffix.lower() != ".jpg"):
+            return None
+        size = path.stat().st_size
+        if size < 1 or size > MAX_CROP_BYTES:
+            return None
+        data = _read_bounded(path, MAX_CROP_BYTES, "Altyazı kırpımı")
+        if (_sha256(data) != cue.get("crop_sha256_local") or
+                not _validate_crop_bytes(data, cue)):
+            return None
+        return path, size
+    except (OSError, RuntimeError, ReviewError):
+        return None
+
+
 def crop_for(review_id: str, cue_id: str) -> tuple[Path, str]:
     info = _get_pack(review_id)
     cue = next((c for c in info["cues"] if c["cue_id"] == cue_id), None)
-    if not cue or not cue["crop_valid"] or cue["crop_abs"] is None:
+    verified = _verify_crop(info, cue) if cue else None
+    if not cue or verified is None:
         raise ReviewError("Görsel eksik, değiştirilmiş veya altyazıyla eşleşmiyor", 409)
-    return cue["crop_abs"], "image/jpeg"
+    return verified[0], "image/jpeg"
 
 
 def append_review(review_id: str, cue_id: str, status: str, correction: str = "") -> dict:
     with _LOCK:
-        info = _get_pack(review_id)
+        info = _get_pack(review_id, force_sources=True)
         cue = next((c for c in info["cues"] if c["cue_id"] == cue_id), None)
-        if not cue or not cue["crop_valid"]:
+        verified = _verify_crop(info, cue) if cue else None
+        if not cue or verified is None:
             raise ReviewError("Görsel eksik, değiştirilmiş veya eşleşmiyor; kayıt yapılmadı", 409)
+        cue["crop_abs"] = verified[0]
         if status not in ("accepted", "corrected", "uncertain"):
             raise ReviewError("Durum accepted/corrected/uncertain olmalı", 400)
         if status == "corrected":
@@ -440,11 +536,11 @@ def append_review(review_id: str, cue_id: str, status: str, correction: str = ""
 
 def undo_review(review_id: str, cue_id: str) -> dict:
     with _LOCK:
-        info = _get_pack(review_id)
+        info = _get_pack(review_id, force_sources=True)
         cue = next((c for c in info["cues"] if c["cue_id"] == cue_id), None)
         if not cue:
             raise ReviewError("Altyazı kimliği bulunamadı", 404)
-        active, _ = _active(info)
+        active, _ = _active(info, force=True)
         current = active.get(cue_id)
         if not current:
             raise ReviewError("Geri alınacak etkin bir karar yok", 409)
@@ -467,9 +563,15 @@ def _append_locked(info: dict, record: dict) -> None:
     if path.is_symlink():
         raise ReviewError("İnceleme günlüğü sembolik bağlantı olamaz", 403)
     line = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-    if path.exists() and path.stat().st_size + len(line) > MAX_EVENTS_BYTES:
+    size = path.stat().st_size if path.exists() else 0
+    if size + len(line) > MAX_EVENTS_BYTES:
         raise ReviewError("İnceleme günlüğü boyut sınırına ulaştı", 413)
-    if path.exists() and path.stat().st_size:
+    if (info.get("event_record_count") is None or
+            _stat_signature(path) != info.get("event_signature")):
+        _events(info)
+    if info.get("event_record_count", 0) >= MAX_EVENT_RECORDS:
+        raise ReviewError("İnceleme günlüğü 50.000 olay sınırına ulaştı", 413)
+    if size:
         with path.open("rb") as existing:
             existing.seek(-1, os.SEEK_END)
             if existing.read(1) != b"\n":
@@ -482,18 +584,34 @@ def _append_locked(info: dict, record: dict) -> None:
             os.fsync(stream.fileno())
     except Exception:
         raise
+    info["event_record_count"] = info.get("event_record_count", 0) + 1
+    info["event_signature"] = _stat_signature(path)
+    info.pop("active_cache", None)
 
 
 def export_dataset(review_id: str) -> tuple[Path, int]:
-    info = _get_pack(review_id)
-    active, _ = _active(info)
+    info = _get_pack(review_id, force_sources=True)
+    active, _ = _active(info, force=True)
     eligible = []
     cues = {c["cue_id"]: c for c in info["cues"]}
+    crop_sizes = {}
+    total_crop_bytes = 0
     for cue_id, event in active.items():
         cue = cues.get(cue_id)
         if (not cue or not cue["crop_valid"] or event.get("status") not in ("accepted", "corrected") or
                 event.get("crop_sha256_local") != cue.get("crop_sha256_local")):
             continue
+        verified = _verify_crop(info, cue)
+        if verified is None:
+            continue
+        crop_path, crop_size = verified
+        digest = cue["crop_sha256_local"]
+        if digest not in crop_sizes:
+            if total_crop_bytes + crop_size > MAX_TOTAL_CROP_BYTES:
+                continue
+            crop_sizes[digest] = crop_size
+            total_crop_bytes += crop_size
+        cue["crop_abs"] = crop_path
         eligible.append((cue, event))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     target = info["pack"] / f"verified-ocr-dataset-{stamp}-{uuid.uuid4().hex[:8]}"
@@ -527,7 +645,7 @@ def export_dataset(review_id: str) -> tuple[Path, int]:
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    return target, len(eligible)
+    return target, len(rows)
 
 
 def image_bytes_path(review_id: str, cue_id: str) -> tuple[Path, str]:
