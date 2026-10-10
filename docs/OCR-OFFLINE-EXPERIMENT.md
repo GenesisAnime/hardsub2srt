@@ -148,6 +148,47 @@ almaz.
 
 ## Tam bölüm SRT ölçüm adaptörü
 
+### İzinli Phase 5 girdileri için boş manifest taslakları
+
+`ocr_video_eval_templates.py`, yalnız mevcut strict Phase 5 doğrulamasından
+geçen dataset/metadata/experiment/split girdileri için yerel taslaklar üretir.
+Üretmeden önce gerçek adapter'ın kullandığı `_validated_split` ve
+`ocr_crop_eval.validate_run` çağrılır; Phase 2 etkin karar zinciri, rights
+evidence ve review metadata, hash'ler ve frozen grup split'i doğrulanamıyorsa
+dosya yazılmaz. Bu yardımcı doğrulamayı gevşetmez.
+
+```powershell
+py -3 ocr_video_eval_templates.py "D:\yerel\verified-ocr-dataset-..." `
+  --metadata "D:\yerel\dataset-metadata.json" `
+  --experiment "D:\yerel\experiment-...\experiment-report.json" `
+  --out-parent "D:\yerel\phase5-drafts" `
+  --protect-dir "D:\yerel\future-references" `
+  --protect-dir "D:\yerel\future-predictions"
+```
+
+`--out-parent` önceden var olan, yerel ve senkronize edilmeyen bir dizin olmalı
+(UNC/mapped drive ve `OneDrive`, `OneDriveCommercial`, `OneDriveConsumer`
+ortam değişkenlerindeki köklerin altı reddedilir) ve dataset, onun review-pack
+parent'ı, metadata/experiment/split klasörleri dışında kalmalıdır.
+`--protect-dir` her gelecekteki reference/prediction input klasörünü ek koruma
+listesine alır.
+Helper yeni benzersiz bir alt klasör yaratır; iki draft JSON ve README staging
+klasörüne yazılıp atomik olarak taşınır, var olan çıktı üzerine yazılmaz.
+
+`timed-reference-manifest-v1.draft.json` ve
+`prediction-manifest-v1.draft.json` dosyaları özel
+[`draft-v1 şemasını`](../schemas/ocr-video-evaluation-templates-draft-v1.schema.json)
+kullanır. Format, `ocr_video_eval.py`'nin kabul ettiği manifestten kasıtlı
+olarak farklıdır: `schema_version="draft-v1"`, `template_only=true` ve
+`INCOMPLETE_NOT_FOR_EVALUATION` alanlarıyla gerçek evaluation girişinde
+reddedilir. Yalnız frozen source/episode/split değerleri ile baseline/candidate
+kimlikleri doldurulur. Dil, medya hash'i, SRT yolları/hash'leri, alignment
+review (daima `pending`), model/config hash'i, device ve backend açıkça boş
+bırakılır. Taslak hak onayı, trusted reference, değerlendirme sonucu veya
+Phase 6 PASS oluşturmaz. Sentetik testlerde başarılı output için validator
+sınırı mock'lanır; ayrıca gerçek strict validator boş dataset/rights girdisini
+reddedip hiç output yazmaz.
+
 `ocr_video_eval.py`, gelecekte izinli ve insan tarafından zaman hizası
 incelenmiş source-language referansları hazır olduğunda sabit tam bölüm SRT
 çıktılarını karşılaştıran **ölçüm adaptörüdür**. Videoyu açmaz, OCR/model
