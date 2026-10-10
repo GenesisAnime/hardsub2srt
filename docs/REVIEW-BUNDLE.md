@@ -48,3 +48,17 @@ The manifest intentionally omits the source video path and video hash. It does c
 - Each crop is linked to the exact final OCR segment's frame interval, using its midpoint. Text may have been corrected by the current post-fix stage, so visual confirmation is required before using the pair for OCR learning.
 - The feature only prepares a local review package. It has no translation-memory fields or automatic translation learning. Translation proposals and approved target text must remain a separate, user-approved workflow as described in [the learning-system plan](LEARNING-SYSTEM-PLAN.md).
 - GPU remains the default when supported; `--cpu` remains explicit. Review-package generation does not alter OCR device selection or queue order.
+
+## Human OCR verification (Phase 2)
+
+The current Phase 2 implementation is on branch `codex/phase2-ocr-human-review` and is not yet merged. Once that version is installed, open `http://127.0.0.1:8765/ocr-inceleme` in the local UI. Choose a `.review-pack` folder with **Klasör seç** or paste its path, then inspect each available crop alongside the final OCR text, timing, and confidence.
+
+- **Görüntü doğru** records the displayed OCR text as a human-accepted source label.
+- **Düzeltmeyi kaydet** records the text you entered after checking it against the image.
+- **Belirsiz** records that the crop could not be read confidently and excludes it from the OCR dataset.
+- **Son kararı geri al** appends an undo event. It does not remove prior events.
+- **Doğrulanmış OCR veri kümesini dışa aktar** creates a new `verified-ocr-dataset-...` folder in the review pack. It contains crop files and `manifest.jsonl`, not the SRT.
+
+The review history is `review-events.jsonl` beside the pack's manifest. Each event is append-only and records the run-local cue ID plus manifest, copied-SRT, and crop SHA-256 digests. The page revalidates SRT identity/order/times/text, exact OCR-to-cue mapping, crop path containment, and crop content before accepting or exporting. If content changed or a record is malformed, the affected label is excluded. Merged/ambiguous cues and unavailable crops cannot be accepted as visual OCR labels.
+
+Exports are point-in-time snapshots: a later correction or undo does not rewrite an older export. Export again to capture the new active decisions. Review records are local and can contain subtitle text and copyrighted visual crops; no provider call, telemetry, VDS transfer, or automatic sharing occurs. This feature does not modify the original SRT/manifest and does not feed `/api/ogret`, `ogren.py`, `kullanici-sozlugu.txt`, translation memory, or OCR model weights. The interface has not yet had a browser/runtime smoke test; see the Phase 2 status in [the plan](LEARNING-SYSTEM-PLAN.md).

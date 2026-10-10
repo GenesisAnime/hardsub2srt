@@ -1,6 +1,6 @@
 # OCR and AI translation learning system: implementation brief
 
-**Status:** design only. No learning dataset, LLM review service, upload endpoint, or model-training pipeline is implemented by this document.
+**Status:** Phases 0–1 are documented and the local Phase 1 review-pack exporter exists. Phase 2 has a local human OCR verification implementation on branch `codex/phase2-ocr-human-review`; it is not yet merged or independently runtime-validated. No LLM review service, upload endpoint, or model-training pipeline is implemented.
 
 **Purpose:** guide a future implementation that improves (1) transcription of subtitles visible in video frames and (2) translation review of generated SRT text. These are separate tasks with separate evidence, approval, storage, and metrics.
 
@@ -20,6 +20,7 @@ Before broad code changes, report the current behavior, proposed files, data flo
 - The editor's **Kaydet** path (`ui_server.py`: `ogrenme_yurut`) separately invokes `ogren.py` on changed SRT blocks. `ogren.py` classifies candidate word changes and records a per-SRT learning report. It still has text only; without an image/crop it cannot teach the visual recognizer.
 - `vtt-qa.py` and `regresyon/gt_gate.py` compare OCR transcription with trusted reference subtitles. They do not measure translation quality. The README explicitly says translation and translation quality review are outside the current tool.
 - `TOPLULUK-OGRENME-TASARIMI.md` is an earlier community-learning concept. Where it conflicts with this plan or current README/code (for example, device defaults or claims about uploaded data), use the current README and this phase plan as the implementation basis. Recheck code before treating any statement here as current behavior.
+- The Phase 2 local review page is `/ocr-inceleme` in the loopback UI. Human decisions append to `review-events.jsonl` inside the review pack. The verified OCR export contains only currently active accepted/corrected crop-text pairs; uncertain, undone, stale, malformed, unavailable, or mismatched items are excluded. It has no connection to `/api/ogret`, `ogren.py`, `kullanici-sozlugu.txt`, translation memory, or any network service.
 
 ## Core separation: two learning loops
 
@@ -203,13 +204,22 @@ A 95–99% target is meaningful only after naming the metric, corpus, languages,
 |---|---|---|---|
 | 0. Baseline and scope | Source-backed inventory of current crop/frame path, stats, OCR regression cases, and separate OCR/translation metrics | Existing `regresyon/gt_gate.py` behavior and trusted references are documented; thresholds are predeclared; no new data upload | No trustworthy aligned source reference or no defensible crop-to-cue mapping: do not claim a measured gain or generate training labels |
 | 1. Local crop manifest | Opt-in export of one compressed representative subtitle crop per unique cue plus manifest; deduplicated repeats; optional boundary crops | Immutable cue IDs; crop/frame/timing provenance; no full video or absolute paths; output is local and re-openable | Frame provenance cannot be established, export size exceeds configured cap, or dedup is ambiguous: mark unavailable and stop for those cues |
-| 2. Human OCR verification | Local review screen for crop + OCR text; append-only accepted/corrected/uncertain events | Only accepted visual labels enter the OCR dataset; uncertain labels remain excluded; undo/export works | No human acceptance, crop missing/mismatch, or malformed record: exclude from training |
+| 2. Human OCR verification | **Implemented locally on `codex/phase2-ocr-human-review`; not yet merged/runtime-validated.** Local review screen for crop + OCR text; append-only accepted/corrected/uncertain events and undo events | Only active human accepted/corrected visual labels enter the versioned OCR dataset export; uncertain labels remain excluded; undo/export implemented; no original SRT/manifest edits | No human acceptance, crop missing/mismatch, stale hashes, non-exact mapping, or malformed record: exclude from dataset |
 | 3. Translation review pilot | Explicitly invoked AI review on a selected batch, with crop/source-first order and structured proposals | No call without consent; uncertain OCR defers translation; user can accept/edit/reject; only accepted pairs enter translation memory | Consent absent, provider unavailable, schema invalid, or source unverified: do not send/store as accepted |
 | 4. Scoped lexicon and translation memory | Separate versioned stores and retrieval/application rules | OCR rule does not affect translation memory; translation memory does not affect OCR post-fix; collision tests and rollback record exist | Generic rules cause held-out regressions or source/target linkage is missing: disable the rule/item |
 | 5. Offline OCR experiment | Reproducible experiment using verified crop/text examples; candidate model artifact kept separate | Train/validation/test split by episode/source; GPU-default product behavior unchanged; report CER/WER/detection/timing against same baseline; no held-out regression beyond predeclared limits | Dataset too small/imbalanced, labels uncertain, licensing unclear, or candidate fails gate: do not ship model |
 | 6. Controlled release | Versioned local package/model and migration notes; opt-in sharing considered separately | Model provenance, rollback, supported environments, consent and privacy checks documented; user can continue CPU or existing model path | Any unreviewed upload, secret in client, silent model/rule change, or reproducible regression: stop release |
 
 Implement one phase at a time. Do not bundle model training, remote API, and translation UI into the first change.
+
+### Phase 2 implementation notes
+
+- Open the local UI and visit **Yerel OCR Doğrulama** at `http://127.0.0.1:8765/ocr-inceleme`; select a `.review-pack` folder with the Windows folder dialog or enter its path.
+- For each crop, choose **Görüntü doğru**, enter a visually confirmed source transcription and choose **Düzeltmeyi kaydet**, or choose **Belirsiz**. The browser is only a local UI; there is no AI/provider call or upload.
+- The append-only `review-events.jsonl` lives inside that review pack. A decision carries a random event ID, cue/job identity, manifest/SRT/crop SHA-256 hashes, status, verified source text (empty for uncertain), and timestamp. Undo appends an event referencing the current decision; it never deletes or rewrites earlier events.
+- The viewer rechecks the manifest and copied SRT hash, every SRT cue's order/timing/text, unique cue IDs, exact one-to-one OCR mapping, safe crop path, and crop digest before displaying or recording. If those no longer match, the item cannot be accepted. Export rechecks them and writes a new immutable `verified-ocr-dataset-<UTC>-<id>/` snapshot containing only crop images and `manifest.jsonl`; it does not include the SRT.
+- The dataset is a local snapshot and is not automatically updated after later reviews or undo events. Create a new export for a new active decision state. Old exports can be removed manually after confirming they are no longer needed; review events remain the source history.
+- No browser or file-picker runtime test was run during this phase. Static validation and manual code review status are reported in the implementation handoff; a real synthetic pack acceptance/undo/export smoke check remains outstanding before treating the UI flow as verified.
 
 ## Required artifacts for each implementation phase
 
