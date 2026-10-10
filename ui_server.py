@@ -58,6 +58,7 @@ Kontrol paneli + toplu pano (v1.3):
     görüntüleyici). Eski-format stats boş hücreyle zarifçe listelenir.
 """
 
+import base64
 import json
 import os
 import re
@@ -1518,8 +1519,19 @@ if ($mode -eq 'dosya') {
   @{ dizin = $path } | ConvertTo-Json -Compress
 }
 '''
+        powershell = shutil.which("powershell.exe")
+        if not powershell:
+            system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+            candidate = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            if candidate.is_file():
+                powershell = str(candidate)
+        if not powershell:
+            raise RuntimeError("Windows PowerShell bulunamadı")
+        # EncodedCommand avoids Windows command-line quoting/Unicode parsing of
+        # this multi-line script while preserving the separate interactive STA process.
+        encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
         r = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-STA", "-Command", script],
+            [powershell, "-NoProfile", "-STA", "-EncodedCommand", encoded_script],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             env=env, cwd=str(KLASOR),
         )
