@@ -21,6 +21,7 @@ MAX_CROP_DIMENSION = 1280
 JPEG_QUALITY = 86
 MAX_UNIQUE_CROPS = 1000
 MAX_TOTAL_CROP_BYTES = 128 * 1024 * 1024
+MAX_SINGLE_CROP_BYTES = 8 * 1024 * 1024
 
 
 def _sha256(data: bytes) -> str:
@@ -76,6 +77,8 @@ def build_review_pack(srt_path, cues, metadata, crop_provider):
         crop_by_digest = {}
         crop_count = 0
         crop_bytes = 0
+        crop_by_source = {}
+        failed_sources = set()
 
         for position, cue in enumerate(cues, 1):
             cue_id = f"{job_id}-cue-{position:05d}"
@@ -111,36 +114,75 @@ def build_review_pack(srt_path, cues, metadata, crop_provider):
                 if record["source_band_y"] is None or record["source_band_height"] is None:
                     raise ValueError("unknown_source_region")
                 frame_index = record["representative_frame_index"]
-                encoded, crop_width, crop_height, roi_width, roi_height = _encode_crop(
-                    crop_provider(frame_index, record["source_band_y"],
-                                  record["source_band_height"]))
-                digest = _sha256(encoded)
-                record["crop_width"] = crop_width
-                record["crop_height"] = crop_height
-                record["roi_width"] = roi_width
-                record["roi_height"] = roi_height
-                record["crop_sha256_local"] = digest
-                if digest in crop_by_digest:
-                    record["crop_path"] = crop_by_digest[digest]["path"]
-                    record["duplicate_of_cue_id"] = crop_by_digest[digest]["cue_id"]
+                source_key = (frame_index, record["source_band_y"],
+                              record["source_band_height"])
+                if source_key in crop_by_source:
+                    cached = crop_by_source[source_key]
+                    record.update({key: value for key, value in cached.items()
+                                   if key != "dedup_cue_id"})
+                    record["duplicate_of_cue_id"] = cached["dedup_cue_id"]
+                elif source_key in failed_sources:
+                    raise ValueError("representative_roi_unavailable")
                 else:
-                    if crop_count >= MAX_UNIQUE_CROPS or \
-                            crop_bytes + len(encoded) > MAX_TOTAL_CROP_BYTES:
-                        raise ValueError("crop_limit_reached")
-                    relative = f"crops/{cue_id}.jpg"
-                    (temporary / relative).write_bytes(encoded)
-                    crop_by_digest[digest] = {"path": relative, "cue_id": cue_id}
-                    record["crop_path"] = relative
-                    crop_count += 1
-                    crop_bytes += len(encoded)
+                    # Known same-frame/band duplicates can reuse their stored
+                    # crop. For a new source image, stop before opening/reading
+                    # the video once either persisted-output budget is spent.
+                    if crop_count >= MAX_UNIQUE_CROPS:
+                        raise ValueError("crop_count_limit_reached")
+                    if crop_bytes + MAX_SINGLE_CROP_BYTES > MAX_TOTAL_CROP_BYTES:
+                        raise ValueError("crop_byte_budget_reserve_exhausted")
+                    try:
+                        image = crop_provider(
+                            frame_index, record["source_band_y"],
+                            record["source_band_height"])
+                        encoded, crop_width, crop_height, roi_width, roi_height = \
+                            _encode_crop(image)
+                    except Exception:
+                        failed_sources.add(source_key)
+                        raise
+                    if len(encoded) > MAX_SINGLE_CROP_BYTES:
+                        failed_sources.add(source_key)
+                        raise ValueError("single_crop_byte_limit_reached")
+                    digest = _sha256(encoded)
+                    record["crop_width"] = crop_width
+                    record["crop_height"] = crop_height
+                    record["roi_width"] = roi_width
+                    record["roi_height"] = roi_height
+                    record["crop_sha256_local"] = digest
+                    if digest in crop_by_digest:
+                        record["crop_path"] = crop_by_digest[digest]["path"]
+                        dedup_cue_id = crop_by_digest[digest]["cue_id"]
+                        record["duplicate_of_cue_id"] = dedup_cue_id
+                    else:
+                        relative = f"crops/{cue_id}.jpg"
+                        (temporary / relative).write_bytes(encoded)
+                        crop_by_digest[digest] = {"path": relative, "cue_id": cue_id}
+                        record["crop_path"] = relative
+                        dedup_cue_id = cue_id
+                        crop_count += 1
+                        crop_bytes += len(encoded)
+                    crop_by_source[source_key] = {
+                        "crop_path": record["crop_path"],
+                        "crop_sha256_local": record["crop_sha256_local"],
+                        "crop_width": record["crop_width"],
+                        "crop_height": record["crop_height"],
+                        "roi_width": record["roi_width"],
+                        "roi_height": record["roi_height"],
+                        "dedup_cue_id": dedup_cue_id,
+                        "crop_status": "available_needs_visual_confirmation",
+                    }
                 record["crop_status"] = "available_needs_visual_confirmation"
             except Exception as exc:
                 # Keep user paths and FFmpeg diagnostics out of the review bundle.
                 record["crop_path"] = None
-                record["crop_error"] = (
-                    "crop_limit_reached" if str(exc) == "crop_limit_reached"
-                    else "representative_roi_unavailable")
-                if record["crop_error"] == "crop_limit_reached":
+                allowed_errors = {
+                    "crop_count_limit_reached",
+                    "crop_byte_budget_reserve_exhausted",
+                    "single_crop_byte_limit_reached",
+                }
+                record["crop_error"] = (str(exc) if str(exc) in allowed_errors
+                                         else "representative_roi_unavailable")
+                if record["crop_error"] in allowed_errors:
                     record["crop_sha256_local"] = None
                     for key in ("crop_width", "crop_height", "roi_width", "roi_height"):
                         record.pop(key, None)
@@ -163,6 +205,7 @@ def build_review_pack(srt_path, cues, metadata, crop_provider):
                 "max_dimension_px": MAX_CROP_DIMENSION,
                 "max_unique_crops": MAX_UNIQUE_CROPS,
                 "max_total_encoded_bytes": MAX_TOTAL_CROP_BYTES,
+                "max_single_encoded_bytes": MAX_SINGLE_CROP_BYTES,
             },
             "ocr_metadata": metadata,
             "cues": cues_out,
