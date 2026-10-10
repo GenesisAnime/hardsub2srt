@@ -300,7 +300,7 @@ def create_chat_export(review_id: str, drafts: object, source_language: object,
     response_template = {"schema_version": 1, "request_id": request["request_id"], "cues": template_items}
     prompt = """# Hardsub altyazı inceleme isteği
 
-Bu istek seçilmiş altyazı görüntülerini içerir. Her cue'da önce `images/` altındaki ilgili görselde kaynak metni oku ve bunu `request.json` içindeki `verified_source_text` ile karşılaştır. Görsel kaynak metni kesin doğrulamıyorsa `source_review.status` değerini `uncertain` veya `correction_proposed` yap ve `translation_review.status` değerini `deferred` yap; bağlamdan kaynak metni tahmin etme.
+Bu istek seçilmiş altyazı görüntülerini içerir. Sohbet eklerinde `request.json`, `response-template.json` ve `images/` altındaki görseller bulunmalıdır; bu şablon yanıtın gerekli alanlarını ve cue eşleşmelerini içerir. Her cue'da önce ilgili görselde kaynak metni oku ve bunu `request.json` içindeki `verified_source_text` ile karşılaştır. Görsel kaynak metni kesin doğrulamıyorsa `source_review.status` değerini `uncertain` veya `correction_proposed` yap ve `translation_review.status` değerini `deferred` yap; bağlamdan kaynak metni tahmin etme.
 
 Kaynak metin görselle birebir doğrulanırsa `source_review.status=confirmed` ve `observed_text` alanına görselde okuduğun tam metni yaz. Ardından `draft_translation` metnini anlam, eksik/fazla içerik, terim ve üslup açısından değerlendir. Öneri ver; insan onayı olmadan doğru kabul etme.
 
