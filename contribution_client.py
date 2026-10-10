@@ -157,14 +157,22 @@ def config_status() -> dict:
     except ValueError:
         retention_days, retention_valid = None, False
     valid_url = False
+    destination_host = None
     if base:
         try:
             parsed = urlsplit(base)
+            hostname = parsed.hostname
+            port = parsed.port
             valid_url = (parsed.scheme == "https" and bool(parsed.hostname) and not parsed.username and
                          not parsed.password and parsed.path in ("", "/") and not parsed.query and not parsed.fragment)
+            if valid_url:
+                host_label = f"[{hostname}]" if ":" in hostname else hostname
+                destination_host = host_label + (f":{port}" if port and port != 443 else "")
         except ValueError:
             valid_url = False
+            destination_host = None
     return {"enabled": bool(valid_url and token and retention_valid), "url_present": bool(valid_url),
+            "destination_host": destination_host,
             "token_present": bool(token), "retention_days": retention_days if retention_valid else None}
 
 

@@ -4,7 +4,8 @@
   <id>hardsub-contribution-api</id>
   <name>hardsub2srt Contribution API</name>
   <description>Optional minimized OCR metrics API; loopback only.</description>
-  <executable>__ABSOLUTE_WAITRESS_SERVE_EXE_PATH__</executable>
+  <startmode>Manual</startmode>
+  <executable>__ABSOLUTE_APPROOT__\.venv\Scripts\waitress-serve.exe</executable>
   <arguments>--listen=127.0.0.1:8787 contribution_api:app</arguments>
   <workingdirectory>__DEPLOYED_REPOSITORY_DIRECTORY__</workingdirectory>
   <env name="PYTHONPATH" value="__DEPLOYED_REPOSITORY_DIRECTORY__" />

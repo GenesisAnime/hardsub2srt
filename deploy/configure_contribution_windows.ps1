@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'contribution_security_helpers.ps1')
 $serviceName = 'hardsub-contribution-api'
 $serviceAccount = "NT SERVICE\$serviceName"
 
@@ -60,7 +61,8 @@ function Set-RestrictedAcl([string]$Path, [string]$Owner, [string[]]$Grants) {
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Yönetici yetkisi gerekli.' }
 
-$appPath = (Resolve-Path -LiteralPath $AppRoot).Path.TrimEnd('\')
+$appInputPath = Assert-ContributionPathHasNoReparsePoints ([System.IO.Path]::GetFullPath($AppRoot))
+$appPath = (Resolve-Path -LiteralPath $appInputPath).Path.TrimEnd('\')
 $winswPath = (Resolve-Path -LiteralPath $WinSWExe).Path
 if (-not $winswPath.StartsWith($appPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
     throw 'WinSW executable/XML, AppRoot içinde olmalı ve aynı korumalı ACL kapsamını kullanmalı.'
@@ -70,6 +72,9 @@ if (-not (Test-Path -LiteralPath $xmlPath -PathType Leaf)) { throw "WinSW XML bu
 $dataPath = Resolve-AbsoluteOutsideApp $DataDirectory 'DataDirectory' $appPath
 $logPath = Resolve-AbsoluteOutsideApp $LogDirectory 'LogDirectory' $appPath
 $certPath = Resolve-AbsoluteOutsideApp $CertificateDirectory 'CertificateDirectory' $appPath
+$dataPath = Assert-ContributionDirectoryTarget $dataPath 'DataDirectory'
+$logPath = Assert-ContributionDirectoryTarget $logPath 'LogDirectory'
+$certPath = Assert-ContributionDirectoryTarget $certPath 'CertificateDirectory'
 $dirs = @($dataPath, $logPath, $certPath)
 for ($i=0; $i -lt $dirs.Count; $i++) {
     for ($j=$i+1; $j -lt $dirs.Count; $j++) {
@@ -80,15 +85,32 @@ for ($i=0; $i -lt $dirs.Count; $i++) {
         }
     }
 }
+$canonicalPaths = @([pscustomobject]@{ Label='AppRoot'; Path=(Get-ContributionCanonicalDirectoryPath $appPath) })
+foreach ($path in $dirs) {
+    $label = if ($path -eq $dataPath) { 'DataDirectory' } elseif ($path -eq $logPath) { 'LogDirectory' } else { 'CertificateDirectory' }
+    $canonicalPaths += [pscustomobject]@{ Label=$label; Path=(Get-ContributionCanonicalDirectoryPath $path) }
+}
+for ($i=0; $i -lt $canonicalPaths.Count; $i++) {
+    for ($j=$i+1; $j -lt $canonicalPaths.Count; $j++) {
+        if (Test-ContributionPathOverlap $canonicalPaths[$i].Path $canonicalPaths[$j].Path) {
+            throw "$($canonicalPaths[$i].Label) and $($canonicalPaths[$j].Label) resolve to overlapping physical directories."
+        }
+    }
+}
+Assert-ContributionTreeHasNoReparsePoints $appPath
+foreach ($path in $dirs) {
+    if (Test-Path -LiteralPath $path -PathType Container) {
+        Assert-ContributionTreeHasNoReparsePoints $path
+    }
+}
 
-$xml = [xml](Get-Content -LiteralPath $xmlPath -Raw -Encoding UTF8)
-$envMap = @{}
-foreach ($item in $xml.service.env) { $envMap[$item.name] = $item.value }
-if (-not [System.IO.Path]::IsPathRooted($xml.service.executable) -or
-    -not (Test-Path -LiteralPath $xml.service.executable -PathType Leaf) -or
-    $xml.service.id -ne $serviceName -or
-    $xml.service.arguments -notmatch '--listen=127\.0\.0\.1:8787\s+contribution_api:app' -or
-    $xml.service.workingdirectory -ne $appPath -or
+$xml = Read-ContributionServiceXmlFile $xmlPath
+$serviceConfig = Assert-ContributionServiceXml $xml
+$envMap = $serviceConfig.env
+Assert-ContributionServiceArguments ([string]$serviceConfig.arguments)
+$waitressPath = Assert-ContributionWaitressExecutable ([string]$serviceConfig.executable) $appPath
+if ($serviceConfig.id -ne $serviceName -or
+    $serviceConfig.workingdirectory -ne $appPath -or
     $envMap['PYTHONPATH'] -ne $appPath -or
     $envMap['PYTHONDONTWRITEBYTECODE'] -ne '1') {
     throw 'WinSW service id veya loopback Waitress uygulama komutu beklenen değer değil.'
@@ -140,30 +162,49 @@ if ($PurgeAccount -ieq $serviceAccount -or $CaddyAccount -ieq $serviceAccount -o
 }
 
 $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+$installedHere = $false
+if ($service) {
+    # Do not stop or reconfigure an unrelated service that happens to share the
+    # requested name. This preflight is read-only and precedes all service edits.
+    Assert-ContributionServicePathName ([string]$service.PathName) $winswPath
+}
 if (-not $service) {
     & $winswPath install | Out-Host
     if ($LASTEXITCODE -ne 0) {
         & $winswPath uninstall | Out-Host
         throw 'WinSW servisi kurulamadı; kısmi kayıt kaldırma denendi.'
     }
+    $installedHere = $true
     $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
 }
 if (-not $service) {
     & $winswPath uninstall | Out-Host
     throw 'WinSW servisi bulunamadı; kaldırma denendi ve yapılandırma durduruldu.'
 }
+try {
+    Assert-ContributionServicePathName ([string]$service.PathName) $winswPath
+} catch {
+    if ($installedHere -and $service.State -eq 'Stopped') { & $winswPath uninstall | Out-Host }
+    throw
+}
+# Disable automatic start before stopping an existing Automatic service. This
+# avoids a reboot/crash window where the old identity could start again.
+& sc.exe config $serviceName start= disabled | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    if ($installedHere -and $service.State -eq 'Stopped') { & $winswPath uninstall | Out-Host }
+    throw 'Servis disabled durumuna alınamadı; stop/identity/ACL değişikliği yapılmadı.'
+}
+$service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+Assert-ContributionServicePathName ([string]$service.PathName) $winswPath
+if ($service.StartMode -ne 'Disabled') {
+    if ($installedHere -and $service.State -eq 'Stopped') { & $winswPath uninstall | Out-Host }
+    throw 'Servis başlangıç türü Disabled olarak doğrulanamadı; service identity/ACL değiştirilmedi.'
+}
 if ($service.State -ne 'Stopped') {
     Stop-Service -Name $serviceName -Force
     Start-Sleep -Seconds 1
     $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
     if ($service.State -ne 'Stopped') { throw 'Servis durdurulamadı; identity/ACL değiştirilmedi.' }
-}
-# WinSW registration can initially use LocalSystem. Keep the service stopped
-# and disable automatic start before changing identity or resolving its SID.
-& sc.exe config $serviceName start= disabled | Out-Host
-if ($LASTEXITCODE -ne 0) {
-    & $winswPath uninstall | Out-Host
-    throw 'Servis disabled durumuna alınamadı; kaldırma denendi, başlatma yapılmadı.'
 }
 & sc.exe config $serviceName obj= $serviceAccount password= '' | Out-Host
 if ($LASTEXITCODE -ne 0) {
@@ -190,6 +231,13 @@ if ($serviceSid -in $adminMemberSids -or $purgeSid -in $adminMemberSids -or
 
 $system = '*S-1-5-18'
 $admins = '*S-1-5-32-544'
+# Re-scan immediately before recursive ACL changes to catch reparse entries
+# created after initial preflight. Create protected roots explicitly first.
+Assert-ContributionTreeHasNoReparsePoints $appPath
+foreach ($path in $dirs) {
+    New-Item -ItemType Directory -Force -Path $path | Out-Null
+    Assert-ContributionTreeHasNoReparsePoints $path
+}
 Set-RestrictedAcl $appPath $admins @(
     "${serviceAccount}:(OI)(CI)RX", "${system}:(OI)(CI)F", "${admins}:(OI)(CI)F")
 Set-RestrictedAcl $dataPath $serviceAccount @(
@@ -199,6 +247,27 @@ Set-RestrictedAcl $logPath $serviceAccount @(
     "${serviceAccount}:(OI)(CI)M", "${system}:(OI)(CI)F", "${admins}:(OI)(CI)F")
 Set-RestrictedAcl $certPath $admins @(
     "${CaddyAccount}:(OI)(CI)RX", "${system}:(OI)(CI)F", "${admins}:(OI)(CI)F")
+
+# Verify the restricted trees after writing ACLs; do not rely on icacls exit
+# codes alone before leaving the service disabled for operator review.
+$adminSid = 'S-1-5-32-544'
+$systemSid = 'S-1-5-18'
+$caddySid = Resolve-Sid $CaddyAccount
+Assert-ContributionPathAcl -Path $appPath -ExpectedOwner $adminSid -IsDirectory $true -ExpectedRules @{
+    $serviceSid = 'ReadAndExecute'; $systemSid = 'FullControl'; $adminSid = 'FullControl'
+}
+Assert-ContributionPathAcl -Path $waitressPath -ExpectedOwner $adminSid -IsDirectory $false -ExpectedRules @{
+    $serviceSid = 'ReadAndExecute'; $systemSid = 'FullControl'; $adminSid = 'FullControl'
+}
+Assert-ContributionPathAcl -Path $dataPath -ExpectedOwner $serviceSid -IsDirectory $true -ExpectedRules @{
+    $serviceSid = 'Modify'; $purgeSid = 'Modify'; $systemSid = 'FullControl'; $adminSid = 'FullControl'
+}
+Assert-ContributionPathAcl -Path $logPath -ExpectedOwner $serviceSid -IsDirectory $true -ExpectedRules @{
+    $serviceSid = 'Modify'; $systemSid = 'FullControl'; $adminSid = 'FullControl'
+}
+Assert-ContributionPathAcl -Path $certPath -ExpectedOwner $adminSid -IsDirectory $true -ExpectedRules @{
+    $caddySid = 'ReadAndExecute'; $systemSid = 'FullControl'; $adminSid = 'FullControl'
+}
 
 # Pre-create and own the SQLite main file before any process opens it. This
 # prevents an administrator/Task Scheduler identity from becoming its owner.
@@ -210,6 +279,9 @@ Invoke-Icacls @($databaseFile, '/inheritance:r')
 Invoke-Icacls @($databaseFile, '/setowner', $serviceAccount)
 Invoke-Icacls @($databaseFile, '/grant:r',
     "${serviceAccount}:M", "${PurgeAccount}:M", "${system}:F", "${admins}:F")
+Assert-ContributionPathAcl -Path $databaseFile -ExpectedOwner $serviceSid -IsDirectory $false -ExpectedRules @{
+    $serviceSid = 'Modify'; $purgeSid = 'Modify'; $systemSid = 'FullControl'; $adminSid = 'FullControl'
+}
 
 Write-Output "Configured service identity: $serviceAccount"
 Write-Output "Restricted data/log/certificate ACLs. DB path: $expectedDb"
