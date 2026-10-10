@@ -1685,6 +1685,25 @@ def api_ocr_inceleme_disari_aktar():
         return _ocr_hata(exc)
 
 
+@app.post("/api/ocr-inceleme/metadata-sablonu")
+def api_ocr_inceleme_metadata_sablonu():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    body = request.get_json(silent=True) or {}
+    if (not isinstance(body, dict) or set(body) != {"review_id", "dataset_name"} or
+            not isinstance(body.get("review_id"), str) or
+            not isinstance(body.get("dataset_name"), str)):
+        return jsonify({"hata": "review_id ve dataset_name gerekli"}), 400
+    try:
+        path = ocr_review.create_metadata_template(body["review_id"], body["dataset_name"])
+        pack = ocr_review.pack_for(body["review_id"])
+        return jsonify({"ok": True, "path": path.relative_to(pack["pack"]).as_posix()})
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
 def _translation_error(exc):
     if translation_review is not None and isinstance(exc, ocr_review.ReviewError):
         return jsonify({"hata": str(exc)}), exc.status

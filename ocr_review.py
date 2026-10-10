@@ -649,6 +649,38 @@ def export_dataset(review_id: str) -> tuple[Path, int]:
     return target, len(rows)
 
 
+def create_metadata_template(review_id: str, dataset_name: str) -> Path:
+    """Create a blank Phase 5 metadata template beside this session's export."""
+    if (not isinstance(dataset_name, str) or len(dataset_name) > 160 or
+            not dataset_name.startswith("verified-ocr-dataset-") or
+            "/" in dataset_name or "\\" in dataset_name or dataset_name in {".", ".."}):
+        raise ReviewError("Yalnız bu inceleme paketindeki doğrulanmış veri kümesi seçilebilir", 400)
+    info = _get_pack(review_id, force_sources=True)
+    pack = info["pack"].resolve(strict=True)
+    dataset = pack / dataset_name
+    if dataset.is_symlink():
+        raise ReviewError("Veri kümesi sembolik bağlantı olamaz", 403)
+    try:
+        dataset = dataset.resolve(strict=True)
+        if dataset.parent != pack or not dataset.is_dir():
+            raise ReviewError("Veri kümesi bu inceleme paketinin doğrudan içinde bulunmalı", 403)
+    except (OSError, RuntimeError) as exc:
+        raise ReviewError("Veri kümesi bulunamadı", 404) from exc
+
+    # Every request gets a new sibling file. The helper itself publishes
+    # atomically and refuses to overwrite a target if a name ever collides.
+    import ocr_dataset_metadata
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    output = pack / f"dataset-metadata.template-{stamp}-{uuid.uuid4().hex}.json"
+    try:
+        ocr_dataset_metadata.make_template(dataset, output)
+    except ocr_dataset_metadata.ocr_experiment.InputError as exc:
+        raise ReviewError(str(exc), 422) from exc
+    return output
+
+
 def image_bytes_path(review_id: str, cue_id: str) -> tuple[Path, str]:
     return crop_for(review_id, cue_id)
 
@@ -660,7 +692,8 @@ REVIEW_HTML = r'''<!doctype html>
 body{margin:0;background:#11151e;color:#e8edf8;font:15px system-ui,sans-serif}header{position:sticky;top:0;background:#191f2b;padding:16px 22px;border-bottom:1px solid #30394b;z-index:2}main{max-width:1120px;margin:22px auto;padding:0 16px}.row{display:flex;gap:8px;flex-wrap:wrap}input,textarea,button{background:#0f131b;color:#edf2ff;border:1px solid #39445a;border-radius:6px;padding:10px;font:inherit}input{flex:1;min-width:300px}.ai-select{flex:none;min-width:auto;width:auto}button{cursor:pointer;background:#29364e;font-weight:650}button.primary{background:#3979ef;border-color:#3979ef}button.warn{background:#6b3841}.help,.meta{color:#a7b5ce;font-size:13px}.notice{padding:10px 12px;margin:12px 0;background:#202838;border-left:3px solid #e2ae59;border-radius:4px}.cue{display:grid;grid-template-columns:minmax(260px,42%) 1fr;gap:16px;border:1px solid #30394b;border-radius:9px;padding:14px;margin:12px 0;background:#1a202c}.cue img{display:block;max-width:100%;max-height:240px;object-fit:contain;background:#090c12;border-radius:4px}.cue textarea{box-sizing:border-box;width:100%;min-height:75px;resize:vertical}.controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.status{color:#82d9a0}.bad{color:#ffb978}.hidden{display:none}@media(max-width:700px){.cue{grid-template-columns:1fr}}
 </style><header><b>Yerel OCR Doğrulama</b><div class="help">Kırpımı okuyup OCR metnini kabul edin, düzeltin veya belirsiz bırakın. Kayıtlar paketin içine eklenir; SRT ve manifest değiştirilmez.</div></header>
 <main><section><div class="row"><input id="path" placeholder=".review-pack klasörünün yolu"><button id="browse">Klasör seç</button><button class="primary" id="open">Paketi aç</button></div><div class="help">Bu sayfa yerel çalışır. GPT/DeepSeek çağrısı veya veri gönderimi yapmaz.</div></section>
-<section id="workspace" class="hidden"><div id="summary" class="notice"></div><div class="row"><button class="primary" id="export">Doğrulanmış OCR veri kümesini dışa aktar</button><span id="export-result" class="help"></span></div><div id="warnings"></div><div id="cues"></div>
+<section id="workspace" class="hidden"><div id="summary" class="notice"></div><div class="row"><button class="primary" id="export">Doğrulanmış OCR veri kümesini dışa aktar</button><button id="metadata-template" hidden>Boş Phase 5 metadata şablonu oluştur</button><span id="export-result" class="help"></span></div><div id="metadata-result" class="help"></div><div id="warnings"></div><div id="cues"></div>
+<p class="help">Metadata şablonu yalnız boş kaynak/bölüm ve lisans alanları içerir. Kullanım hakkı veya izin onayı değildir; bu bilgileri kendiniz doğrulayıp doldurmanız gerekir.</p>
 <section class="notice"><h2>AI çeviri incelemesi · elle dışa aktar / içe aktar</h2>
 <p>Bu akış AI servisine bağlanmaz. Önce görselle doğrulanmış kaynak altyazıları seçip taslak çevirilerini girin. Sohbet için ZIP indirin, ZIP'i açın ve <code>prompt.md</code>, <code>request.json</code>, <code>response-template.json</code> ile <code>images/</code> altındaki ilgili görselleri ChatGPT/DeepSeek sohbetine kendiniz ekleyin. AI'nın JSON yanıtını aşağıya yapıştırıp içe aktarın. Kaynak belirsizse çeviri önerisi kabul edilemez.</p>
 <div class="row"><label>Kaynak dil <input id="ai-source-lang" value="ja" maxlength="40"></label><label>Hedef dil <input id="ai-target-lang" value="tr" maxlength="40"></label><span id="ai-result" class="help"></span></div>
@@ -679,7 +712,7 @@ let reviewId=null, pack=null, pickerId=null, tmDraftSuggestions={};
 const $=id=>document.getElementById(id);
 async function api(url,opts={}){const r=await fetch(url,opts);let j;try{j=await r.json()}catch{throw Error("Sunucu yanıtı okunamadı")}if(!r.ok)throw Error(j.hata||"İstek başarısız");return j}
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function openPack(path){const j=await api('/api/ocr-inceleme/ac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});reviewId=j.review_id;pack=j;$('workspace').classList.remove('hidden');draw()}
+async function openPack(path){const j=await api('/api/ocr-inceleme/ac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});reviewId=j.review_id;pack=j;exportedDatasetName=null;$('metadata-template').hidden=true;$('metadata-result').textContent='';$('export-result').textContent='';$('workspace').classList.remove('hidden');draw()}
 $('open').onclick=async()=>{try{await openPack($('path').value.trim())}catch(e){alert(e.message)}};
 $('browse').onclick=async()=>{try{const j=await api('/api/secim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tur:'inceleme'})});pickerId=j.job_id;while(true){await new Promise(r=>setTimeout(r,400));const s=await api('/api/secim/'+encodeURIComponent(pickerId));if(s.status==='done'){const p=s.result?.dizin||'';if(p){$('path').value=p;await openPack(p)}break}if(['error','timeout','cancelled'].includes(s.status))throw Error(s.hata||'Klasör seçimi tamamlanamadı')}}catch(e){alert(e.message)}};
 window.imageReady=(img,ok)=>{const card=img.closest('.cue');if(!card)return;card.querySelectorAll('.decision').forEach(b=>b.disabled=!ok);const textarea=card.querySelector('textarea');if(textarea)textarea.disabled=!ok;if(!ok){const n=document.createElement('div');n.className='notice bad';n.textContent='Görsel yüklenemedi; bu altyazı için karar verilemez.';img.replaceWith(n)}};
@@ -692,7 +725,9 @@ function draw(){
 window.decide=async(i,status)=>{const c=pack.cues[i];try{const correction=$('txt-'+i).value;await api('/api/ocr-inceleme/karar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId,cue_id:c.cue_id,status,correction})});await refresh()}catch(e){alert(e.message)}};
 window.undo=async i=>{const c=pack.cues[i];try{await api('/api/ocr-inceleme/geri-al',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId,cue_id:c.cue_id})});await refresh()}catch(e){alert(e.message)}};
 async function refresh(){pack=await api('/api/ocr-inceleme/durum?review_id='+encodeURIComponent(reviewId));draw()}
-$('export').onclick=async()=>{try{const j=await api('/api/ocr-inceleme/disari-aktar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId})});$('export-result').textContent=`${j.count} görsel/metin çifti kaydedildi: ${j.path}`}catch(e){alert(e.message)}};
+let exportedDatasetName=null;
+$('export').onclick=async()=>{try{const j=await api('/api/ocr-inceleme/disari-aktar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId})});exportedDatasetName=j.path;$('metadata-template').hidden=false;$('metadata-result').textContent='';$('export-result').textContent=`${j.count} görsel/metin çifti kaydedildi: ${j.path}`}catch(e){alert(e.message)}};
+$('metadata-template').onclick=async()=>{if(!exportedDatasetName)return;try{const j=await api('/api/ocr-inceleme/metadata-sablonu',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId,dataset_name:exportedDatasetName})});$('metadata-result').textContent=`Boş şablon oluşturuldu: ${j.path}. Kaynak, bölüm veya kullanım hakkı bilgisi eklenmedi; bu dosya izin onayı değildir.`}catch(e){$('metadata-result').textContent=e.message}};
 function drawAiDrafts(){const eligible=pack.cues.filter(c=>c.crop_valid&&c.active_event&&['accepted','corrected'].includes(c.active_event.status));$('ai-drafts').innerHTML=eligible.length?eligible.map(c=>`<article class="cue"><div><img loading="lazy" alt="Doğrulanmış kaynak altyazı" src="/api/ocr-inceleme/${encodeURIComponent(reviewId)}/crop/${encodeURIComponent(c.cue_id)}"></div><div><label><input type="checkbox" class="ai-select" data-cue="${esc(c.cue_id)}"> #${esc(c.index+1)} · ${esc(c.start_ms)}–${esc(c.end_ms)} ms</label><p><b>Doğrulanmış kaynak:</b> ${esc(c.active_event.verified_source_text)}</p><label>Taslak çeviri<textarea class="ai-draft" data-cue="${esc(c.cue_id)}" maxlength="20000"></textarea></label><div class="controls"><button onclick="lookupMemory('${esc(c.cue_id)}')">Bellekten öneri ara</button><span class="help" id="tm-cue-${esc(c.cue_id)}"></span></div></div></article>`).join(''):'<div class="help">Önce üstteki bölümde en az bir altyazıyı görselle doğrulayın.</div>';}
 async function drawAiProposals(){try{const j=await api('/api/ai-ceviri/durum?review_id='+encodeURIComponent(reviewId));const ms=j.translation_memory_sync||{};$('ai-memory-status').textContent=ms.status==='ready'?`Bu pakette ${ms.entry_count} kabul edilmiş çeviri var; proje belleğine eklemek için aşağıdaki ayrı düğmeyi kullanın.`:'Paket kararları kaydedildi; paket görünümü onarım bekliyor.';$('ai-proposals').innerHTML=j.proposals.length?j.proposals.map(p=>`<article class="cue"><div><img loading="lazy" alt="Kaynak kırpımı" src="/api/ocr-inceleme/${encodeURIComponent(reviewId)}/crop/${encodeURIComponent(p.cue_id)}"></div><div><b>${esc(p.start_ms??'')}–${esc(p.end_ms??'')} ms · ${esc(p.decision)}</b><p><b>Kaynak durumu:</b> ${esc(p.source_review.status)} — ${esc(p.source_review.reason)}</p><p><b>Görüntüden okunan:</b> ${esc(p.source_review.observed_text)}</p><p><b>Kaynak düzeltme önerisi:</b> ${esc(p.source_review.proposed_source_text??'—')}</p><p><b>Doğrulanmış kaynak:</b> ${esc(p.verified_source_text)}</p><p><b>Taslak çeviri:</b> ${esc(p.draft_translation)}</p><p><b>AI önerisi:</b> ${esc(p.translation_review.proposed_translation??'—')}</p><p><b>Gerekçe:</b> ${esc(p.translation_review.reason)}</p>${['accepted','edited'].includes(p.decision)&&p.decision_event_id?`<label><input type="checkbox" class="tm-approved-select" data-decision="${esc(p.decision_event_id)}"> Bu kullanıcı onaylı çeviriyi projeye ekle</label><p><b>Onaylanan çeviri:</b> ${esc(p.decision_translation)}</p>`:''}${p.decision==='pending'&&p.translation_review.status==='reviewed'&&p.source_review.status==='confirmed'?`<textarea id="approved-${esc(p.proposal_id)}">${esc(p.translation_review.proposed_translation)}</textarea><div class="controls"><button class="primary" onclick="translationDecision('${esc(p.proposal_id)}','accepted')">Öneriyi kabul et</button><button onclick="translationDecision('${esc(p.proposal_id)}','edited')">Düzenlediğimi kabul et</button><button class="warn" onclick="translationDecision('${esc(p.proposal_id)}','rejected')">Reddet</button></div>`:p.decision==='pending'?`<div class="notice">Kaynak confirmed değil; çeviri kabul düğmeleri kapalı.</div><button class="warn" onclick="translationDecision('${esc(p.proposal_id)}','rejected')">Öneriyi reddet</button>`:''}</div></article>`).join(''):'<div class="help">İçe aktarılmış AI önerisi yok.</div>'}catch(e){$('ai-proposals').textContent=e.message}}
 $('ai-export').onclick=async()=>{try{const drafts={};document.querySelectorAll('.ai-select:checked').forEach(c=>{const id=c.dataset.cue;const el=[...document.querySelectorAll('.ai-draft')].find(x=>x.dataset.cue===id);if(el?.value.trim())drafts[id]=el.value});const j=await api('/api/ai-ceviri/istek',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId,drafts,source_language:$('ai-source-lang').value,target_language:$('ai-target-lang').value})});const blob=new Blob([JSON.stringify(j.request,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=j.filename;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);$('ai-result').textContent=`İstek dosyası indirildi (${j.request.cues.length} cue). İçinde görseller base64 olarak bulunur; dışarı göndermeden önce dosyayı inceleyin.`}catch(e){alert(e.message)}};
