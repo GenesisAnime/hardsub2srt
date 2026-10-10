@@ -81,7 +81,7 @@ Deterministik sıralama `SHA256(seed + NUL + canonical_group_id)` ile yapılır;
 
 ## Metrik tanımları ve rapor
 
-Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json`, `schemas/ocr-experiment-report-v1.schema.json` ve aşağıdaki crop-only ölçüm için `schemas/ocr-crop-evaluation-report-v1.schema.json` dosyalarındadır. `experiment-report.json` hazırlıkta daima `PREPARED_NOT_RUN`, `rights_verified:false`, `experiment_run_blocked:true` ve null metriklerle yazılır. Null, sıfır başarı demek değildir; ölçülmedi demektir. Rights dosyalarının varlığı/hash'i yalnızca kanıt dosyasını öz-beyan edilen kayda bağlar; hukuki izni doğrulamaz. Crop adapter'ı still metin CER/WER/exact/coverage ölçer; trusted timed reference manifesti ve tam video engine adapter'ı bulunmadığından `vtt-qa.py`/`regresyon/gt_gate.py` video değerlendirmesinden ayrı kalır.
+Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json`, `schemas/ocr-experiment-report-v1.schema.json` ve crop-only ölçüm için `schemas/ocr-crop-evaluation-report-v1.schema.json` dosyalarındadır. `experiment-report.json` hazırlıkta daima `PREPARED_NOT_RUN`, `rights_verified:false`, `experiment_run_blocked:true` ve null metriklerle yazılır. Null, sıfır başarı demek değildir; ölçülmedi demektir. Rights dosyalarının varlığı/hash'i yalnızca kanıt dosyasını öz-beyan edilen kayda bağlar; hukuki izni doğrulamaz. `ocr_crop_eval.py` yalnız still metin CER/WER/exact/coverage ölçer. `ocr_video_eval.py` sabit SRT ve zamanlı referans dosyaları için ayrı measurement-only adapter'dır; gerçek video/OCR çalıştırmaz ve release PASS üretemez. `vtt-qa.py`/`regresyon/gt_gate.py` mevcut regresyon araçları ayrı kalır.
 
 Still-crop ölçüm adaptörü `ocr_crop_eval.py` ile eklenmiştir. Bu adapter yalnızca
 Phase 2 insan onaylı crop + kaynak metni üzerinde OCR motorunun **crop metnini**
@@ -146,15 +146,129 @@ olarak ağa gönderme yoktur. Model eğitimi yapılmaz. Bu adapter `vtt-qa.py` v
 `regresyon/gt_gate.py`'nin zaman hizalı video referans değerlendirmesinin yerini
 almaz.
 
+## Tam bölüm SRT ölçüm adaptörü
+
+`ocr_video_eval.py`, gelecekte izinli ve insan tarafından zaman hizası
+incelenmiş source-language referansları hazır olduğunda sabit tam bölüm SRT
+çıktılarını karşılaştıran **ölçüm adaptörüdür**. Videoyu açmaz, OCR/model
+çalıştırmaz, eğitim yapmaz ve ağ erişimi kullanmaz. Bu nedenle OCR motorunun
+gerçekten belirtilen video/model/device ile çalıştığını doğrulamaz; engine,
+config hash'i, device ve backend `prediction-manifest-v1` içinde kullanıcı
+tarafından beyan edilir. Rapor bunu açıkça doğrulanmamış yazar.
+
+Örnek çağrı (önce `ocr_experiment.py` hazırlık dosyalarını üretmiş olmalı):
+
+```powershell
+py -3 ocr_video_eval.py "D:\yerel\verified-ocr-dataset-..." `
+  --metadata "D:\yerel\dataset-metadata.json" `
+  --experiment "D:\yerel\experiment-...\experiment-report.json" `
+  --references "D:\yerel\timed-references\timed-reference-manifest-v1.json" `
+  --predictions "D:\yerel\fixed-outputs\prediction-manifest-v1.json" `
+  --out "D:\yerel-raporlar\video-eval-2026-01.json"
+```
+
+Input formats are strict and documented by
+`schemas/ocr-timed-reference-manifest-v1.schema.json` and
+`schemas/ocr-prediction-manifest-v1.schema.json`. Both contain exactly one row
+per frozen `source_id + episode_id` group; the prediction manifest has one row
+for each of the prepared baseline and candidate. Their split assignment must
+match the existing `split-manifest.json`. The helper first calls
+`ocr_crop_eval.validate_run`, which rechecks the active Phase 2 event chain,
+metadata/evidence hashes, human rights review attestation and the existing
+frozen split. It does not invent a replacement split contract. It also requires
+the exact sibling `split-manifest.json` and `PREPARED_NOT_RUN` experiment report.
+
+Timed-reference record example:
+
+```json
+{
+  "schema_version": 1,
+  "records": [{
+    "source_id": "source-local-id",
+    "episode_id": "episode-local-id",
+    "split": "test",
+    "language": "ja",
+    "media_sha256": "<64 lowercase hex of exact media file>",
+    "reference_srt_path": "references/episode.srt",
+    "reference_srt_sha256": "<64 lowercase hex>",
+    "alignment_review": {
+      "status": "reviewed",
+      "reviewer": "human reviewer marker",
+      "reviewed_at": "2026-10-11T12:00:00Z",
+      "media_sha256": "<same 64 lowercase media hash>"
+    }
+  }]
+}
+```
+
+Prediction records use the same `source_id`, `episode_id`, `split` and
+`media_sha256`, plus `engine_id` (exactly the frozen baseline/candidate IDs),
+`prediction_srt_path`, `prediction_srt_sha256`, `model_sha256`,
+`config_sha256`, `device` (`gpu` or `cpu`) and `backend`. Put relative SRT files under their respective
+manifest directories. `prediction-manifest-v1` must contain both engine outputs
+for every split group; engine config/device/backend must stay constant across
+the groups for that engine. These fields bind the provided files and declare
+how they were produced, but this fixed-output adapter cannot verify execution.
+
+Each timed reference row binds a local relative SRT path and SHA-256 to source,
+episode, split and the media SHA-256. `alignment_review.status=reviewed`,
+reviewer, timezone timestamp and the same media hash are required. This is a
+human attestation, not independent proof that the subtitle is authorized,
+source-language, synchronized, or reviewed by a verified person. Rights remain
+`false` in every report. Each prediction row similarly binds a local SRT and
+SHA-256 to that exact media hash plus self-declared engine config/device/backend.
+All referenced paths must remain under their manifest directory; hash or group
+mismatch stops evaluation. Input SRTs are strict UTF-8, bounded in size/cue
+count, and every nonempty block must parse; malformed blocks are not silently
+skipped. One report requires a single common `language` value across every
+timed reference; mixed-language references are rejected so WER tokenization is
+not pooled across incompatible languages. The current dataset metadata schema
+has no language field to compare against, so the reference language remains a
+human declaration and the report includes it.
+
+Cues use deterministic maximum-cardinality one-to-one temporal matching.
+Candidate pairs need intersection / **reference cue duration** >= 0.5. The
+Hopcroft-Karp traversal orders reference cues by candidate degree then file
+order; each adjacency list prefers larger overlap, then prediction file order.
+This guarantees the largest number of valid pairs, while the overlap ordering
+is a stable tie-break preference (it does not claim globally maximal total
+overlap among all maximum-cardinality matchings). To bound dense interval work,
+one shared counter allows at most **2,000,000 pair operations total**: each
+prediction visited while pruning the active list and each remaining
+reference/prediction overlap comparison counts once. It also retains at most
+**2,000,000 qualifying edges**; each bound is checked before processing or
+appending the over-limit item. Either limit stops scoring, including when all
+overlaps are below threshold. Text
+CER/WER and normalization reuse `ocr_crop_eval.py`; unmatched references count
+as empty OCR text, while extra prediction cues lower precision. Timing reports
+matched-cue mean absolute start/end error and share with both errors within the
+previously frozen tolerance. Reports include train/validation/test, micro and
+per-group results, but never cue text, raw source/episode IDs, or absolute
+paths (group rows use SHA-256 pseudonyms).
+
+The output schema `schemas/ocr-video-evaluation-report-v1.schema.json` is
+deliberately **not** the Phase 6 input schema. It records the candidate's
+observed test CER delta and whether it exceeds the predeclared CER limit, but
+does not convert that numerical comparison into release eligibility. Its status is always
+`MEASURED_ADAPTER_ONLY_NOT_RELEASE_PASS`, `phase6_eligible=false`,
+`rights_verified=false`, and release status `BLOCKED_ADAPTER_ONLY`. It reports
+predeclared CER comparison facts but makes no release decision; Phase 5 v1 has
+no predeclared coverage threshold, which is called out instead of invented
+after results. Synthetic tests exercise parsing, matching, metrics and the
+non-release report shape. A real run is still blocked because this user has no
+authorized three-group dataset or trusted timed references yet.
+
 ## Tam Phase 5 hâlâ neden bloklu
 
-Crop-level CER/WER, görsel olarak onaylanmış crop metninin motor tarafından ne
-ölçüde okunduğunu kanıtlar; video OCR'ın cue recall/precision'ını, cue
-başlangıç/bitiş zamanını, aday eğitiminin faydasını veya release PASS'ini
-kanıtlamaz. Trusted timed reference corpus, model eğitim adapter'ı, hakların
-bağımsız doğrulanması ve önceden sabitlenmiş tam video regresyon gate'i hâlâ
-eksik. Bu nedenle `experiment-report.json` hazırlık/null-metric sözleşmesinde
-kalır; `ocr_crop_eval.py` ayrı crop-only rapor üretir ve Phase 6 bloke kalır.
+Crop-level CER/WER and the fixed-SRT adapter measure different surfaces. The
+adapter can calculate metrics only after prepared rights/provenance gates and
+human-attested time-aligned references exist. It cannot independently verify
+lawful use, reference trust, or the model/device execution, and its report
+cannot unlock Phase 6. Trusted data, independent rights validation, actual
+candidate execution provenance, a predeclared coverage gate and release-grade
+evidence remain outstanding. The prep report stays `PREPARED_NOT_RUN`; the
+crop report remains crop-only; the video adapter report remains measurement-
+only. Model training and full-video OCR execution are not implemented here.
 
 Tam video değerlendirme için daha sonra eklenmesi gereken metriklerin tanımı:
 

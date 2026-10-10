@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-timed-reference-manifest-v1.schema.json",
+  "title": "Local timed source-language reference manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "records"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "records": {"type": "array", "minItems": 3, "items": {"$ref": "#/$defs/record"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id", "episode_id", "split", "language", "media_sha256", "reference_srt_path", "reference_srt_sha256", "alignment_review"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "episode_id": {"type": "string", "minLength": 1},
+        "split": {"enum": ["train", "validation", "test"]},
+        "language": {"type": "string", "minLength": 1},
+        "media_sha256": {"$ref": "#/$defs/sha256"},
+        "reference_srt_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\:]+$"},
+        "reference_srt_sha256": {"$ref": "#/$defs/sha256"},
+        "alignment_review": {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "reviewer", "reviewed_at", "media_sha256"],
+          "properties": {
+            "status": {"const": "reviewed"},
+            "reviewer": {"type": "string", "minLength": 1},
+            "reviewed_at": {"type": "string", "format": "date-time"},
+            "media_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    }
+  }
+}
