@@ -43,6 +43,24 @@ Her UI işi, seçilen çıktı klasöründe `runs/video-<ad>/<tarih-saat>_<iş-k
 
 Bir `-o ...\bolum.srt` koşumu en azından SRT ve `.stats.json` üretir; araç sürümü, video eşleşme bilgisi ve parametreler `.hardsub2srt.json` yan dosyasında tutulur. Yan dosyalar video dosyası değildir; ancak yerel video adı, boyutu/mtime ve kısmi hash gibi eşleştirme bilgileri içerebilir. Bunları paylaşmadan önce inceleyin.
 
+Ana, `_ekran.srt` ve isteğe bağlı `_ust.srt` yazıcıları bir cue'nun bitişini
+sonraki cue başlangıcına kırpabilir. Kırpma yapılan koşularda `.stats.json`
+`writer_end_clamps` alanı ham ve yazılmış bitişi, kırpma miktarını ve sıfır
+tabanlı cue indeksini içerir; `_ust.srt` için aynı bilgi `ust_bant` stats
+alanında ve `_ust.json` içinde bulunur. Tanılama metin veya kare görüntüsü
+içermez. Bu kayıtlar SRT ayrıştırma denetiminden ayrıdır. `ocr_video_eval.py`
+içindeki `_parse_srt_bytes`, UTF-8 ve boyut/cue sınırlarını, blok biçimini,
+zaman damgası biçimini ve her cue için pozitif süre ile boş olmayan/metin
+uzunluğu sınırını denetler; cue sıralamasını veya cue'lar arası çakışmayı
+doğrulamaz. `writer_end_clamps` ise yalnızca yazıcının kırptığı cue'ları ve
+delta değerini kaydeder; zamanlama doğruluğunu sınamaz veya kanıtlamaz.
+Zamanlar kare indeksi / bildirilen FPS ile
+türetilir ve yaklaşık değerlerdir; kaynak PTS saklanmadığından özellikle VFR
+videolarda gerçek sunum zamanını kanıtlamaz. Tanılama bir düzeltme veya doğruluk
+iddiası değildir. Kayıt yalnızca bu OCR koşumunun yazdığı SRT baytlarını
+tanımlar; SRT sonradan elle değiştirilir veya zamanlanırsa stats otomatik
+güncellenmez ve artık düzenlenmiş dosyanın durumunu yansıtmayabilir.
+
 OCR motoru görünen altyazıyı çıkarır; kendi başına çeviri yapmaz. İsteğe bağlı olarak yerel arayüzde `/ocr-inceleme` sayfasından görselle doğrulanmış seçili bloklar için bir sohbet paketi hazırlayabilir, bu paketi seçtiğin AI'ya kendin gönderip yanıtını uygulamaya aktarabilirsin. Program GPT/DeepSeek API'sini çağırmaz ve bu içerikleri ağa göndermez; dış AI'ya yükleme kullanıcı tarafından yapılır. Kabul ettiğin çevirileri ayrıca proje ve dil kapsamına bağlı yerel belleğe kaydedebilir, terim önerilerini taslağa elle uygulayabilirsin. Ayrıntılar: [yerel inceleme ve öğrenme akışı](docs/REVIEW-BUNDLE.md). `vtt-qa.py` ile `regresyon/gt_gate.py` yalnızca OCR metnini zaman uyumlu kaynak altyazıyla kıyaslar; çeviri kalitesini ölçmez. `gt_gate.py` video ve trusted VTT varlıklarını dışarıdan ister; eksik/belirsiz varlıklar geçiş sayılmaz. Kullanım: [regresyon/README-kisa.md](regresyon/README-kisa.md). Video, VTT ve anime kareleri depoya eklenmemelidir.
 
 ### AI ile OCR görsel incelemesi ve çeviri incelemesi

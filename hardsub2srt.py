@@ -386,7 +386,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from srt_format import fmt_ts
+from srt_format import fmt_ts, render_srt_cues_with_timing_diagnostics
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
@@ -4209,17 +4209,17 @@ def main():
             note(f"[ust] DIYALOG SUPHESI: 0/{len(ust)} blok")
 
         # --- 4) çıktı: SRT temiz + konum AYRI json'da ---
-        with ust_srt.open("w", encoding="utf-8") as f:
-            for i, (a, b, text, conf) in enumerate(ust, 1):
-                start = frame_time(a)
-                end = frame_time(b + 1)
-                if i < len(ust):
-                    end = min(end, frame_time(ust[i][0]))
-                f.write(f"{i}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{text}\n\n")
+        ust_srt_text, ust_end_clamps = \
+            render_srt_cues_with_timing_diagnostics(ust, frame_time)
+        ust_srt.write_text(ust_srt_text, encoding="utf-8")
         u_data = {"video": video.name, "bolge": [0, ucfg["band_h"]],
                   "oran": UST_REGION_FRAC, "mask": ucfg["mask"],
                   "esik": u_esik,
                   "diyalog_supheli": u_sus_n, "bloklar": []}
+        if ust_end_clamps:
+            u_data["writer_end_clamps"] = {
+                "time_basis": "frame_index / reported FPS; approximate; source PTS not preserved",
+                "cues": ust_end_clamps}
         for i, (a, b, text, conf) in enumerate(ust, 1):
             bb = u_bb[i - 1]
             u_data["bloklar"].append({
@@ -4283,7 +4283,7 @@ def main():
                 _qa_ust(blk, qa_dir / f"ust_{k:03d}_f{(blk[0]+blk[1])//2}.png")
             print(f"    QA ust montajlari: {qa_dir}/ust_*.png ({len(picks)} adet)")
 
-        return {"blok": len(ust), "statik_elenen": round(statik_oran, 6),
+        ust_stats = {"blok": len(ust), "statik_elenen": round(statik_oran, 6),
                 "statik_elenen_piksel": n_drop,
                 "statik_olcusan_piksel": n_band,
                 "statik_kare": sfr,
@@ -4307,7 +4307,12 @@ def main():
                                  "y_lo": UST_SUS_Y_LO, "y_hi": UST_SUS_Y_HI},
                 "second_engine_votes": u_second,
                 "srt": ust_srt.name, "json": ust_json.name,
-                "sure_sn": round(time.time() - t_all, 1)}, [list(x) for x in ust]
+                "sure_sn": round(time.time() - t_all, 1)}
+        if ust_end_clamps:
+            ust_stats["writer_end_clamps"] = {
+                "time_basis": "frame_index / reported FPS; approximate; source PTS not preserved",
+                "cues": ust_end_clamps}
+        return ust_stats, [list(x) for x in ust]
 
     # --- Düzeltme 1c: oto-eşik kendini iyileştirme (BİR KEZ) ---
     # Wano tur 2 (05.10.2026) tetiği: ort. conf < 0.55 VEYA low-conf oranı
@@ -4825,26 +4830,18 @@ def main():
 
     # --- SRT yaz ---
     out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w", encoding="utf-8") as f:
-        for i, (a, b, text, conf) in enumerate(ana, 1):
-            start = frame_time(a)
-            end = frame_time(b + 1)
-            if i < len(ana):
-                end = min(end, frame_time(ana[i][0]))
-            f.write(f"{i}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{text}\n\n")
+    main_srt_text, main_end_clamps = \
+        render_srt_cues_with_timing_diagnostics(ana, frame_time)
+    out.write_text(main_srt_text, encoding="utf-8")
     # F6: _ekran.srt HER ZAMAN yazilir. Eskiden yalnizca ekran_bloklari
     # doluysa dosya dokunulmazdi; 0 blok ayrilan bir kosuda bir onceki
     # kosunun _ekran.srt'i yeni bir dosya adiyla ("bu kosunun ciktisi")
     # hayatta kaliyordu. Artik dosya her kosuda yeniden yazilir; 0 blok
     # ayrilmissa BOS (0 bayt) birakilir -> bayat icerik taklit edilemez.
     ekran_path = out.with_name(out.stem + "_ekran.srt")
-    with ekran_path.open("w", encoding="utf-8") as f:
-        for i, (a, b, text, conf) in enumerate(ekran_bloklari, 1):
-            start = frame_time(a)
-            end = frame_time(b + 1)
-            if i < len(ekran_bloklari):
-                end = min(end, frame_time(ekran_bloklari[i][0]))
-            f.write(f"{i}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{text}\n\n")
+    screen_srt_text, screen_end_clamps = \
+        render_srt_cues_with_timing_diagnostics(ekran_bloklari, frame_time)
+    ekran_path.write_text(screen_srt_text, encoding="utf-8")
     if ekran_bloklari:
         print(f"    gurultu ayrimi: {len(ekran_bloklari)} blok -> "
               f"{ekran_path.name}")
@@ -5075,6 +5072,14 @@ def main():
              "second_engine_takas": second_takas,
              "second_engine_cuda": _ORT["durum"],
              "onnxruntime": _ORT["surum"]}
+    # Writer clamps do not change SRT timestamps: they only expose cases where
+    # a cue's frame/FPS-derived end was shortened to the next cue's start.
+    # Source PTS is not preserved, so these times remain approximate (VFR risk).
+    if main_end_clamps or screen_end_clamps:
+        stats["writer_end_clamps"] = {
+            "time_basis": "frame_index / reported FPS; approximate; source PTS not preserved",
+            "main": main_end_clamps,
+            "screen": screen_end_clamps}
     # ust_bant YALNIZ --ust-bant verildiğinde eklenir (bayraksız koşunun
     # stats.json'u bit-bit aynı kalmalı).
     if ust_bant is not None:

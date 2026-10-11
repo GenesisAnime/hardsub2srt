@@ -216,6 +216,34 @@ Phase 2 export through first multi-episode measurement steps: [İlk gerçek OCR 
 
 ### Phase 2 implementation notes
 
+#### SRT yapısal denetimi ve ham writer-end tanılaması
+
+`ocr_video_eval.py` içindeki `_parse_srt_bytes`, UTF-8 ve dosya/cue sayısı
+sınırlarını, blok yapısını, zaman damgası biçimini, her cue'nun pozitif süreli
+olmasını ve boş olmayan/metin uzunluğu sınırını kontrol eder. Cue'ların dosya
+içinde kronolojik sırasını veya cue'lar arası çakışmayı doğrulamaz.
+Yazıcı, bir cue'nun ham `frame_time(end_frame + 1)` bitişi sonraki cue'nun
+başlangıcını aşıyorsa, çıktıyı korumak için bitişi sonraki başlangıca kırpar.
+Bu nedenle son SRT'de çakışma bulunmaması kırpma öncesi ham zamanların doğru
+olduğunu göstermez.
+
+Kırpma tanılaması SRT zamanlarını değiştirmez ve zaman doğruluğunu
+doğrulamaz. Yalnızca yazıcının kırpma uyguladığı cue'ları, o yazım anındaki
+ham/yazılmış bitişi ve farkı kaydeder. Ana SRT ve `_ekran.srt`
+kırpmaları `.stats.json` içindeki `writer_end_clamps` alanında; isteğe bağlı
+`_ust.srt` kırpmaları `ust_bant.writer_end_clamps` ve `_ust.json` içinde,
+cue indeksi/kare aralığı ile ham bitiş, yazılan bitiş ve delta olarak tutulur.
+Tanılama cue metni veya görsel taşımaz. Zamanlar kare indeksi ve bildirilen FPS
+ile hesaplanır; kaynak PTS korunmadığı için yaklaşık değerlerdir ve VFR
+videoda gerçek sunum zamanı doğrulaması sayılmaz. Alanın yokluğu o koşumda
+yazıcı tarafından ölçülen bir kırpma olmadığını belirtir; zaman doğruluğunu
+kanıtlamaz. Gerçek başlangıç/bitiş doğruluğu için ayrıca yetkili ve zaman
+hizalı referans SRT ile sabit video değerlendirmesi gerekir.
+Tanılama yalnızca ilgili OCR koşumunun ürettiği SRT baytlarını açıklar. SRT
+sonradan elle düzenlenir veya yeniden zamanlanırsa stats yeniden hesaplanmaz;
+bu nedenle kayıt düzenlenmiş SRT ile uyuşmayabilir ve o dosya için güncel
+kanıt gibi kullanılmamalıdır.
+
 - A separate **manual AI OCR visual review** subflow is documented at [AI OCR görsel incelemesi](AI-OCR-GORSEL-INCELEME.md). It intentionally accepts any selected cue with a currently valid crop, even before a human OCR decision, and exports the existing OCR/SRT text, fixed cue timing, confidence, and selected image for user-controlled manual AI review. The structured response enters only `ai-ocr-review/proposals.jsonl`; it is never an OCR event or dataset label. A user must still use the normal human accept/correct controls before the OCR dataset export can include a cue. Crop-to-cue timing may be approximate where source PTS was not preserved.
 
 - Open the local UI and visit **Yerel OCR Doğrulama** at `http://127.0.0.1:8765/ocr-inceleme`; select a `.review-pack` folder with the Windows folder dialog or enter its path.
