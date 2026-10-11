@@ -137,6 +137,22 @@ except Exception as _contrib_hatasi:
     print(f"[ui] UYARI: contribution_client.py yüklenemedi — katkı gönderimi kapalı: "
           f"{_contrib_hatasi!r}")
 
+try:
+    from job_history import JobHistory, default_history_path
+    JOB_HISTORY = JobHistory(default_history_path())
+except Exception as _job_history_error:
+    # Persistent diagnostics are best effort and must never block OCR startup.
+    JOB_HISTORY = None
+    print(f"[ui] UYARI: kalıcı iş tanılaması kapalı: {_job_history_error!r}")
+
+try:
+    from windows_job import CREATE_SUSPENDED, WindowsJobObject
+except Exception as _windows_job_error:
+    WindowsJobObject = None
+    CREATE_SUSPENDED = 0x00000004
+    if os.name == "nt":
+        print(f"[ui] UYARI: Windows Job Object yönetimi yüklenemedi: {_windows_job_error!r}")
+
 # otomatik öğrenme (Kaydet = öğren): sınıflandırıcı ogren.py'de tek kaynaktır;
 # yüklenemezse kayıt çalışmaya devam eder, yalnız öğrenme atlanır
 sys.path.insert(0, str(KLASOR))
@@ -182,6 +198,31 @@ def _memory_request_error():
 
 @app.before_request
 def _guard_local_translation_memory():
+    if request.path == "/api/is-gecmisi":
+        host = request.environ.get("HTTP_HOST", "")
+        allowed = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+        if host != host.strip() or any(ch.isspace() for ch in host) or host.lower() not in allowed:
+            return jsonify({"hata": "İş geçmişi yalnız localhost veya 127.0.0.1 üzerinden kullanılabilir"}), 403
+        source = request.headers.get("Origin")
+        if not source and request.headers.get("Referer"):
+            try:
+                ref = urlsplit(request.headers["Referer"])
+                source = f"{ref.scheme}://{ref.netloc}"
+            except ValueError:
+                source = "invalid:"
+        if source:
+            try:
+                parsed = urlsplit(source)
+                valid = (parsed.scheme.lower() == "http" and parsed.netloc.lower() == host.lower()
+                         and parsed.hostname is not None
+                         and parsed.hostname.lower() in {"localhost", "127.0.0.1"}
+                         and parsed.port == PORT and parsed.username is None
+                         and parsed.password is None and parsed.path in ("", "/")
+                         and not parsed.query and not parsed.fragment)
+            except ValueError:
+                valid = False
+            if not valid:
+                return jsonify({"hata": "İş geçmişi için aynı localhost kaynağı gerekli"}), 403
     if request.path.startswith("/api/ceviri-bellegi/"):
         return _memory_request_error()
     if request.path.startswith("/api/katki/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -210,7 +251,7 @@ LOG = deque(maxlen=LOG_LIMIT)
 KATKI_ONIZLEMELERI = {}
 LOG_SAYAC = 0
 IS_SAYAC = 0
-CALISAN = {}               # {"pid": int, "is_id": str} — çalışan süreç
+CALISAN = {}               # {"pid": int, "is_id": str, "process": Popen} — çalışan süreç
 IPTAL_SETI = set()         # iptali istenen iş id'leri
 SUNUCU_BASLANGIC = time.time()
 
@@ -304,6 +345,7 @@ def is_snapshot(isim):
     """İşin kopyasını döndürür. ⚠️ Yalnız KILIT tutulurken çağrılır
     (kilit içinde kilit = threading.Lock'ta deadlock)."""
     s = dict(isim)
+    s.pop("_diag_phase", None)
     s["uyarilar"] = list(isim["uyarilar"])
     s["sec"] = dict(isim["sec"])
     s["vtt"] = dict(isim["vtt"]) if isim.get("vtt") else None
@@ -320,18 +362,137 @@ def isci():
                 if k["durum"] == "bekliyor":
                     k["durum"] = "çalışıyor"
                     k["basladi"] = time.time()
+                    k["_diag_phase"] = "setup"
                     isim = k
                     break
         if isim is None:
             time.sleep(0.4)
             continue
+        _job_history_record(isim, status="running", phase="setup")
         try:
             is_yurut(isim)
         except Exception as e:                      # worker ölmesin
-            with KILIT:
-                isim["durum"] = "hata"
-                isim["hata"] = f"worker istisnası: {e!r}"
-            log_ekle("hata", f"worker istisnası: {e!r}", isim["id"])
+            cleaned = _worker_failed(isim, e)
+            if not cleaned:
+                _wait_for_failed_child_cleanup(isim)
+
+
+def _worker_failed(isim, exc):
+    with KILIT:
+        isim["hata"] = f"worker istisnası: {exc!r}"
+    cleaned = _stop_failed_child(isim["id"])
+    if cleaned:
+        _finalize_worker_failure(isim)
+    else:
+        with KILIT:
+            isim["durum"] = "çalışıyor"
+        _job_history_record(isim, status="running", phase="child_running")
+    log_ekle("hata", f"worker istisnası: {exc!r}", isim["id"])
+    return cleaned
+
+
+def _wait_for_failed_child_cleanup(isim):
+    """Block the serial worker until the failed child's process is reaped."""
+    while not _stop_failed_child(isim["id"]):
+        time.sleep(0.5)
+    if isim.get("durum") != "hata":
+        _finalize_worker_failure(isim)
+
+
+def _close_job_owner_and_clear(is_id, owner):
+    """Retry handle close and retain the active slot until OS confirmation."""
+    warned = False
+    while owner is not None and getattr(owner, "handle", None) is not None:
+        try:
+            owner.close()
+        except Exception:
+            if not warned:
+                log_ekle("uyari", "Windows Job Object handle kapanışı bekleniyor", is_id)
+                warned = True
+            time.sleep(0.5)
+    with KILIT:
+        if CALISAN.get("is_id") == is_id:
+            CALISAN.clear()
+
+
+def _finalize_worker_failure(isim):
+    with KILIT:
+        isim["durum"] = "hata"
+        phase = isim.get("_diag_phase", "setup")
+    error_code = {
+        "setup": "setup_failed",
+        "process_start": "process_start_failed",
+    }.get(phase, "worker_failed")
+    _job_history_record(isim, status="failed", phase="complete",
+                        error_code=error_code, finish=True)
+
+
+def _stop_failed_child(is_id):
+    """Stop and reap a child before making its failed job terminal."""
+    with KILIT:
+        child = CALISAN.get("process") if CALISAN.get("is_id") == is_id else None
+        owner = CALISAN.get("job_owner") if CALISAN.get("is_id") == is_id else None
+        if child is None:
+            return CALISAN.get("is_id") != is_id
+        pid = CALISAN.get("pid")
+    try:
+        if owner is not None:
+            owner.close()
+        alive = child.poll() is None
+        if alive and os.name == "nt" and pid:
+            try:
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                               capture_output=True, timeout=10, env=_child_process_env())
+            except Exception:
+                pass
+        if child.poll() is None:
+            try:
+                child.terminate()
+            except Exception:
+                pass
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=10)
+        else:
+            # wait() reaps an already-exited process too.
+            child.wait(timeout=10)
+        if child.poll() is None:
+            return False
+    except Exception:
+        return False
+    finally:
+        try:
+            if child.stdout:
+                child.stdout.close()
+        except Exception:
+            pass
+    with KILIT:
+        if CALISAN.get("is_id") == is_id:
+            CALISAN.clear()
+    return True
+
+
+def _job_history_record(isim, *, status, phase, error_code=None,
+                        return_code=None, finish=False):
+    """Best-effort persistence; only enum values and numeric metadata leave this scope."""
+    if JOB_HISTORY is None:
+        return
+    started = isim.get("basladi")
+    duration = None
+    if finish and started is not None:
+        duration = max(0, time.time() - started)
+    try:
+        JOB_HISTORY.record(
+            isim.get("id"), status=status, phase=phase,
+            cpu=bool(isim.get("sec", {}).get("cpu")),
+            duration_seconds=duration, return_code=return_code,
+            error_code=error_code,
+        )
+    except Exception as exc:
+        # Keep even diagnostic failures out of durable logs and user data.
+        print(f"[ui] kalıcı iş tanılaması yazılamadı ({type(exc).__name__})")
 
 
 def is_yurut(isim):
@@ -371,20 +532,48 @@ def is_yurut(isim):
     log_ekle("bilgi", f"iş başladı: {video.name} -> {srt.name}", isim["id"])
     log_ekle("bilgi", "komut: " + " ".join(cmd), isim["id"])
 
-    surec = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,        # note() stderr'e yazıyor → birleştir
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-        cwd=str(KLASOR),
-        env=ortam,
-    )
+    with KILIT:
+        isim["_diag_phase"] = "process_start"
+    _job_history_record(isim, status="running", phase="process_start")
+    popen_options = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,        # note() stderr'e yazıyor → birleştir
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "bufsize": 1,
+        "cwd": str(KLASOR),
+        "env": ortam,
+    }
+    if os.name == "nt":
+        # Keep OCR dormant until the Job Object owns the process tree.
+        popen_options["creationflags"] = CREATE_SUSPENDED
+    surec = subprocess.Popen(cmd, **popen_options)
+    # Track immediately, so even a failed Job Object assignment can fall back
+    # to explicit termination/reap before the job is marked terminal.
     with KILIT:
         CALISAN["pid"] = surec.pid
         CALISAN["is_id"] = isim["id"]
+        CALISAN["process"] = surec
+        CALISAN["job_owner"] = None
+    job_owner = None
+    if os.name == "nt":
+        if WindowsJobObject is None:
+            try:
+                surec.terminate()
+                surec.wait(timeout=5)
+            except Exception:
+                try:
+                    surec.kill()
+                    surec.wait(timeout=5)
+                except Exception:
+                    pass
+            raise RuntimeError("Windows Job Object yönetimi kullanılamıyor; iş güvenli biçimde başlatılamadı")
+        job_owner = WindowsJobObject(surec)
+    with KILIT:
+        CALISAN["job_owner"] = job_owner
+        isim["_diag_phase"] = "child_running"
+    _job_history_record(isim, status="running", phase="child_running")
     log_ekle("bilgi", f"süreç başladı (pid {surec.pid})", isim["id"])
 
     stats_yol = None
@@ -432,9 +621,12 @@ def is_yurut(isim):
 
     rc = surec.wait()
     with KILIT:
-        CALISAN.pop("pid", None)
-        CALISAN.pop("is_id", None)
+        active_owner = CALISAN.get("job_owner") if CALISAN.get("is_id") == isim["id"] else None
     isim["rc"] = rc
+    with KILIT:
+        isim["_diag_phase"] = "child_exit"
+    _job_history_record(isim, status="running", phase="child_exit", return_code=rc)
+    _close_job_owner_and_clear(isim["id"], active_owner)
     isim["bitti"] = time.time()
     if isim["basladi"]:
         isim["sure_sn"] = round(isim["bitti"] - isim["basladi"], 1)
@@ -444,12 +636,16 @@ def is_yurut(isim):
         isim["durum"] = "iptal"
         isim["hata"] = "kullanıcı iptal etti"
         log_ekle("uyari", f"iş iptal edildi (rc={rc})", isim["id"])
+        _job_history_record(isim, status="cancelled", phase="complete",
+                            error_code="cancelled", return_code=rc, finish=True)
         return
 
     if rc != 0:
         isim["durum"] = "hata"
         isim["hata"] = f"süreç rc={rc} ile bitti (ayrıntı: log)"
         log_ekle("hata", f"iş hatalı bitti (rc={rc}): {video.name}", isim["id"])
+        _job_history_record(isim, status="failed", phase="complete",
+                            error_code="child_nonzero", return_code=rc, finish=True)
         return
 
     srt_yol = Path(isim["srt"]) if isim["srt"] else srt
@@ -457,6 +653,8 @@ def is_yurut(isim):
         isim["durum"] = "hata"
         isim["hata"] = f"SRT üretilmedi: {srt_yol}"
         log_ekle("hata", isim["hata"], isim["id"])
+        _job_history_record(isim, status="failed", phase="complete",
+                            error_code="missing_srt", return_code=rc, finish=True)
         return
 
     # stats.json (aracın kendi çıktısı: <out>.stats.json)
@@ -485,6 +683,8 @@ def is_yurut(isim):
     log_ekle("tamam", f"iş bitti: {srt_yol.name} "
                       f"(sure {isim['sure_sn']} sn, qa {qa_adet if qa_adet is not None else len(isim['qa_dosyalari'])})",
              isim["id"])
+    _job_history_record(isim, status="succeeded", phase="complete",
+                        return_code=rc, finish=True)
 
     # ASS üretimi (srt2ass.py çağrısı — dosya değiştirilmez)
     if sec.get("ass"):
@@ -1989,6 +2189,21 @@ def api_durum():
         "kuyruk": son_isler,
         "log": log,
     })
+
+
+@app.get("/api/is-gecmisi")
+def api_is_gecmisi():
+    """Return bounded lifecycle diagnostics; no media names or paths are stored."""
+    if JOB_HISTORY is None:
+        return jsonify({"etkin": False, "isler": [],
+                        "uyari": "Kalıcı iş tanılaması bu oturumda kullanılamıyor."})
+    try:
+        limit = request.args.get("limit", "20")
+        return jsonify({"etkin": True, "isler": JOB_HISTORY.recent(limit)})
+    except Exception:
+        # The endpoint is diagnostic only; malformed local state is fail-safe.
+        return jsonify({"etkin": False, "isler": [],
+                        "uyari": "İş geçmişi okunamadı; canlı kuyruk etkilenmedi."})
 
 
 @app.post("/api/ekle")
