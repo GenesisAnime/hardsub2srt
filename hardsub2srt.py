@@ -377,9 +377,11 @@ import argparse
 import difflib
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from itertools import combinations
 from pathlib import Path
@@ -3432,6 +3434,7 @@ def get_second_engine(lang_list, gpu_flag, ocr_mode="auto",
         _SECOND["state"] = "failed"
         note("[i] ikinci motor eklenmedi: zaten ['en'] okunuyor")
         return _SECOND
+
     try:
         import easyocr
         engine2 = easyocr.Reader(["en"], gpu=gpu_flag, verbose=False)
@@ -3446,7 +3449,52 @@ def get_second_engine(lang_list, gpu_flag, ocr_mode="auto",
         return _SECOND
 
 
+def _run_timing_snapshot(run_started, stage_durations, stage_status, now=None):
+    """Build additive, JSON-safe profiling fields from monotonic timestamps.
+
+    Durations are informational and intentionally do not affect OCR decisions.
+    Stage values can overlap (for example recovery runs after extraction and is
+    included in total run elapsed); callers must not sum them as a partition.
+    """
+    now = time.monotonic() if now is None else float(now)
+    elapsed = max(0.0, now - float(run_started))
+    stages = {}
+    for name, seconds in stage_durations.items():
+        stages[name] = (None if seconds is None
+                        else round(max(0.0, float(seconds)), 3))
+    return {
+        "clock": "monotonic",
+        "run_elapsed_seconds": round(elapsed, 3),
+        "stage_durations_seconds": stages,
+        "stage_status": dict(stage_status),
+        "stage_durations_may_overlap": True,
+    }
+
+
+def _atomic_write_json(path, payload):
+    """Atomically replace one JSON file using a unique same-directory temp."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def main():
+    run_started = time.monotonic()
     global HWACCEL
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
@@ -3926,11 +3974,14 @@ def main():
                 len(takas_kayit), takas_kayit, fade_n, cjk_blok, cjk_kayit,
                 source_frame_evidence)
 
+    first_extraction_started = time.monotonic()
     (merged, merged_raw, micro_moved, scanned, second_votes, second_takas,
      takas_kayit, fade_n, cjk_blok, cjk_kayit,
      main_review_evidence) = _extract(cfg)
+    first_extraction_seconds = time.monotonic() - first_extraction_started
 
     upper_review_evidence = []
+    upper_band_seconds = None
     def _ust_pass():
         nonlocal upper_review_evidence
         """--ust-bant: üst %35 bölgesinin AYRI geçişi.
@@ -4401,7 +4452,7 @@ def main():
                     "low_oran": round(low_oran, 3),
                     "ornek_sn": round(ornek_sn, 1),
                     "tam_sn": round(tam_sn, 1)})
-                t_esik = time.time()
+                t_esik = time.monotonic()
                 esik_kayit["tam_gecis_yapildi"] = False
                 # referans (eski esik) ornegi: eldeki `merged` zaten tam
                 # gecisin ciktisi; yalniz ilk penceredeki bloklar alinir.
@@ -4424,7 +4475,7 @@ def main():
                     note(f"[auto] esik yeniden denemesi REDDEDILDI "
                          f"(ORNEK {ornek_sn:.0f} sn): {esik_anahtari}={yeni} "
                          f"skor {s0o:.1f} -> {s1o:.1f}; tam gecis "
-                         f"YAPILMADI ({time.time() - t_esik:.0f} sn)")
+                         f"YAPILMADI ({time.monotonic() - t_esik:.0f} sn)")
                 else:
                     # Ornek kazanci gosterdi -> simdi tam gecise harcanir.
                     m2, mr2, mv2, s2, v2, tk2, tkl2, fd2, cb2, ck2, ev2 = \
@@ -4459,7 +4510,7 @@ def main():
                              f"(skor {s0:.1f} -> {s1_:.1f}; {len(m2)} blok, "
                              f"{sum(1 for r in m2 if r[3] < args.conf_thr)} "
                              f"dusuk guven)")
-                esik_kayit["sure_s"] = round(time.time() - t_esik, 1)
+                esik_kayit["sure_s"] = round(time.monotonic() - t_esik, 1)
 
     # --- Low-conf kurtarma turu (06.10.2026; --no-kurtarma kapatır) ---------
     # YERİ ÖNEMLİ (iki neden):
@@ -4486,7 +4537,7 @@ def main():
     kurtarma_kayit = []                # <ad>.kurtarma-gunlugu.json gövdesi
     kurtarma_havuzu = list(merged) + list(micro_moved)
     if args.kurtarma and kurtarma_havuzu:
-        t_k = time.time()
+        t_k = time.monotonic()
         # ikinci motor: _read_chunk'ta kurulmamış olabilir (tüm low-conf
         # segmentler boş metin ürettiyse); burada tembel kurulur, yoksa (c)
         # atlanır — (a)/(b) ana okuyucuyla yine de denenir.
@@ -4584,7 +4635,7 @@ def main():
                      f"{eski_metin[:40]!r} -> {y_metin[:40]!r}")
             else:
                 kurtarma_bilgi["degismeyen"] += 1
-        kurtarma_bilgi["sure_sn"] = round(time.time() - t_k, 1)
+        kurtarma_bilgi["sure_sn"] = round(time.monotonic() - t_k, 1)
         if kurtarma_bilgi["denenen"]:
             note(f"[kurtarma] tamam: {kurtarma_bilgi['denenen']} denenen, "
                  f"{kurtarma_bilgi['kurtarilan']} kurtarilan, "
@@ -4770,6 +4821,8 @@ def main():
             note("[!] Bu videoda hardsub bulunamadi olabilir "
                  "(logo/poster gurultusu). Yan dosyada .vtt var mi kontrol et.")
 
+    artifact_generation_started = time.monotonic()
+
     # --- Task 2: ust bant ikinci gecisi ANA SRT'den ONCE calisir ---
     # Varsayilan davranis BITBIT AYNIDIR (bayrak yoksa ust_pass hic cagrilmaz,
     # ana SRT bayraksiz kosuyla ayni kalir). `--ust-ana` verildiginde ust
@@ -4780,7 +4833,9 @@ def main():
     ust_bant = None
     review_regions = None
     if args.ust_bant or args.ust_ana:
+        upper_band_started = time.monotonic()
         ust_bant, _ust_bloklar = _ust_pass()
+        upper_band_seconds = time.monotonic() - upper_band_started
         if args.ust_ana:
             # Keep the independently known OCR pass for each final cue. The
             # stable sort preserves the existing main-before-upper tie order.
@@ -4830,6 +4885,7 @@ def main():
 
     # --- SRT yaz ---
     out.parent.mkdir(parents=True, exist_ok=True)
+    srt_write_started = time.monotonic()
     main_srt_text, main_end_clamps = \
         render_srt_cues_with_timing_diagnostics(ana, frame_time)
     out.write_text(main_srt_text, encoding="utf-8")
@@ -4842,6 +4898,7 @@ def main():
     screen_srt_text, screen_end_clamps = \
         render_srt_cues_with_timing_diagnostics(ekran_bloklari, frame_time)
     ekran_path.write_text(screen_srt_text, encoding="utf-8")
+    srt_write_seconds = time.monotonic() - srt_write_started
     if ekran_bloklari:
         print(f"    gurultu ayrimi: {len(ekran_bloklari)} blok -> "
               f"{ekran_path.name}")
@@ -5032,6 +5089,8 @@ def main():
                 print(f"    QA tekrar/filigran bloklari: {te_dir}/ "
                       f"({len(te_bloklar)} adet)")
 
+    artifact_generation_seconds = time.monotonic() - artifact_generation_started
+
     # "video" 05.10.2026 tur 2'den beri kimlik SÖZLÜĞÜDÜR:
     # {ad, mtime, boyut, sha1_ilk_1MB} (E02 vakasının kalıcı önlemi;
     # eski düz-isim okuyucusu yok — bkz. modül docstring tur 2 madde 4).
@@ -5128,7 +5187,11 @@ def main():
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"    meta: {meta_yol}")
 
+    review_pack_seconds = None
+    review_pack_status = "not_requested"
     if args.review_pack:
+        review_pack_started = time.monotonic()
+        review_pack_status = "failed"
         # Lazy import keeps importlib-based legacy tools compatible when they
         # load this script without adding its directory to sys.path.
         from review_bundle import build_review_pack
@@ -5207,6 +5270,7 @@ def main():
         try:
             review_dir, review_manifest = build_review_pack(
                 out, review_cues, review_metadata, _review_crop)
+            review_pack_status = "completed"
             print(f"AI inceleme paketi: {review_dir} "
                   f"({review_manifest['unique_crop_count']} kırpım / "
                   f"{review_manifest['cue_count']} cue; yerel, yükleme yok)")
@@ -5216,6 +5280,40 @@ def main():
         finally:
             if capture is not None:
                 capture.release()
+        review_pack_seconds = time.monotonic() - review_pack_started
+
+    # Write final profiling metadata after optional review-pack work so total
+    # elapsed includes it. Stage values intentionally overlap: retry/recovery
+    # occur within the run, and SRT writing is part of artifact generation.
+    stats["timing"] = _run_timing_snapshot(
+        run_started,
+        {
+            "first_extraction": first_extraction_seconds,
+            "threshold_retry": esik_kayit.get("sure_s"),
+            "low_confidence_recovery": (
+                kurtarma_bilgi.get("sure_sn")
+                if kurtarma_bilgi.get("denenen", 0) else None),
+            "artifact_generation": artifact_generation_seconds,
+            "srt_render_and_write": srt_write_seconds,
+            "review_pack": review_pack_seconds,
+            "upper_band_pass": upper_band_seconds,
+        },
+        {
+            "first_extraction": "completed",
+            "threshold_retry": ("completed" if "sure_s" in esik_kayit
+                                else "not_triggered"),
+            "low_confidence_recovery": (
+                "completed" if kurtarma_bilgi.get("denenen", 0)
+                else "disabled" if not args.kurtarma else "no_candidates"),
+            "artifact_generation": "completed",
+            "srt_render_and_write": "completed",
+            "review_pack": review_pack_status,
+            "upper_band_pass": ("completed" if upper_band_seconds is not None
+                                else "not_requested"),
+        },
+    )
+    stats_path = out.with_suffix(".stats.json")
+    _atomic_write_json(stats_path, stats)
 
 
 if __name__ == "__main__":
