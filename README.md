@@ -61,6 +61,16 @@ iddiası değildir. Kayıt yalnızca bu OCR koşumunun yazdığı SRT baytların
 tanımlar; SRT sonradan elle değiştirilir veya zamanlanırsa stats otomatik
 güncellenmez ve artık düzenlenmiş dosyanın durumunu yansıtmayabilir.
 
+Mevcut bir SRT'yi ayrıca salt-okunur kalite raporundan geçirmek için
+`python srt_lint.py "bolum.srt"` çalıştırın. Araç parse sorunlarını hata olarak;
+kronoloji, çakışma, karakter/sn (CPS) ve kısa/uzun süre bulgularını ise yalnızca
+sezgisel uyarı olarak yazar. CPS ve süre eşikleri komut satırından değiştirilebilir;
+`--cps-warning 0 --min-duration-ms 0 --max-duration-ms 0` tüm sezgisel uyarıları
+kapatır. Varsayılan eşikler evrensel kalite standardı değildir ve dile/altyazı
+biçemine göre yanlış uyarı üretebilir. Araç SRT'yi değiştirmez, OCR kuyruğuna veya
+üretim pipeline'ına bağlı değildir; parse hatası nedeniyle döndüğü kod da yalnızca
+bu elle başlatılan rapor komutuna aittir.
+
 OCR motoru görünen altyazıyı çıkarır; kendi başına çeviri yapmaz. İsteğe bağlı olarak yerel arayüzde `/ocr-inceleme` sayfasından görselle doğrulanmış seçili bloklar için bir sohbet paketi hazırlayabilir, bu paketi seçtiğin AI'ya kendin gönderip yanıtını uygulamaya aktarabilirsin. Program GPT/DeepSeek API'sini çağırmaz ve bu içerikleri ağa göndermez; dış AI'ya yükleme kullanıcı tarafından yapılır. Kabul ettiğin çevirileri ayrıca proje ve dil kapsamına bağlı yerel belleğe kaydedebilir, terim önerilerini taslağa elle uygulayabilirsin. Ayrıntılar: [yerel inceleme ve öğrenme akışı](docs/REVIEW-BUNDLE.md). `vtt-qa.py` ile `regresyon/gt_gate.py` yalnızca OCR metnini zaman uyumlu kaynak altyazıyla kıyaslar; çeviri kalitesini ölçmez. `gt_gate.py` video ve trusted VTT varlıklarını dışarıdan ister; eksik/belirsiz varlıklar geçiş sayılmaz. Kullanım: [regresyon/README-kisa.md](regresyon/README-kisa.md). Video, VTT ve anime kareleri depoya eklenmemelidir.
 
 ### AI ile OCR görsel incelemesi ve çeviri incelemesi
@@ -109,6 +119,7 @@ VDS kurulum adımları, token yaşam döngüsü, retention/silme ve TLS proxy s�
 | `contribution_client.py`, `contribution_api.py` | varsayılanı kapalı, açık onaylı sayısal katkı istemcisi ve WSGI API |
 | `schemas/contribution-metrics-v1.schema.json` | katkı payload'ının strict v1 sözleşmesi |
 | `srt_format.py` | SRT zaman biçimi yardımcıları |
+| `srt_lint.py` | Var olan SRT için salt-okunur yapı ve sezgisel kalite raporu |
 | `cikar.bat`, `arayuz.bat`, `toplu.bat` | Windows başlatıcıları |
 | `srt2ass.py` | SRT'den ASS üretimi |
 | `vtt-qa.py` | SRT/VTT metin ve zaman kıyası |

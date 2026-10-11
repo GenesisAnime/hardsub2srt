@@ -244,6 +244,16 @@ sonradan elle düzenlenir veya yeniden zamanlanırsa stats yeniden hesaplanmaz;
 bu nedenle kayıt düzenlenmiş SRT ile uyuşmayabilir ve o dosya için güncel
 kanıt gibi kullanılmamalıdır.
 
+Var olan SRT'leri gözle taramaya yardımcı olmak için bağımsız `srt_lint.py`
+komutu eklendi. Dosyayı yeniden yazmadan parse hatalarını raporlar; geçerli
+cue'larda dosya sırası, cue çakışması, yaklaşık karakter/sn (CPS) ve kısa/uzun
+süre adaylarını ayrı sezgisel uyarılar olarak listeler. CPS ve süre eşikleri
+kullanıcı tarafından ayarlanabilir veya kapatılabilir. Bu değerler doğruluk,
+okunabilirlik ya da zamanlama standardı değildir; insan incelemesine aday
+bulgular üretir. Komut SRT oluşturma/OCR pipeline'ına bağlı değildir ve mevcut
+çıktı davranışını değiştirmez. Sentetik SRT testleri parser ve raporlamayı
+doğrular; gerçek içerik üzerinde kalite eşiği kalibre etmez.
+
 - A separate **manual AI OCR visual review** subflow is documented at [AI OCR görsel incelemesi](AI-OCR-GORSEL-INCELEME.md). It intentionally accepts any selected cue with a currently valid crop, even before a human OCR decision, and exports the existing OCR/SRT text, fixed cue timing, confidence, and selected image for user-controlled manual AI review. The structured response enters only `ai-ocr-review/proposals.jsonl`; it is never an OCR event or dataset label. A user must still use the normal human accept/correct controls before the OCR dataset export can include a cue. Crop-to-cue timing may be approximate where source PTS was not preserved.
 
 - Open the local UI and visit **Yerel OCR Doğrulama** at `http://127.0.0.1:8765/ocr-inceleme`; select a `.review-pack` folder with the Windows folder dialog or enter its path.
