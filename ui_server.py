@@ -117,6 +117,13 @@ except Exception as _translation_review_hatasi:
           f"{_translation_review_hatasi!r}")
 
 try:
+    import ai_ocr_review
+except Exception as _ai_ocr_review_error:
+    ai_ocr_review = None
+    print(f"[ui] UYARI: ai_ocr_review.py yüklenemedi — manuel AI OCR görsel incelemesi kapalı: "
+          f"{_ai_ocr_review_error!r}")
+
+try:
     import translation_memory
 except Exception as _translation_memory_hatasi:
     translation_memory = None
@@ -1720,6 +1727,53 @@ def _translation_error(exc):
         return jsonify({"hata": str(exc)}), exc.status
     app.logger.exception("AI translation round-trip request failed")
     return jsonify({"hata": "AI inceleme işlemi tamamlanamadı; günlükte ayrıntı var"}), 500
+
+
+def _ai_ocr_error(exc):
+    if ai_ocr_review is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("Manual AI OCR visual review request failed")
+    return jsonify({"hata": "AI OCR inceleme işlemi tamamlanamadı"}), 500
+
+
+@app.post("/api/ai-ocr-gorsel/paket")
+def api_ai_ocr_gorsel_paket():
+    if ai_ocr_review is None or ocr_review is None:
+        return jsonify({"hata": "Manuel AI OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    value = request.get_json(silent=True) or {}
+    try:
+        path, filename, _count = ai_ocr_review.create_package(value.get("review_id", ""), value.get("cue_ids"))
+        return send_file(path, mimetype="application/zip", as_attachment=True,
+                         download_name=filename, max_age=0)
+    except Exception as exc:
+        return _ai_ocr_error(exc)
+
+
+@app.post("/api/ai-ocr-gorsel/yanit")
+def api_ai_ocr_gorsel_yanit():
+    if ai_ocr_review is None or ocr_review is None:
+        return jsonify({"hata": "Manuel AI OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    if request.content_length and request.content_length > ai_ocr_review.MAX_RESPONSE_BYTES:
+        return jsonify({"hata": "AI OCR yanıtı 4 MiB sınırını aşıyor"}), 413
+    value = request.get_json(silent=True) or {}
+    try:
+        return jsonify(ai_ocr_review.import_response(value.get("review_id", ""), value.get("response")))
+    except Exception as exc:
+        return _ai_ocr_error(exc)
+
+
+@app.get("/api/ai-ocr-gorsel/durum")
+def api_ai_ocr_gorsel_durum():
+    if ai_ocr_review is None or ocr_review is None:
+        return jsonify({"hata": "Manuel AI OCR inceleme modülü kullanılamıyor"}), 503
+    try:
+        return jsonify(ai_ocr_review.status(request.args.get("review_id", "")))
+    except Exception as exc:
+        return _ai_ocr_error(exc)
 
 
 @app.post("/api/ai-ceviri/istek")
