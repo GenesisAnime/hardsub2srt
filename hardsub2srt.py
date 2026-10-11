@@ -386,6 +386,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from qa_labels import draw_qa_label
 from srt_format import fmt_ts, render_srt_cues_with_timing_diagnostics
 
 FFMPEG = "ffmpeg"
@@ -4272,9 +4273,8 @@ def main():
                          (w, min(ucfg["band_h"], h - 1)), (0, 0, 255), 2)
                 label = f"UST: {text!r} (conf={conf:.2f}, " \
                         f"t={frame_time(mid):.2f}s)"
-                cv2.putText(canvas, label[:170], (10, h + 45),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255),
-                            1, cv2.LINE_AA)
+                draw_qa_label(canvas, label[:170], (10, h + 45),
+                              (255, 255, 255), cv2)
                 cv2.imwrite(str(out_png), canvas)
 
             n = min(args.qa, 4, len(ust))      # şartname: 4 montaj
@@ -4990,9 +4990,8 @@ def main():
             canvas[:h] = img
             label = f"{etiket}: {text!r} (conf={conf:.2f}, " \
                     f"t={frame_time(mid):.2f}s)"
-            cv2.putText(canvas, label[:160], (10, h + 45),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255),
-                        1, cv2.LINE_AA)
+            draw_qa_label(canvas, label[:160], (10, h + 45),
+                          (255, 255, 255), cv2)
             cv2.imwrite(str(out_png), canvas)
 
         n = min(args.qa, len(ana))
