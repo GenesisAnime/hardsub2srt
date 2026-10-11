@@ -120,6 +120,7 @@ VDS kurulum adımları, token yaşam döngüsü, retention/silme ve TLS proxy s�
 | `schemas/contribution-metrics-v1.schema.json` | katkı payload'ının strict v1 sözleşmesi |
 | `srt_format.py` | SRT zaman biçimi yardımcıları |
 | `srt_lint.py` | Var olan SRT için salt-okunur yapı ve sezgisel kalite raporu |
+| `docs/RUN-TIMING.md` | OCR çalışma süresi istatistik alanları ve ölçüm kapsamı |
 | `cikar.bat`, `arayuz.bat`, `toplu.bat` | Windows başlatıcıları |
 | `srt2ass.py` | SRT'den ASS üretimi |
 | `vtt-qa.py` | SRT/VTT metin ve zaman kıyası |

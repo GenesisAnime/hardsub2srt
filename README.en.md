@@ -89,6 +89,7 @@ See [the optional contribution API and VDS preparation](docs/CONTRIBUTION-API.md
 | `contribution_client.py`, `contribution_api.py` | Opt-in, consent-gated numeric contribution client and WSGI API |
 | `schemas/contribution-metrics-v1.schema.json` | Strict v1 contribution payload contract |
 | `srt_format.py` | SRT timestamp formatting helpers |
+| `docs/RUN-TIMING.md` | OCR runtime statistics fields and measurement scope |
 | `cikar.bat`, `arayuz.bat`, `toplu.bat` | Windows launchers |
 | `srt2ass.py` | SRT-to-ASS conversion |
 | `vtt-qa.py` | SRT/VTT text and timing comparison |
