@@ -128,6 +128,9 @@ class AiOcrReviewTests(unittest.TestCase):
         page = client.get("/ocr-inceleme").get_data(as_text=True)
         self.assertIn("AI görsel incelemesine dahil et", page)
         self.assertIn("AI OCR görsel incelemesi", page)
+        self.assertIn("OneDrive gibi eşitlenen bir klasördeyse", page)
+        self.assertIn("review-events ve crops dâhil", page)
+        self.assertIn("eşitlenmeyen yerel bir klasöre kopyalayıp", page)
         response = client.post("/api/ai-ocr-gorsel/paket", json={
             "review_id": self.review_id, "cue_ids": [self.cue["cue_id"]]})
         self.assertEqual(response.status_code, 200)
