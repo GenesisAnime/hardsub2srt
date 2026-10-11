@@ -57,6 +57,7 @@ def _matching_writer_clamps(srt_digest, cues, generation_stats):
         # clamps in either stream. A hash-bound generation record is enough
         # to distinguish that from old/missing stats.
         return {}, {"status": "matched", "clamp_count": 0,
+                    "generation_srt_sha256": srt_digest,
                     "reason": "no_writer_end_clamps_recorded"}
     if not isinstance(writer, dict) or not isinstance(writer.get("main"), list):
         return {}, {"status": "unavailable", "reason": "writer_clamp_stats_invalid"}
@@ -91,7 +92,8 @@ def _matching_writer_clamps(srt_digest, cues, generation_stats):
             "clamp_delta_ms": delta,
             "raw_end_time_basis": time_basis,
         }
-    return matched, {"status": "matched", "clamp_count": len(matched),
+    return matched, {"status": "matched", "generation_srt_sha256": srt_digest,
+                     "clamp_count": len(matched),
                      "time_basis": time_basis}
 
 

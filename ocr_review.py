@@ -462,17 +462,41 @@ def _active_locked(info: dict, force: bool = False) -> tuple[dict[str, dict], li
 
 def public_pack(info: dict) -> dict:
     active, warnings = _active(info)
+    raw_timing_metadata = info["manifest"].get("raw_timing_metadata")
+    srt_digest = info["manifest"].get("srt_sha256_local")
     cues = []
     for cue in info["cues"]:
         event = active.get(cue["cue_id"])
-        cues.append({k: cue.get(k) for k in (
+        public_cue = {k: cue.get(k) for k in (
             "cue_id", "index", "start_ms", "end_ms", "source_text_ocr",
             "ocr_confidence", "representative_frame_index", "representative_frame_ms",
             "mapping_status", "crop_path", "crop_sha256_local", "crop_valid",
             "raw_end_ms", "clamp_delta_ms", "raw_end_time_basis")}
-            | {"active_event": event})
+        public_cue["raw_end_note"] = _raw_end_note(
+            cue, raw_timing_metadata, srt_digest)
+        public_cue["active_event"] = event
+        cues.append(public_cue)
     return {"job_id": info["manifest"]["job_id"], "cues": cues,
             "warnings": warnings, "review_log": "review-events.jsonl"}
+
+
+def _raw_end_note(cue: dict, metadata: object, srt_digest: object) -> str | None:
+    """Build information-only UI copy for proven, hash-bound clamp metadata."""
+    if (not isinstance(metadata, dict) or metadata.get("status") != "matched" or
+            metadata.get("generation_srt_sha256") != srt_digest or
+            type(metadata.get("clamp_count")) is not int or metadata["clamp_count"] < 1):
+        return None
+    emitted_end = cue.get("end_ms")
+    raw_end = cue.get("raw_end_ms")
+    delta = cue.get("clamp_delta_ms")
+    if (type(emitted_end) is not int or type(raw_end) is not int or raw_end <= emitted_end or
+            type(delta) not in (int, float) or not math.isfinite(delta) or delta <= 0 or
+            cue.get("raw_end_time_basis") !=
+            "frame_index / reported FPS; approximate; source PTS not preserved"):
+        return None
+    return (f"SRT yazılan bitiş {emitted_end} ms; ham OCR bitişi {raw_end} ms "
+            f"(yaklaşık; frame/FPS tabanlı, kaynak PTS korunmadı); "
+            f"yazıcı {delta:g} ms kısalttı.")
 
 
 def pack_for(review_id: str) -> dict:
@@ -738,7 +762,7 @@ window.imageReady=(img,ok)=>{const card=img.closest('.cue');if(!card)return;card
 function draw(){
  const decisions=pack.cues.filter(c=>c.active_event).length;$('summary').textContent=`${pack.cues.length} altyazı · ${decisions} kayıtlı karar · günlük: ${pack.review_log}`;
  $('warnings').innerHTML=pack.warnings.length?'<div class="notice">'+pack.warnings.map(esc).join('<br>')+'</div>':'';
- $('cues').innerHTML=pack.cues.map((c,i)=>{const ev=c.active_event;const val=ev?.verified_source_text??c.source_text_ocr;const state=ev?ev.status:'İncelenmedi';const img=c.crop_valid?`<img loading="lazy" onload="imageReady(this,true)" onerror="imageReady(this,false)" alt="Altyazı kırpımı" src="/api/ocr-inceleme/${encodeURIComponent(reviewId)}/crop/${encodeURIComponent(c.cue_id)}">`:'<div class="notice">Bu blokta güvenilir ve doğrulanabilir kırpım yok; OCR veri kümesine alınamaz.</div>';return `<article class="cue"><div>${img}</div><div><b>#${i+1} · ${esc(c.start_ms)}–${esc(c.end_ms)} ms</b> <span class="meta">güven: ${esc(c.ocr_confidence??'bilinmiyor')} · ${esc(state)}</span>${c.crop_valid?`<p><label><input type="checkbox" class="ai-ocr-select" data-cue="${esc(c.cue_id)}"> AI görsel incelemesine dahil et</label></p>`:''}<p class="meta">OCR metni</p><textarea id="txt-${i}" ${c.crop_valid?'':'disabled'}>${esc(val)}</textarea><div class="controls"><button class="primary decision" onclick="decide(${i},'accepted')" disabled>Görüntü doğru</button><button class="decision" onclick="decide(${i},'corrected')" disabled>Düzeltmeyi kaydet</button><button class="warn decision" onclick="decide(${i},'uncertain')" disabled>Belirsiz</button>${ev?`<button onclick="undo(${i})">Son kararı geri al</button>`:''}</div><div class="meta">${esc(c.mapping_status||'')} ${c.crop_valid?'':'· görsel doğrulaması kullanılamıyor'}</div></div></article>`}).join('');
+ $('cues').innerHTML=pack.cues.map((c,i)=>{const ev=c.active_event;const val=ev?.verified_source_text??c.source_text_ocr;const state=ev?ev.status:'İncelenmedi';const img=c.crop_valid?`<img loading="lazy" onload="imageReady(this,true)" onerror="imageReady(this,false)" alt="Altyazı kırpımı" src="/api/ocr-inceleme/${encodeURIComponent(reviewId)}/crop/${encodeURIComponent(c.cue_id)}">`:'<div class="notice">Bu blokta güvenilir ve doğrulanabilir kırpım yok; OCR veri kümesine alınamaz.</div>';const rawTiming=c.raw_end_note?`<div class="notice raw-end-info">${esc(c.raw_end_note)}</div>`:'';return `<article class="cue"><div>${img}</div><div><b>#${i+1} · ${esc(c.start_ms)}–${esc(c.end_ms)} ms</b> <span class="meta">güven: ${esc(c.ocr_confidence??'bilinmiyor')} · ${esc(state)}</span>${rawTiming}${c.crop_valid?`<p><label><input type="checkbox" class="ai-ocr-select" data-cue="${esc(c.cue_id)}"> AI görsel incelemesine dahil et</label></p>`:''}<p class="meta">OCR metni</p><textarea id="txt-${i}" ${c.crop_valid?'':'disabled'}>${esc(val)}</textarea><div class="controls"><button class="primary decision" onclick="decide(${i},'accepted')" disabled>Görüntü doğru</button><button class="decision" onclick="decide(${i},'corrected')" disabled>Düzeltmeyi kaydet</button><button class="warn decision" onclick="decide(${i},'uncertain')" disabled>Belirsiz</button>${ev?`<button onclick="undo(${i})">Son kararı geri al</button>`:''}</div><div class="meta">${esc(c.mapping_status||'')} ${c.crop_valid?'':'· görsel doğrulaması kullanılamıyor'}</div></div></article>`}).join('');
  drawAiOcrProposals();drawAiDrafts();drawAiProposals();
 }
 window.decide=async(i,status)=>{const c=pack.cues[i];try{const correction=$('txt-'+i).value;await api('/api/ocr-inceleme/karar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId,cue_id:c.cue_id,status,correction})});await refresh()}catch(e){alert(e.message)}};

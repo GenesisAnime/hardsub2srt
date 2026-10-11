@@ -18,6 +18,8 @@ Bu akış, OCR'ın ilk ürettiği SRT metnini henüz insan onayı yokken seçili
 
 Response template ve yanıt şeması yalnız yazılmış `start_ms`/`end_ms` değerlerini kullanır. Raw-end tanılaması yanıt şemasına girmez; AI cevabı cue zamanını değiştiremez.
 
+Yerel OCR inceleme cue kartı, yalnız paket metadata'sındaki üretim SRT hash'i mevcut SRT hash'iyle eşleşiyor ve cue için clamp bilgisi doğrulanıyorsa salt okunur bir not gösterir: yazılmış bitiş, yaklaşık ham bitiş ve yazıcının kısalttığı süre. Bu bilgi başlangıç/bitiş alanı veya AI response şeması değildir; zaman önerisi olarak kullanılmamalıdır. Hash eksik/eskiyse veya koşuda clamp yoksa not görünmez.
+
 Yanıt şeması `schemas/ai-ocr-visual-review-v1.schema.json` dosyasındadır. Her satır aynı `cue_id`, `start_ms`, `end_ms` değerlerini ve şu alanları taşır: `status` (`confirmed`, `correction_proposed`, `uncertain`), `observed_text`, `proposed_text`, `reason`. Cue/timing değişikliği, yinelenen ID, eksik satır, bilinmeyen alan, geçersiz durum, bayat paket/SRT/kırpım veya hatalı JSON reddedilir. Aynı yanıtın yeniden içe aktarılması yeni kayıt üretmez. Farklı bir yanıt revizyonu ayrı öneri olarak kaydedilebilir.
 
 Her paketin yerel `ai-ocr-review/` klasöründe request ID, paket/SRT/kırpım hash eşlemesi ve 0600 kipli (desteklenen sistemlerde) `.local.json` yan kayıt bulunur; yan kayıt ZIP'e alınmaz. Öneriler append-only `proposals.jsonl` içinde tutulur. Kayıtlar `schema_version: 1`, `event_type: proposal`, rastgele event ID, istek/yanıt hash'i, cue/zaman, durum, öneri ve timestamp taşır. Bozuk/şema dışı günlükte yeni yazım durur; kısmi günlükten etiket üretilmez. AI öneri günlüğü OCR insan karar günlüğünü, dataset manifestini ve çeviri belleğini değiştirmez.
