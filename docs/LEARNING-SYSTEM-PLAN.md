@@ -254,14 +254,20 @@ frame/FPS/PTS uyarısı bulunabilir; yanıt şeması yine yazılmış SRT zamanl
 korur. Bu tanılama SRT'yi, OCR kararını veya öğrenme verisini değiştirmez.
 
 Var olan SRT'leri gözle taramaya yardımcı olmak için bağımsız `srt_lint.py`
-komutu eklendi. Dosyayı yeniden yazmadan parse hatalarını raporlar; geçerli
+komutu ve açılmış review-pack içinde kullanıcı tıklamasıyla çalışan yerel bir
+rapor eklendi. Dosyayı yeniden yazmadan parse hatalarını raporlar; geçerli
 cue'larda dosya sırası, cue çakışması, yaklaşık karakter/sn (CPS) ve kısa/uzun
 süre adaylarını ayrı sezgisel uyarılar olarak listeler. CPS ve süre eşikleri
-kullanıcı tarafından ayarlanabilir veya kapatılabilir. Bu değerler doğruluk,
-okunabilirlik ya da zamanlama standardı değildir; insan incelemesine aday
-bulgular üretir. Komut SRT oluşturma/OCR pipeline'ına bağlı değildir ve mevcut
-çıktı davranışını değiştirmez. Sentetik SRT testleri parser ve raporlamayı
-doğrular; gerçek içerik üzerinde kalite eşiği kalibre etmez.
+kullanıcı tarafından ayarlanabilir veya kapatılabilir. Review UI, SRT metnini
+otomatik açılışta taramaz; kullanıcı **SRT taramasını çalıştır** düğmesine
+basınca, hâlihazırda hash doğrulanmış review-pack SRT'si yerel olarak taranır.
+Yanıt sınırlı sayıda uyarı ayrıntısı ve toplam sayıyı verir; parse, kronoloji,
+çakışma veya süre uyarısı OCR etiketi, doğruluk ölçümü ya da zamanlama kanıtı
+değildir. Hiçbir SRT, OCR kararı veya veri kümesi değiştirilmez ve bu rapor
+AI/çeviri akışına gönderilmez. Komut ve UI SRT oluşturma/OCR pipeline'ına bağlı
+değildir ve mevcut çıktı davranışını değiştirmez. Sentetik SRT testleri parser,
+rapor ve review-pack bağını doğrular; gerçek içerik üzerinde kalite eşiği
+kalibre etmez.
 
 - A separate **manual AI OCR visual review** subflow is documented at [AI OCR görsel incelemesi](AI-OCR-GORSEL-INCELEME.md). It intentionally accepts any selected cue with a currently valid crop, even before a human OCR decision, and exports the existing OCR/SRT text, fixed cue timing, confidence, and selected image for user-controlled manual AI review. The structured response enters only `ai-ocr-review/proposals.jsonl`; it is never an OCR event or dataset label. A user must still use the normal human accept/correct controls before the OCR dataset export can include a cue. Crop-to-cue timing may be approximate where source PTS was not preserved.
 

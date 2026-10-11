@@ -77,9 +77,11 @@ kronoloji, çakışma, karakter/sn (CPS) ve kısa/uzun süre bulgularını ise y
 sezgisel uyarı olarak yazar. CPS ve süre eşikleri komut satırından değiştirilebilir;
 `--cps-warning 0 --min-duration-ms 0 --max-duration-ms 0` tüm sezgisel uyarıları
 kapatır. Varsayılan eşikler evrensel kalite standardı değildir ve dile/altyazı
-biçemine göre yanlış uyarı üretebilir. Araç SRT'yi değiştirmez, OCR kuyruğuna veya
-üretim pipeline'ına bağlı değildir; parse hatası nedeniyle döndüğü kod da yalnızca
-bu elle başlatılan rapor komutuna aittir.
+biçemine göre yanlış uyarı üretebilir. Aynı salt-okunur rapor, inceleme arayüzünde
+hash doğrulaması yapılmış `.review-pack` açıldıktan sonra **SRT taramasını
+çalıştır** düğmesiyle isteğe bağlı çalıştırılabilir. Her iki yol da SRT'yi
+değiştirmez, OCR kuyruğuna veya üretim pipeline'ına bağlı değildir; UI raporu
+review kararı veya eğitim etiketi oluşturmaz.
 
 OCR motoru görünen altyazıyı çıkarır; kendi başına çeviri yapmaz. İsteğe bağlı olarak yerel arayüzde `/ocr-inceleme` sayfasından görselle doğrulanmış seçili bloklar için bir sohbet paketi hazırlayabilir, bu paketi seçtiğin AI'ya kendin gönderip yanıtını uygulamaya aktarabilirsin. Program GPT/DeepSeek API'sini çağırmaz ve bu içerikleri ağa göndermez; dış AI'ya yükleme kullanıcı tarafından yapılır. Kabul ettiğin çevirileri ayrıca proje ve dil kapsamına bağlı yerel belleğe kaydedebilir, terim önerilerini taslağa elle uygulayabilirsin. Ayrıntılar: [yerel inceleme ve öğrenme akışı](docs/REVIEW-BUNDLE.md). `vtt-qa.py` ile `regresyon/gt_gate.py` yalnızca OCR metnini zaman uyumlu kaynak altyazıyla kıyaslar; çeviri kalitesini ölçmez. `gt_gate.py` video ve trusted VTT varlıklarını dışarıdan ister; eksik/belirsiz varlıklar geçiş sayılmaz. Kullanım: [regresyon/README-kisa.md](regresyon/README-kisa.md). Video, VTT ve anime kareleri depoya eklenmemelidir.
 

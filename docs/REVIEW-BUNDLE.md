@@ -58,6 +58,8 @@ The manifest intentionally omits the source video path and video hash. It does c
 
 The local Phase 2 implementation is available in the current source branch. Open `http://127.0.0.1:8765/ocr-inceleme` in the local UI. Choose a `.review-pack` folder with **Klasör seç** or paste its path, then inspect each available crop alongside the final OCR text, timing, and confidence.
 
+The review page also offers **SRT taramasını çalıştır** for the already-open, hash-verified pack. It is an on-demand, read-only report for parse structure, file order, cue overlaps, approximate CPS, and unusually short/long durations. Results are heuristic review candidates, not proof of an OCR error, subtitle-quality defect, or timing accuracy. The report returns bounded warning details and does not expose subtitle text, modify the SRT, create review decisions, or add dataset labels. No video or external service is used.
+
 - **Görüntü doğru** records the displayed OCR text as a human-accepted source label.
 - **Düzeltmeyi kaydet** records the text you entered after checking it against the image.
 - **Belirsiz** records that the crop could not be read confidently and excludes it from the OCR dataset.

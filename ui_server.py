@@ -1849,6 +1849,16 @@ def api_ocr_inceleme_durum():
         return _ocr_hata(exc)
 
 
+@app.get("/api/ocr-inceleme/srt-lint")
+def api_ocr_inceleme_srt_lint():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    try:
+        return jsonify(ocr_review.srt_lint_report(request.args.get("review_id", "")))
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
 @app.get("/api/ocr-inceleme/<review_id>/crop/<cue_id>")
 def api_ocr_inceleme_crop(review_id, cue_id):
     if ocr_review is None:

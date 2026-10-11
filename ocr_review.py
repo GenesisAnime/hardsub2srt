@@ -28,6 +28,7 @@ MAX_EVENTS_BYTES = 64 * 1024 * 1024
 MAX_EVENT_RECORDS = 50_000
 MAX_EVENT_LINE_BYTES = 256 * 1024
 MAX_TEXT_CHARS = 20_000
+MAX_LINT_WARNING_DETAILS = 500
 _LOCK = threading.RLock()
 MAX_REVIEW_SESSIONS = 8
 _PACKS = OrderedDict()
@@ -509,6 +510,28 @@ def pack_status(review_id: str) -> dict:
     return result
 
 
+def srt_lint_report(review_id: str) -> dict:
+    """Return a bounded, read-only heuristic report for the validated pack SRT."""
+    info = _get_pack(review_id, force_sources=True)
+    import srt_lint
+
+    raw = _read_bounded(info["srt_path"], MAX_SRT_BYTES, "SRT")
+    if _sha256(raw) != info["srt_sha256"]:
+        raise ReviewError("SRT tarama sırasında değişti; paketi yeniden açın", 409)
+    cues, errors = srt_lint.parse_srt(raw, "review-pack SRT")
+    warnings = srt_lint.lint_cues(cues)
+    return {
+        "cue_count": len(cues),
+        "parse_errors": errors[:MAX_LINT_WARNING_DETAILS],
+        "parse_error_count": len(errors),
+        "warnings": warnings[:MAX_LINT_WARNING_DETAILS],
+        "warning_count": len(warnings),
+        "warnings_truncated": len(warnings) > MAX_LINT_WARNING_DETAILS,
+        "read_only": True,
+        "heuristic_only": True,
+    }
+
+
 def _verify_crop(info: dict, cue: dict) -> tuple[Path, int] | None:
     if not cue.get("crop_valid"):
         return None
@@ -729,7 +752,7 @@ REVIEW_HTML = r'''<!doctype html>
 body{margin:0;background:#11151e;color:#e8edf8;font:15px system-ui,sans-serif}header{position:sticky;top:0;background:#191f2b;padding:16px 22px;border-bottom:1px solid #30394b;z-index:2}main{max-width:1120px;margin:22px auto;padding:0 16px}.row{display:flex;gap:8px;flex-wrap:wrap}input,textarea,button{background:#0f131b;color:#edf2ff;border:1px solid #39445a;border-radius:6px;padding:10px;font:inherit}input{flex:1;min-width:300px}.ai-select{flex:none;min-width:auto;width:auto}button{cursor:pointer;background:#29364e;font-weight:650}button.primary{background:#3979ef;border-color:#3979ef}button.warn{background:#6b3841}.help,.meta{color:#a7b5ce;font-size:13px}.notice{padding:10px 12px;margin:12px 0;background:#202838;border-left:3px solid #e2ae59;border-radius:4px}.cue{display:grid;grid-template-columns:minmax(260px,42%) 1fr;gap:16px;border:1px solid #30394b;border-radius:9px;padding:14px;margin:12px 0;background:#1a202c}.cue img{display:block;max-width:100%;max-height:240px;object-fit:contain;background:#090c12;border-radius:4px}.cue textarea{box-sizing:border-box;width:100%;min-height:75px;resize:vertical}.controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.status{color:#82d9a0}.bad{color:#ffb978}.hidden{display:none}@media(max-width:700px){.cue{grid-template-columns:1fr}}
 </style><header><b>Yerel OCR Doğrulama</b><div class="help">Kırpımı okuyup OCR metnini kabul edin, düzeltin veya belirsiz bırakın. Kayıtlar paketin içine eklenir; SRT ve manifest değiştirilmez.</div></header>
 <main><section><div class="row"><input id="path" placeholder=".review-pack klasörünün yolu"><button id="browse">Klasör seç</button><button class="primary" id="open">Paketi aç</button></div><div class="help">Bu sayfa yerel çalışır. GPT/DeepSeek çağrısı veya veri gönderimi yapmaz.</div></section>
-<section id="workspace" class="hidden"><div id="summary" class="notice"></div><div class="row"><button class="primary" id="export">Doğrulanmış OCR veri kümesini dışa aktar</button><button id="metadata-template" hidden>Boş Phase 5 metadata şablonu oluştur</button><span id="export-result" class="help"></span></div><div id="metadata-result" class="help"></div><div id="warnings"></div><div id="cues"></div>
+<section id="workspace" class="hidden"><div id="summary" class="notice"></div><section class="notice" id="srt-lint-panel"><h2>Salt-okunur SRT taraması</h2><p>Dosya sırası, çakışma, karakter/sn ve kısa/uzun süre için sezgisel adaylar bulur. Bunlar OCR hatasını veya yanlış zamanlamayı kanıtlamaz; SRT'yi, OCR kararlarını ve öğrenme verisini değiştirmez.</p><div class="row"><button id="srt-lint-run">SRT taramasını çalıştır</button><span id="srt-lint-status" class="help"></span></div><div id="srt-lint-result"></div></section><div class="row"><button class="primary" id="export">Doğrulanmış OCR veri kümesini dışa aktar</button><button id="metadata-template" hidden>Boş Phase 5 metadata şablonu oluştur</button><span id="export-result" class="help"></span></div><div id="metadata-result" class="help"></div><div id="warnings"></div><div id="cues"></div>
 <p class="help">Metadata şablonu yalnız boş kaynak/bölüm ve lisans alanları içerir. Kullanım hakkı veya izin onayı değildir; bu bilgileri kendiniz doğrulayıp doldurmanız gerekir.</p>
 <section class="notice"><h2>AI OCR görsel incelemesi · elle aktarım</h2>
 <p>İnsan tarafından henüz onaylanmamış OCR metinlerini de kırpımla birlikte GPT/DeepSeek gibi bir AI'ya inceletebilirsiniz. AI yanıtı yalnızca öneridir; OCR karar günlüğüne, veri kümesine veya çeviri belleğine yazılmaz. ZIP'i kendiniz AI sohbetine ekleyip yanıt JSON'unu buraya yapıştırın. Otomatik API çağrısı veya yükleme yapılmaz.</p>
@@ -755,9 +778,11 @@ let reviewId=null, pack=null, pickerId=null, tmDraftSuggestions={};
 const $=id=>document.getElementById(id);
 async function api(url,opts={}){const r=await fetch(url,opts);let j;try{j=await r.json()}catch{throw Error("Sunucu yanıtı okunamadı")}if(!r.ok)throw Error(j.hata||"İstek başarısız");return j}
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function openPack(path){const j=await api('/api/ocr-inceleme/ac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});reviewId=j.review_id;pack=j;exportedDatasetName=null;$('metadata-template').hidden=true;$('metadata-result').textContent='';$('export-result').textContent='';$('workspace').classList.remove('hidden');draw()}
+async function openPack(path){const j=await api('/api/ocr-inceleme/ac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});reviewId=j.review_id;pack=j;exportedDatasetName=null;$('metadata-template').hidden=true;$('metadata-result').textContent='';$('export-result').textContent='';$('srt-lint-status').textContent='';$('srt-lint-result').textContent='';$('workspace').classList.remove('hidden');draw()}
 $('open').onclick=async()=>{try{await openPack($('path').value.trim())}catch(e){alert(e.message)}};
 $('browse').onclick=async()=>{try{const j=await api('/api/secim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tur:'inceleme'})});pickerId=j.job_id;while(true){await new Promise(r=>setTimeout(r,400));const s=await api('/api/secim/'+encodeURIComponent(pickerId));if(s.status==='done'){const p=s.result?.dizin||'';if(p){$('path').value=p;await openPack(p)}break}if(['error','timeout','cancelled'].includes(s.status))throw Error(s.hata||'Klasör seçimi tamamlanamadı')}}catch(e){alert(e.message)}};
+async function runSrtLint(){const button=$('srt-lint-run');button.disabled=true;$('srt-lint-status').textContent='Tarama sürüyor…';$('srt-lint-result').textContent='';try{const j=await api('/api/ocr-inceleme/srt-lint?review_id='+encodeURIComponent(reviewId));const errors=j.parse_errors||[];const warnings=j.warnings||[];const summary=`${j.cue_count} cue · ${j.parse_error_count} parse hatası · ${j.warning_count} sezgisel uyarı`;let html=`<p><b>${esc(summary)}</b></p>`;if(errors.length)html+='<h3>Yapı hataları</h3><ul>'+errors.map(x=>`<li>${esc(x)}</li>`).join('')+'</ul>';if(warnings.length)html+='<h3>İnceleme adayları</h3><ul>'+warnings.map(x=>`<li>${esc(x)}</li>`).join('')+'</ul>';if(j.warnings_truncated)html+='<p class="help">Ayrıntı sayısı sınırı nedeniyle ilk 500 uyarı gösteriliyor.</p>';if(!errors.length&&!j.warning_count)html+='<p>Sezgisel uyarı bulunmadı; bu doğruluk veya zamanlama garantisi değildir.</p>';if(j.read_only!==true||j.heuristic_only!==true)throw Error('Rapor güvenlik sözleşmesi beklenen biçimde değil');$('srt-lint-result').innerHTML=html;$('srt-lint-status').textContent='SRT değiştirilmedi.'}catch(e){$('srt-lint-status').textContent='Rapor alınamadı: '+e.message}finally{button.disabled=false}}
+$('srt-lint-run').onclick=runSrtLint;
 window.imageReady=(img,ok)=>{const card=img.closest('.cue');if(!card)return;card.querySelectorAll('.decision').forEach(b=>b.disabled=!ok);const textarea=card.querySelector('textarea');if(textarea)textarea.disabled=!ok;if(!ok){const n=document.createElement('div');n.className='notice bad';n.textContent='Görsel yüklenemedi; bu altyazı için karar verilemez.';img.replaceWith(n)}};
 function draw(){
  const decisions=pack.cues.filter(c=>c.active_event).length;$('summary').textContent=`${pack.cues.length} altyazı · ${decisions} kayıtlı karar · günlük: ${pack.review_log}`;
