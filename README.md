@@ -67,6 +67,9 @@ paket manifestine ve manuel AI OCR istek paketine ekler. Eşleşme yoksa bu
 alanlar atlanır; paket bunu `raw_timing_metadata` durumunda açıklar. Bu
 değerler de frame/FPS tabanlı yaklaşık tanılamadır; AI yanıtı hâlâ SRT'de
 yazılmış `start_ms`/`end_ms` değerlerini korur ve zamanlama değiştiremez.
+Yerel OCR inceleme ekranı, yalnız hash eşleşmesi doğrulanan ve yazıcının
+kısalttığı cue'larda bu bilgiyi salt okunur bir Türkçe not olarak gösterir;
+SRT zamanlarını düzenlemez ve not bir zaman önerisi değildir.
 
 Mevcut bir SRT'yi ayrıca salt-okunur kalite raporundan geçirmek için
 `python srt_lint.py "bolum.srt"` çalıştırın. Araç parse sorunlarını hata olarak;
