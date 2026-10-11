@@ -83,6 +83,11 @@ VDS kurulum adımları, token yaşam döngüsü, retention/silme ve TLS proxy s�
 |---|---|
 | `hardsub2srt.py` | CLI çıkarım/OCR motoru |
 | `ui_server.py` | localhost Flask UI, iş kuyruğu, yerel alt süreçler |
+| `job_history.py`, `windows_job.py` | sınırlı yerel iş geçmişi ve Windows çocuk-süreç sahipliği |
+| `ocr_review.py`, `ai_ocr_review.py`, `review_bundle.py` | insan OCR görsel incelemesi, manuel AI görsel önerileri ve inceleme paketi üretimi |
+| `translation_review.py`, `translation_memory.py` | doğrulanmış kaynak metne bağlı çeviri önerileri ve kullanıcı onaylı yerel çeviri belleği |
+| `ocr_dataset_metadata.py`, `ocr_dataset_merge.py` | veri kümesi hak/provenans metadata'sı ve güvenli paket birleştirme |
+| `ocr_experiment.py`, `ocr_crop_eval.py`, `ocr_video_eval.py`, `ocr_video_eval_templates.py`, `phase6_release.py` | çevrimdışı OCR deneyleri, kırpım/tam video ölçümü ve sürüm kapısı |
 | `contribution_client.py`, `contribution_api.py` | varsayılanı kapalı, açık onaylı sayısal katkı istemcisi ve WSGI API |
 | `schemas/contribution-metrics-v1.schema.json` | katkı payload'ının strict v1 sözleşmesi |
 | `srt_format.py` | SRT zaman biçimi yardımcıları |
@@ -91,7 +96,10 @@ VDS kurulum adımları, token yaşam döngüsü, retention/silme ve TLS proxy s�
 | `vtt-qa.py` | SRT/VTT metin ve zaman kıyası |
 | `ogren.py`, `kullanici-sozlugu.txt` | Yerel düzeltme/öğrenme araçları ve sözlük |
 | `regresyon/` | Kare regresyonu ve video+GT OCR kapısı |
-| `docs/` | Mimari ve geliştirme notları |
+| `docs/AI-OCR-GORSEL-INCELEME.md`, `docs/REVIEW-BUNDLE.md` | AI OCR görsel öneri ve insan inceleme akışları |
+| `docs/LEARNING-SYSTEM-PLAN.md`, `docs/LEARNING-SYSTEM-BASELINE.md` | aşamalar ve ölçülmüş mevcut durum |
+| `docs/OCR-OFFLINE-EXPERIMENT.md`, `docs/FIRST-DATASET-QUICKSTART.md` | çevrimdışı değerlendirme ve veri kümesi hazırlığı |
+| `docs/LOCAL-ARCHITECTURE-ROADMAP.md`, `docs/` | yerel sistem mimarisi ve diğer geliştirme notları |
 
 ## Lisans
 

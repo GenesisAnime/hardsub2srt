@@ -81,6 +81,11 @@ See [the optional contribution API and VDS preparation](docs/CONTRIBUTION-API.md
 |---|---|
 | `hardsub2srt.py` | CLI extraction/OCR engine |
 | `ui_server.py` | localhost Flask UI, job queue, local subprocesses |
+| `job_history.py`, `windows_job.py` | Bounded local job history and Windows child-process ownership |
+| `ocr_review.py`, `ai_ocr_review.py`, `review_bundle.py` | Human OCR image review, manual AI visual proposals, and review-pack creation |
+| `translation_review.py`, `translation_memory.py` | Source-verified translation proposals and user-approved local translation memory |
+| `ocr_dataset_metadata.py`, `ocr_dataset_merge.py` | Dataset rights/provenance metadata and safe pack merging |
+| `ocr_experiment.py`, `ocr_crop_eval.py`, `ocr_video_eval.py`, `ocr_video_eval_templates.py`, `phase6_release.py` | Offline OCR experiments, crop/full-video evaluation, and release gate |
 | `contribution_client.py`, `contribution_api.py` | Opt-in, consent-gated numeric contribution client and WSGI API |
 | `schemas/contribution-metrics-v1.schema.json` | Strict v1 contribution payload contract |
 | `srt_format.py` | SRT timestamp formatting helpers |
@@ -89,7 +94,10 @@ See [the optional contribution API and VDS preparation](docs/CONTRIBUTION-API.md
 | `vtt-qa.py` | SRT/VTT text and timing comparison |
 | `ogren.py`, `kullanici-sozlugu.txt` | Local correction/learning tools and dictionary |
 | `regresyon/` | Frame regression and video+GT OCR gate |
-| `docs/` | Architecture and development notes |
+| `docs/AI-OCR-GORSEL-INCELEME.md`, `docs/REVIEW-BUNDLE.md` | AI OCR visual proposals and human review workflows |
+| `docs/LEARNING-SYSTEM-PLAN.md`, `docs/LEARNING-SYSTEM-BASELINE.md` | Phases and measured current state |
+| `docs/OCR-OFFLINE-EXPERIMENT.md`, `docs/FIRST-DATASET-QUICKSTART.md` | Offline evaluation and dataset preparation |
+| `docs/LOCAL-ARCHITECTURE-ROADMAP.md`, `docs/` | Local architecture and other development notes |
 
 ## License
 
