@@ -1,4 +1,5 @@
 import json
+import hashlib
 import tempfile
 import unittest
 import zipfile
@@ -25,8 +26,19 @@ class AiOcrReviewTests(unittest.TestCase):
             self.srt,
             [{"start_ms": 1000, "end_ms": 2000, "text": "synthetic OCR text",
               "confidence": 0.73, "frame_index": 30, "frame_ms": 1500,
+              "start_frame": 10, "end_frame_inclusive": 20,
               "band_y": 100, "band_height": 50}],
-            {"synthetic": True}, lambda _frame, _y, _height: crop)
+            {"synthetic": True}, lambda _frame, _y, _height: crop,
+            generation_stats={
+                "main_srt_sha256": hashlib.sha256(self.srt.read_bytes()).hexdigest(),
+                "writer_end_clamps": {
+                    "time_basis": "frame_index / reported FPS; approximate; source PTS not preserved",
+                    "main": [{"cue_index": 0, "start_frame": 10,
+                              "end_frame_inclusive": 20, "raw_end": "00:00:02,100",
+                              "emitted_end": "00:00:02,000", "clamp_delta_ms": 100.0}],
+                    "screen": [],
+                },
+            })
         self.review_id, self.public = ocr_review.open_pack(str(self.pack))
         self.cue = self.public["cues"][0]
 
@@ -53,6 +65,10 @@ class AiOcrReviewTests(unittest.TestCase):
             prompt = archive.read("prompt.md").decode()
         self.assertEqual(request["cues"][0]["source_text_ocr"], "synthetic OCR text")
         self.assertEqual(request["cues"][0]["ocr_confidence"], 0.73)
+        self.assertEqual(request["cues"][0]["raw_end_ms"], 2100)
+        self.assertEqual(request["cues"][0]["clamp_delta_ms"], 100.0)
+        self.assertIn("source PTS not preserved", request["cues"][0]["raw_end_time_basis"])
+        self.assertEqual(template["cues"][0]["end_ms"], 2000)
         self.assertNotIn(str(self.pack), prompt + json.dumps(request))
         self.assertNotIn("device_id", json.dumps(request))
         self.assertEqual(template["cues"][0]["status"], "uncertain")

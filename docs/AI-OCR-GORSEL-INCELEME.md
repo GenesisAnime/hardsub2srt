@@ -14,7 +14,9 @@ Bu akış, OCR'ın ilk ürettiği SRT metnini henüz insan onayı yokken seçili
 
 ## Veri sözleşmesi
 
-İstek cue başına yalnızca cue ID, sabit başlangıç/bitiş zamanı (ms), SRT'de karşılığı olan `source_text_ocr`, OCR confidence, JPEG kırpım dosya adı ve görüntüyü taşır. Mutlak kaynak yolu, cihaz/kullanıcı hesabı kimliği, tam video, manifest/SRT hash'leri veya yerel yan kayıt ZIP'e konmaz. Prompt; yalnız altyazı metninin okunmasını, sahne yazısı/jenerik/logo metninin altyazıya karıştırılmamasını ve belirsizliğin açıkça işaretlenmesini söyler.
+İstek cue başına cue ID, sabit başlangıç/bitiş zamanı (ms), SRT'de karşılığı olan `source_text_ocr`, OCR confidence, JPEG kırpım dosya adı ve görüntüyü taşır. Yalnız üretim stats'i mevcut ana SRT ile hash olarak eşleştiğinde, kırpılmış cue için ek tanılama olarak `raw_end_ms`, `clamp_delta_ms` ve `raw_end_time_basis` de eklenebilir. Bu ham değer yaklaşık frame/FPS zamanıdır; kaynak PTS korunmamıştır ve zaman önerisi değildir. Mutlak kaynak yolu, cihaz/kullanıcı hesabı kimliği, tam video, manifest/SRT hash'leri veya yerel yan kayıt ZIP'e konmaz. Prompt; yalnız altyazı metninin okunmasını, sahne yazısı/jenerik/logo metninin altyazıya karıştırılmamasını, varsa ham bitiş tanılamasının değiştirme önerisi olmadığını ve belirsizliğin açıkça işaretlenmesini söyler.
+
+Response template ve yanıt şeması yalnız yazılmış `start_ms`/`end_ms` değerlerini kullanır. Raw-end tanılaması yanıt şemasına girmez; AI cevabı cue zamanını değiştiremez.
 
 Yanıt şeması `schemas/ai-ocr-visual-review-v1.schema.json` dosyasındadır. Her satır aynı `cue_id`, `start_ms`, `end_ms` değerlerini ve şu alanları taşır: `status` (`confirmed`, `correction_proposed`, `uncertain`), `observed_text`, `proposed_text`, `reason`. Cue/timing değişikliği, yinelenen ID, eksik satır, bilinmeyen alan, geçersiz durum, bayat paket/SRT/kırpım veya hatalı JSON reddedilir. Aynı yanıtın yeniden içe aktarılması yeni kayıt üretmez. Farklı bir yanıt revizyonu ayrı öneri olarak kaydedilebilir.
 

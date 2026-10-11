@@ -244,6 +244,15 @@ sonradan elle düzenlenir veya yeniden zamanlanırsa stats yeniden hesaplanmaz;
 bu nedenle kayıt düzenlenmiş SRT ile uyuşmayabilir ve o dosya için güncel
 kanıt gibi kullanılmamalıdır.
 
+Review-pack'in ham bitiş alanları için stats'e ana SRT'nin üretim anındaki
+`main_srt_sha256` değeri eklenir. Paket oluşturucu yalnızca bu hash mevcut SRT
+baytlarıyla eşleştiğinde `writer_end_clamps.main` kayıtlarını sıfır tabanlı
+cue indeksi, özgün frame aralığı ve yazılmış `end_ms` ile doğrulayıp eşler.
+Eşleşme yoksa ham bitiş alanı dışarı verilmez ve manifest sebebi kaydeder.
+Eşleşen AI OCR isteklerinde `raw_end_ms`, `clamp_delta_ms` ve yaklaşık
+frame/FPS/PTS uyarısı bulunabilir; yanıt şeması yine yazılmış SRT zamanlarını
+korur. Bu tanılama SRT'yi, OCR kararını veya öğrenme verisini değiştirmez.
+
 Var olan SRT'leri gözle taramaya yardımcı olmak için bağımsız `srt_lint.py`
 komutu eklendi. Dosyayı yeniden yazmadan parse hatalarını raporlar; geçerli
 cue'larda dosya sırası, cue çakışması, yaklaşık karakter/sn (CPS) ve kısa/uzun

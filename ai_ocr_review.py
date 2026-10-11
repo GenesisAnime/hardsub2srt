@@ -240,16 +240,26 @@ def create_package(review_id: str, selected: object) -> tuple[Path, str, int]:
         row = {"cue_id": cue_id, "start_ms": cue["start_ms"], "end_ms": cue["end_ms"],
                "source_text_ocr": cue["source_text_ocr"], "ocr_confidence": confidence,
                "image_file": image_name}
+        # Optional raw-end metadata is included only when the pack builder
+        # hash-bound it to the exact generated main SRT. It is diagnostic and
+        # never changes the immutable emitted SRT timing in the response.
+        for key in ("raw_end_ms", "clamp_delta_ms", "raw_end_time_basis"):
+            if cue.get(key) is not None:
+                row[key] = cue[key]
         cues.append(row)
-        side_cues.append({"cue_id": cue_id, "start_ms": cue["start_ms"], "end_ms": cue["end_ms"],
+        side_row = {"cue_id": cue_id, "start_ms": cue["start_ms"], "end_ms": cue["end_ms"],
                           "source_text_ocr": cue["source_text_ocr"],
-                          "crop_sha256_local": crop_hash, "crop_bytes": image_size})
+                          "crop_sha256_local": crop_hash, "crop_bytes": image_size}
+        side_row.update({key: row[key] for key in ("raw_end_ms", "clamp_delta_ms", "raw_end_time_basis")
+                         if key in row})
+        side_cues.append(side_row)
         images.append((image_name, cue))
     prompt = (
         "# OCR görsel doğrulama görevi\n\n"
         "Her görselde yazılı altyazıyı okuyup aynı cue'nun source_text_ocr alanıyla karşılaştır. "
         "Yalnız görüntüdeki altyazı metnini değerlendir; sahne yazısı, tabela, jenerik, logo veya "
         "altyazı dışı yazıyı OCR metnine katma. Görsel okunamıyorsa uncertain seç; tahmin etme. "
+        "Varsa raw_end_ms/clamp_delta_ms yaklaşık writer tanılamasıdır; zaman önerisi değildir. "
         "Zamanları ve cue_id değerlerini değiştirme. Çıktıda yalnız response-template.json ile aynı "
         "şemada JSON döndür. Bu bir öneridir; insan onayı değildir.\n"
     )
@@ -372,15 +382,20 @@ def _load_sidecar(info: dict, request_id: str) -> dict:
     seen = set()
     for row in value["cues"]:
         cue = cue_map.get(row.get("cue_id")) if isinstance(row, dict) else None
+        raw_keys = {"raw_end_ms", "clamp_delta_ms", "raw_end_time_basis"}
+        expected_raw = {key: cue[key] for key in raw_keys if cue and cue.get(key) is not None}
+        actual_raw = {key: row[key] for key in raw_keys if key in row} if isinstance(row, dict) else {}
         if (not cue or row["cue_id"] in seen or not cue.get("crop_valid") or
                 row.get("start_ms") != cue["start_ms"] or row.get("end_ms") != cue["end_ms"] or
                 row.get("source_text_ocr") != cue["source_text_ocr"] or
+                actual_raw != expected_raw or
                 not isinstance(row.get("crop_sha256_local"), str) or not _HASH.fullmatch(row["crop_sha256_local"])):
             raise ocr_review.ReviewError("AI OCR isteği cue eşlemesi güncel paketle uyuşmuyor", 409)
         public = public_rows.get(row["cue_id"]); template_row = template_rows.get(row["cue_id"])
-        if (not isinstance(public, dict) or set(public) != {"cue_id", "start_ms", "end_ms", "source_text_ocr", "ocr_confidence", "image_file"} or
+        if (not isinstance(public, dict) or set(public) != {"cue_id", "start_ms", "end_ms", "source_text_ocr", "ocr_confidence", "image_file"} | set(expected_raw) or
                 public.get("start_ms") != row["start_ms"] or public.get("end_ms") != row["end_ms"] or
                 public.get("source_text_ocr") != row["source_text_ocr"] or
+                {key: public[key] for key in raw_keys if key in public} != expected_raw or
                 public.get("image_file") != f"images/{row['cue_id']}.jpg" or
                 not isinstance(template_row, dict) or template_row.get("start_ms") != row["start_ms"] or
                 template_row.get("end_ms") != row["end_ms"]):

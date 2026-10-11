@@ -3494,6 +3494,14 @@ def _atomic_write_json(path, payload):
                 pass
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main():
     run_started = time.monotonic()
     global HWACCEL
@@ -5130,6 +5138,10 @@ def main():
              "second_engine_takas": second_takas,
              "second_engine_cuda": _ORT["durum"],
              "onnxruntime": _ORT["surum"]}
+    # Bind optional raw writer-end diagnostics to the exact main SRT bytes
+    # only when a review pack is requested. This hash stays local in stats.
+    if args.review_pack:
+        stats["main_srt_sha256"] = _sha256_file(out)
     # Writer clamps do not change SRT timestamps: they only expose cases where
     # a cue's frame/FPS-derived end was shortened to the next cue's start.
     # Source PTS is not preserved, so these times remain approximate (VFR risk).
@@ -5213,6 +5225,8 @@ def main():
             review_cues.append({
                 "start_ms": int(round(start * 1000)),
                 "end_ms": int(round(end * 1000)),
+                "start_frame": int(a),
+                "end_frame_inclusive": int(b),
                 "text": text,
                 "confidence": round(float(conf), 4),
                 "frame_index": frame_index,
@@ -5268,7 +5282,8 @@ def main():
 
         try:
             review_dir, review_manifest = build_review_pack(
-                out, review_cues, review_metadata, _review_crop)
+                out, review_cues, review_metadata, _review_crop,
+                generation_stats=stats)
             review_pack_status = "completed"
             print(f"AI inceleme paketi: {review_dir} "
                   f"({review_manifest['unique_crop_count']} kırpım / "

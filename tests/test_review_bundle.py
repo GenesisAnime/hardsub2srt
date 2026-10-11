@@ -1,4 +1,5 @@
 import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,81 @@ from review_bundle import build_review_pack
 
 
 class ReviewBundleTests(unittest.TestCase):
+    @staticmethod
+    def _generation_stats(srt, main):
+        return {
+            "main_srt_sha256": hashlib.sha256(srt.read_bytes()).hexdigest(),
+            "writer_end_clamps": {
+                "time_basis": "frame_index / reported FPS; approximate; source PTS not preserved",
+                "main": main,
+                "screen": [],
+            },
+        }
+
+    def test_hash_matched_writer_clamp_is_attached_only_to_aligned_cue(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            srt = root / "episode.srt"
+            srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n\n", encoding="utf-8")
+            cue = {"start_ms": 1000, "end_ms": 2000, "text": "Hello",
+                   "frame_index": 15, "frame_ms": 1500,
+                   "start_frame": 10, "end_frame_inclusive": 20,
+                   "band_y": 100, "band_height": 30}
+            stats = self._generation_stats(srt, [{
+                "cue_index": 0, "start_frame": 10, "end_frame_inclusive": 20,
+                "raw_end": "00:00:02,100", "emitted_end": "00:00:02,000",
+                "clamp_delta_ms": 100.0,
+            }])
+            _target, manifest = build_review_pack(
+                srt, [cue], {}, lambda *_args: np.full((20, 80, 3), 80, dtype=np.uint8),
+                generation_stats=stats)
+            row = manifest["cues"][0]
+            self.assertEqual(manifest["raw_timing_metadata"]["status"], "matched")
+            self.assertEqual(row["raw_end_ms"], 2100)
+            self.assertEqual(row["clamp_delta_ms"], 100.0)
+            self.assertIn("approximate; source PTS not preserved", row["raw_end_time_basis"])
+
+    def test_stale_or_missing_stats_never_supply_raw_end(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            srt = root / "episode.srt"
+            srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n\n", encoding="utf-8")
+            cue = {"start_ms": 1000, "end_ms": 2000, "text": "Hello",
+                   "frame_index": 15, "frame_ms": 1500,
+                   "start_frame": 10, "end_frame_inclusive": 20,
+                   "band_y": 100, "band_height": 30}
+            clamps = [{"cue_index": 0, "start_frame": 10, "end_frame_inclusive": 20,
+                       "raw_end": "00:00:02,100", "emitted_end": "00:00:02,000",
+                       "clamp_delta_ms": 100.0}]
+            stale = self._generation_stats(srt, clamps)
+            stale["main_srt_sha256"] = "0" * 64
+            for stem, stats, reason in (("stale", stale, "generation_srt_hash_missing_or_mismatched"),
+                                        ("missing", None, "generation_stats_missing")):
+                case_srt = root / f"{stem}.srt"
+                case_srt.write_bytes(srt.read_bytes())
+                _target, manifest = build_review_pack(
+                    case_srt, [cue], {}, lambda *_args: np.full((20, 80, 3), 80, dtype=np.uint8),
+                    generation_stats=stats)
+                self.assertEqual(manifest["raw_timing_metadata"],
+                                 {"status": "unavailable", "reason": reason})
+                self.assertNotIn("raw_end_ms", manifest["cues"][0])
+
+    def test_hash_matched_non_clamped_cue_has_no_raw_end_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            srt = root / "episode.srt"
+            srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n\n", encoding="utf-8")
+            cue = {"start_ms": 1000, "end_ms": 2000, "text": "Hello",
+                   "frame_index": 15, "frame_ms": 1500,
+                   "start_frame": 10, "end_frame_inclusive": 20,
+                   "band_y": 100, "band_height": 30}
+            stats = self._generation_stats(srt, [])
+            _target, manifest = build_review_pack(
+                srt, [cue], {}, lambda *_args: np.full((20, 80, 3), 80, dtype=np.uint8),
+                generation_stats=stats)
+            self.assertNotIn("raw_end_ms", manifest["cues"][0])
+            self.assertEqual(manifest["raw_timing_metadata"]["clamp_count"], 0)
+
     def test_bundle_maps_cues_deduplicates_and_marks_missing_crop(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
