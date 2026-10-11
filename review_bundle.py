@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 import tempfile
 import uuid
@@ -26,6 +27,72 @@ MAX_SINGLE_CROP_BYTES = 8 * 1024 * 1024
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _timestamp_ms(value):
+    """Parse the writer's SRT timestamp without accepting loose input."""
+    if not isinstance(value, str):
+        return None
+    try:
+        hours, minutes, rest = value.split(":", 2)
+        seconds, millis = rest.split(",", 1)
+        if (not hours.isdigit() or not minutes.isdigit() or
+                not seconds.isdigit() or len(millis) != 3 or not millis.isdigit() or
+                int(minutes) > 59 or int(seconds) > 59):
+            return None
+        return ((int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000 + int(millis))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _matching_writer_clamps(srt_digest, cues, generation_stats):
+    """Return cue-indexed safe raw-end diagnostics only for the exact SRT."""
+    if not isinstance(generation_stats, dict):
+        return {}, {"status": "unavailable", "reason": "generation_stats_missing"}
+    if generation_stats.get("main_srt_sha256") != srt_digest:
+        return {}, {"status": "unavailable", "reason": "generation_srt_hash_missing_or_mismatched"}
+    writer = generation_stats.get("writer_end_clamps")
+    if writer is None:
+        # Current stats omit this optional section when the writer made no
+        # clamps in either stream. A hash-bound generation record is enough
+        # to distinguish that from old/missing stats.
+        return {}, {"status": "matched", "clamp_count": 0,
+                    "reason": "no_writer_end_clamps_recorded"}
+    if not isinstance(writer, dict) or not isinstance(writer.get("main"), list):
+        return {}, {"status": "unavailable", "reason": "writer_clamp_stats_invalid"}
+    time_basis = writer.get("time_basis")
+    if (not isinstance(time_basis, str) or
+            time_basis != "frame_index / reported FPS; approximate; source PTS not preserved"):
+        return {}, {"status": "unavailable", "reason": "writer_time_basis_missing_or_unknown"}
+
+    matched = {}
+    for row in writer["main"]:
+        if not isinstance(row, dict):
+            continue
+        index = row.get("cue_index")
+        if type(index) is not int or not 0 <= index < len(cues) or index in matched:
+            continue
+        cue = cues[index]
+        if (type(cue.get("start_frame")) is not int or
+                type(cue.get("end_frame_inclusive")) is not int or
+                row.get("start_frame") != cue["start_frame"] or
+                row.get("end_frame_inclusive") != cue["end_frame_inclusive"]):
+            continue
+        raw_end_ms = _timestamp_ms(row.get("raw_end"))
+        emitted_end_ms = _timestamp_ms(row.get("emitted_end"))
+        delta = row.get("clamp_delta_ms")
+        if (raw_end_ms is None or emitted_end_ms != cue.get("end_ms") or
+                type(delta) not in (int, float) or not math.isfinite(delta) or
+                raw_end_ms <= emitted_end_ms or delta <= 0 or
+                abs(delta - (raw_end_ms - emitted_end_ms)) > 1.001):
+            continue
+        matched[index] = {
+            "raw_end_ms": raw_end_ms,
+            "clamp_delta_ms": delta,
+            "raw_end_time_basis": time_basis,
+        }
+    return matched, {"status": "matched", "clamp_count": len(matched),
+                     "time_basis": time_basis}
 
 
 def _encode_crop(image):
@@ -50,7 +117,8 @@ def _encode_crop(image):
     return encoded.tobytes(), width, height, original_width, original_height
 
 
-def build_review_pack(srt_path, cues, metadata, crop_provider):
+def build_review_pack(srt_path, cues, metadata, crop_provider,
+                      generation_stats=None):
     """Create `<srt-stem>.review-pack/` without overwriting an existing pack.
 
     `cues` are final main-SRT blocks in file order. Each cue carries its OCR
@@ -67,6 +135,8 @@ def build_review_pack(srt_path, cues, metadata, crop_provider):
 
     srt_bytes = srt_path.read_bytes()
     srt_digest = _sha256(srt_bytes)
+    raw_end_by_index, raw_timing_status = _matching_writer_clamps(
+        srt_digest, cues, generation_stats)
     job_id = uuid.uuid4().hex
     temporary = Path(tempfile.mkdtemp(
         prefix=f".{target.name}.{job_id[:8]}-", dir=str(target.parent)))
@@ -106,6 +176,7 @@ def build_review_pack(srt_path, cues, metadata, crop_provider):
                 "crop_sha256_local": None,
                 "duplicate_of_cue_id": None,
             }
+            record.update(raw_end_by_index.get(position - 1, {}))
             try:
                 if record["representative_frame_index"] is None:
                     raise ValueError("source_frame_not_preserved")
@@ -198,6 +269,7 @@ def build_review_pack(srt_path, cues, metadata, crop_provider):
             "upload_performed": False,
             "srt_filename": srt_path.name,
             "srt_sha256_local": srt_digest,
+            "raw_timing_metadata": raw_timing_status,
             "cue_count": len(cues_out),
             "unique_crop_count": crop_count,
             "unique_crop_bytes": crop_bytes,

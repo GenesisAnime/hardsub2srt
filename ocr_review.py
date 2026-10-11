@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -226,6 +227,17 @@ def _validated_pack(pack: Path) -> dict:
         if (parsed[index]["start_ms"] != start or parsed[index]["end_ms"] != end or
                 parsed[index]["text"] != text):
             raise ReviewError("SRT ile manifest altyazı içeriği eşleşmiyor", 409)
+        raw_keys = ("raw_end_ms", "clamp_delta_ms", "raw_end_time_basis")
+        raw_present = [key in cue for key in raw_keys]
+        if any(raw_present):
+            delta = cue.get("clamp_delta_ms")
+            if (not all(raw_present) or type(cue.get("raw_end_ms")) is not int or
+                    cue["raw_end_ms"] <= end or type(delta) not in (int, float) or
+                    not math.isfinite(delta) or delta <= 0 or
+                    abs(delta - (cue["raw_end_ms"] - end)) > 1.001 or
+                    cue.get("raw_end_time_basis") !=
+                    "frame_index / reported FPS; approximate; source PTS not preserved"):
+                raise ReviewError("Ham bitiş tanılaması geçersiz", 422)
         if cue.get("mapping_status") != "exact_original_ocr_segment_needs_visual_confirmation":
             # Only a defensible, one-to-one original OCR interval can become
             # a source-text label. Merged/ambiguous cues remain view-only.
@@ -456,7 +468,8 @@ def public_pack(info: dict) -> dict:
         cues.append({k: cue.get(k) for k in (
             "cue_id", "index", "start_ms", "end_ms", "source_text_ocr",
             "ocr_confidence", "representative_frame_index", "representative_frame_ms",
-            "mapping_status", "crop_path", "crop_sha256_local", "crop_valid")}
+            "mapping_status", "crop_path", "crop_sha256_local", "crop_valid",
+            "raw_end_ms", "clamp_delta_ms", "raw_end_time_basis")}
             | {"active_event": event})
     return {"job_id": info["manifest"]["job_id"], "cues": cues,
             "warnings": warnings, "review_log": "review-events.jsonl"}

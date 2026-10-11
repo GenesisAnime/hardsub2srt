@@ -61,6 +61,13 @@ iddiası değildir. Kayıt yalnızca bu OCR koşumunun yazdığı SRT baytların
 tanımlar; SRT sonradan elle değiştirilir veya zamanlanırsa stats otomatik
 güncellenmez ve artık düzenlenmiş dosyanın durumunu yansıtmayabilir.
 
+İsteğe bağlı review-pack, `.stats.json` içindeki `main_srt_sha256` mevcut ana
+SRT'nin hash'iyle eşleşirse, kırpılmış cue için ham bitişi ve kırpma farkını
+paket manifestine ve manuel AI OCR istek paketine ekler. Eşleşme yoksa bu
+alanlar atlanır; paket bunu `raw_timing_metadata` durumunda açıklar. Bu
+değerler de frame/FPS tabanlı yaklaşık tanılamadır; AI yanıtı hâlâ SRT'de
+yazılmış `start_ms`/`end_ms` değerlerini korur ve zamanlama değiştiremez.
+
 Mevcut bir SRT'yi ayrıca salt-okunur kalite raporundan geçirmek için
 `python srt_lint.py "bolum.srt"` çalıştırın. Araç parse sorunlarını hata olarak;
 kronoloji, çakışma, karakter/sn (CPS) ve kısa/uzun süre bulgularını ise yalnızca
