@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/rights-review-receipt-v1.schema.json",
+  "title": "Human-reviewed dataset/model rights receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "review_id", "decision", "reviewer", "reviewed_at", "scope", "dataset_manifest_sha256", "dataset_metadata_sha256", "license_evidence_sha256s", "candidate_id", "candidate_version", "source_commit", "training_recipe_id", "training_engine", "model_files", "model_bundle_sha256", "phase5_report_sha256"],
+  "properties": {
+    "schema_version": {"const": 1}, "review_id": {"type": "string", "minLength": 1},
+    "decision": {"const": "APPROVED"}, "reviewer": {"type": "object", "additionalProperties": false, "required": ["reviewer_id", "authority"], "properties": {
+      "reviewer_id": {"type": "string", "minLength": 1}, "authority": {"type": "string", "minLength": 1}
+    }},
+    "reviewed_at": {"type": "string", "format": "date-time"}, "scope": {"type": "string", "minLength": 1},
+    "dataset_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "dataset_metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "license_evidence_sha256s": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "candidate_id": {"type": "string", "minLength": 1}, "candidate_version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "training_recipe_id": {"type": "string", "minLength": 1}, "training_engine": {"type": "string", "minLength": 1},
+    "model_files": {"$ref": "model-release-manifest-v1.schema.json#/properties/model_files"},
+    "model_bundle_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "phase5_report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

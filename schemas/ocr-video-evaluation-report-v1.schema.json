@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-video-evaluation-report-v1.schema.json",
+  "title": "Fixed full-episode SRT measurement report v1 (not a release result)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "phase6_eligible", "created_at", "dataset", "references", "predictions", "scope", "engines", "predeclared_comparison", "release_gate"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "MEASURED_ADAPTER_ONLY_NOT_RELEASE_PASS"},
+    "phase6_eligible": {"const": false},
+    "created_at": {"type": "string", "format": "date-time"},
+    "dataset": {"type": "object", "required": ["manifest_sha256", "metadata_sha256", "split_manifest_sha256", "groups", "rights_verified", "rights_review_status"], "properties": {
+      "manifest_sha256": {"$ref": "#/$defs/sha256"},
+      "metadata_sha256": {"$ref": "#/$defs/sha256"},
+      "split_manifest_sha256": {"$ref": "#/$defs/sha256"},
+      "groups": {"type": "integer", "minimum": 3},
+      "rights_verified": {"const": false},
+      "rights_review_status": {"const": "human_attested_not_legally_verified"}
+    }},
+    "references": {"type": "object", "required": ["manifest_sha256", "language", "alignment_review_status", "authorized_use_verified"], "properties": {
+      "manifest_sha256": {"$ref": "#/$defs/sha256"},
+      "language": {"type": "string", "minLength": 1},
+      "alignment_review_status": {"const": "human_attested_not_independently_verified"},
+      "authorized_use_verified": {"const": false}
+    }},
+    "predictions": {"type": "object", "required": ["manifest_sha256", "execution_provenance", "engine_profiles"], "properties": {
+      "manifest_sha256": {"$ref": "#/$defs/sha256"},
+      "execution_provenance": {"const": "user_supplied_not_independently_verified"},
+      "engine_profiles": {"type": "object"}
+    }},
+    "scope": {"type": "object", "required": ["measurement", "ocr_executed", "training_performed", "matching", "normalization", "timing_tolerance_ms", "metrics_persisted"], "properties": {
+      "measurement": {"const": "fixed full-episode SRT vs timed source-language reference"},
+      "ocr_executed": {"const": false},
+      "training_performed": {"const": false},
+      "matching": {"type": "object", "required": ["algorithm", "minimum_overlap_over_reference_duration", "max_interval_pair_operations", "max_qualifying_edges"], "properties": {
+        "algorithm": {"const": "maximum-cardinality one-to-one; Hopcroft-Karp traversal uses reference degree/index order and descending overlap/prediction index adjacency order"},
+        "minimum_overlap_over_reference_duration": {"const": 0.5},
+        "max_interval_pair_operations": {"const": 2000000},
+        "max_qualifying_edges": {"const": 2000000}
+      }},
+      "normalization": {"type": "string"},
+      "timing_tolerance_ms": {"type": "integer", "minimum": 0},
+      "metrics_persisted": {"const": "aggregate only; no cue text or absolute paths"}
+    }},
+    "engines": {"type": "array", "minItems": 6, "items": {"$ref": "#/$defs/engineSplit"}},
+    "predeclared_comparison": {"type": "object", "required": ["baseline_id", "candidate_id", "max_candidate_corpus_cer_increase", "candidate_test_cer_minus_baseline", "candidate_cer_exceeds_predeclared_limit", "test_group_cer", "test_groups_with_candidate_cer_regression", "coverage_gate", "release_decision"], "properties": {
+      "baseline_id": {"type": "string"},
+      "candidate_id": {"type": "string"},
+      "max_candidate_corpus_cer_increase": {"type": "number", "minimum": 0},
+      "candidate_test_cer_minus_baseline": {"type": ["number", "null"]},
+      "candidate_cer_exceeds_predeclared_limit": {"type": ["boolean", "null"]},
+      "test_group_cer": {"type": "array"},
+      "test_groups_with_candidate_cer_regression": {"type": "integer", "minimum": 0},
+      "coverage_gate": {"const": "NOT_PREDECLARED_IN_PHASE5_V1"},
+      "release_decision": {"const": "NOT_MADE_BY_THIS_ADAPTER"}
+    }},
+    "release_gate": {"type": "object", "required": ["status", "phase6_blocked", "reason"], "properties": {
+      "status": {"const": "BLOCKED_ADAPTER_ONLY"},
+      "phase6_blocked": {"const": true},
+      "reason": {"type": "string", "minLength": 1}
+    }}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "metric": {"type": ["number", "integer", "null"]},
+    "counts": {"type": "object", "required": ["reference_cues", "prediction_cues", "matched_cues", "missed_reference_cues", "unmatched_prediction_cues", "cue_precision", "cue_recall", "coverage", "cer", "wer", "exact_match_cue_rate", "reference_chars", "reference_words", "character_edits", "word_edits", "timing_start_abs_error_ms", "timing_end_abs_error_ms", "timing_within_tolerance_rate", "timing_tolerance_ms"], "properties": {
+      "reference_cues": {"type": "integer", "minimum": 0}, "prediction_cues": {"type": "integer", "minimum": 0}, "matched_cues": {"type": "integer", "minimum": 0},
+      "missed_reference_cues": {"type": "integer", "minimum": 0}, "unmatched_prediction_cues": {"type": "integer", "minimum": 0},
+      "cue_precision": {"$ref": "#/$defs/metric"}, "cue_recall": {"$ref": "#/$defs/metric"}, "coverage": {"$ref": "#/$defs/metric"},
+      "cer": {"$ref": "#/$defs/metric"}, "wer": {"$ref": "#/$defs/metric"}, "exact_match_cue_rate": {"$ref": "#/$defs/metric"},
+      "reference_chars": {"type": "integer", "minimum": 0}, "reference_words": {"type": "integer", "minimum": 0},
+      "character_edits": {"type": "integer", "minimum": 0}, "word_edits": {"type": "integer", "minimum": 0},
+      "timing_start_abs_error_ms": {"$ref": "#/$defs/metric"}, "timing_end_abs_error_ms": {"$ref": "#/$defs/metric"},
+      "timing_within_tolerance_rate": {"$ref": "#/$defs/metric"}, "timing_tolerance_ms": {"type": "integer", "minimum": 0}
+    }},
+    "engineSplit": {"type": "object", "required": ["engine_id", "split", "micro", "group_macro", "per_source_episode"], "properties": {
+      "engine_id": {"type": "string"}, "split": {"enum": ["train", "validation", "test"]},
+      "micro": {"$ref": "#/$defs/counts"}, "group_macro": {"type": "object"},
+      "per_source_episode": {"type": "array", "items": {"type": "object", "required": ["group_key_sha256", "split"], "properties": {"group_key_sha256": {"$ref": "#/$defs/sha256"}, "split": {"enum": ["train", "validation", "test"]}}}}
+    }}
+  }
+}

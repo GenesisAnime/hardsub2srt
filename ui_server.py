@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 ui_server.py — hardsub2srt için yerel web arayüzü (tek dosya, Flask).
 
@@ -16,12 +16,9 @@ Kullanım:
     stderr stdout'a birleştirilerek okunur.
 
 Kuyruk işi başına çıktı:
-    <çıktı_klasörü>/<öneki><video-adı>.srt
-    <çıktı_klasörü>/<öneki><video-adı>.stats.json   (aracın kendi çıktısı)
-    <çıktı_klasörü>/qa/<öneki><video-adı>/qa_XXX_fN.png  (iş başına ayrı klasör;
-        mevcut qa/ içeriği ezilmez, montaj adları stem'siz olduğu için şart)
-    <çıktı_klasörü>/<öneki><video-adı>.srt.vtt-rapor.json  (videonun dizininde
-        <ad>.tr.vtt / <ad>.en.vtt varsa vtt-qa.py otomatik koşar)
+    <çıktı_klasörü>/runs/<video-adı>/<tarih-saat>_<iş-id>/
+    bu klasörün içinde SRT, stats, blok dökümü, öğrenme günlüğü, ASS ve VTT raporu
+    qa/ altında ise QA montajları. Her kuyruk işi kendi yeni klasörünü alır.
 
 Blok editörü (v1.1):
   - Sonuç kartındaki "İncele" → GET /api/bloklar?is=<id> (SRT blokları JSON)
@@ -61,6 +58,9 @@ Kontrol paneli + toplu pano (v1.3):
     görüntüleyici). Eski-format stats boş hücreyle zarifçe listelenir.
 """
 
+import atexit
+import base64
+import ctypes
 import json
 import os
 import re
@@ -70,6 +70,9 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
+import uuid
+from urllib.parse import urlsplit
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -84,12 +87,71 @@ VIDEO_UZANTILARI = {".mp4", ".mkv", ".avi"}
 LOG_LIMIT = 400            # bellekte tutulan toplam satır
 LOG_YANIT = 200            # /api/durum yanıtında dönen satır
 KUYRUK_YANIT = 100         # /api/durum yanıtında dönen iş sayısı
+MAX_BATCH = 100            # tek ekle isteğinin üst sınırı
+MAX_AKTIF_KUYRUK = 2000    # çalışan + bekleyen işlerin üst sınırı
+
+
+def _child_process_env():
+    """Preserve normal settings but never delegate contribution config/secrets."""
+    return {key: value for key, value in os.environ.items()
+            if not key.upper().startswith("H2S_CONTRIB_")}
 
 try:
-    from flask import Flask, Response, jsonify, request, send_from_directory
+    from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 except ImportError:
     print("[HATA] Flask kurulu degil. Kurulum: py -3 -m pip install flask")
     sys.exit(2)
+
+try:
+    import ocr_review
+except Exception as _ocr_review_hatasi:
+    ocr_review = None
+    print(f"[ui] UYARI: ocr_review.py yuklenemedi — OCR inceleme kapali: "
+          f"{_ocr_review_hatasi!r}")
+
+try:
+    import translation_review
+except Exception as _translation_review_hatasi:
+    translation_review = None
+    print(f"[ui] UYARI: translation_review.py yuklenemedi — AI çeviri round-trip kapali: "
+          f"{_translation_review_hatasi!r}")
+
+try:
+    import ai_ocr_review
+except Exception as _ai_ocr_review_error:
+    ai_ocr_review = None
+    print(f"[ui] UYARI: ai_ocr_review.py yüklenemedi — manuel AI OCR görsel incelemesi kapalı: "
+          f"{_ai_ocr_review_error!r}")
+
+try:
+    import translation_memory
+except Exception as _translation_memory_hatasi:
+    translation_memory = None
+    print(f"[ui] UYARI: translation_memory.py yuklenemedi — kapsamlı çeviri belleği kapalı: "
+          f"{_translation_memory_hatasi!r}")
+
+try:
+    import contribution_client
+except Exception as _contrib_hatasi:
+    contribution_client = None
+    print(f"[ui] UYARI: contribution_client.py yüklenemedi — katkı gönderimi kapalı: "
+          f"{_contrib_hatasi!r}")
+
+try:
+    from job_history import JobHistory, default_history_path
+    JOB_HISTORY = JobHistory(default_history_path())
+except Exception as _job_history_error:
+    # Persistent diagnostics are best effort and must never block OCR startup.
+    JOB_HISTORY = None
+    print(f"[ui] UYARI: kalıcı iş tanılaması kapalı: {_job_history_error!r}")
+
+try:
+    from windows_job import CREATE_SUSPENDED, WindowsJobObject
+except Exception as _windows_job_error:
+    WindowsJobObject = None
+    CREATE_SUSPENDED = 0x00000004
+    if os.name == "nt":
+        print(f"[ui] UYARI: Windows Job Object yönetimi yüklenemedi: {_windows_job_error!r}")
 
 # otomatik öğrenme (Kaydet = öğren): sınıflandırıcı ogren.py'de tek kaynaktır;
 # yüklenemezse kayıt çalışmaya devam eder, yalnız öğrenme atlanır
@@ -103,13 +165,93 @@ except Exception as _ogren_hatasi:
 
 app = Flask(__name__)
 
+
+def _memory_request_error():
+    """Reject DNS-rebinding Host headers and cross-origin browser mutations."""
+    allowed_hosts = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+    raw_host = request.environ.get("HTTP_HOST", "")
+    host = raw_host.lower()
+    if raw_host != raw_host.strip() or any(ch.isspace() for ch in raw_host) or host not in allowed_hosts:
+        return jsonify({"hata": "Yerel çeviri belleği yalnız localhost veya 127.0.0.1 üzerinden kullanılabilir"}), 403
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = request.headers.get("Origin")
+        if not origin:
+            referer = request.headers.get("Referer", "")
+            if referer:
+                try:
+                    parsed_referer = urlsplit(referer)
+                    origin = f"{parsed_referer.scheme}://{parsed_referer.netloc}"
+                except ValueError:
+                    origin = ""
+        try:
+            parsed = urlsplit(origin or "")
+            valid_origin = (parsed.scheme.lower() == "http" and parsed.netloc.lower() == host and
+                            parsed.hostname is not None and parsed.hostname.lower() in {"localhost", "127.0.0.1"} and
+                            parsed.port == PORT and parsed.username is None and parsed.password is None and
+                            parsed.path in ("", "/") and not parsed.query and not parsed.fragment)
+        except ValueError:
+            valid_origin = False
+        if not valid_origin:
+            return jsonify({"hata": "Bellek değişikliği için aynı localhost kaynağından gelen istek gerekli"}), 403
+    return None
+
+
+@app.before_request
+def _guard_local_translation_memory():
+    if request.path == "/api/is-gecmisi":
+        host = request.environ.get("HTTP_HOST", "")
+        allowed = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+        if host != host.strip() or any(ch.isspace() for ch in host) or host.lower() not in allowed:
+            return jsonify({"hata": "İş geçmişi yalnız localhost veya 127.0.0.1 üzerinden kullanılabilir"}), 403
+        source = request.headers.get("Origin")
+        if not source and request.headers.get("Referer"):
+            try:
+                ref = urlsplit(request.headers["Referer"])
+                source = f"{ref.scheme}://{ref.netloc}"
+            except ValueError:
+                source = "invalid:"
+        if source:
+            try:
+                parsed = urlsplit(source)
+                valid = (parsed.scheme.lower() == "http" and parsed.netloc.lower() == host.lower()
+                         and parsed.hostname is not None
+                         and parsed.hostname.lower() in {"localhost", "127.0.0.1"}
+                         and parsed.port == PORT and parsed.username is None
+                         and parsed.password is None and parsed.path in ("", "/")
+                         and not parsed.query and not parsed.fragment)
+            except ValueError:
+                valid = False
+            if not valid:
+                return jsonify({"hata": "İş geçmişi için aynı localhost kaynağı gerekli"}), 403
+    if request.path.startswith("/api/ceviri-bellegi/"):
+        return _memory_request_error()
+    if request.path.startswith("/api/katki/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        host = request.environ.get("HTTP_HOST", "").lower()
+        if host not in {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}:
+            return jsonify({"hata": "Katkı işlemi yalnız yerel arayüzden kullanılabilir"}), 403
+        try:
+            origin = urlsplit(request.headers.get("Origin", ""))
+            if (origin.scheme != "http" or origin.netloc.lower() != host or origin.hostname not in {"localhost", "127.0.0.1"} or
+                    origin.port != PORT or origin.username or origin.password or origin.path not in ("", "/") or
+                    origin.query or origin.fragment):
+                return jsonify({"hata": "Katkı işlemi için aynı yerel arayüz kaynağı gerekli"}), 403
+        except ValueError:
+            return jsonify({"hata": "Geçersiz katkı isteği kaynağı"}), 403
+    return None
+
 # ---------------------------------------------------------------- durum ----
 KILIT = threading.Lock()
+PICKER_JOB_LOCK = threading.Lock()
+PICKER_JOBS = {}
+PICKER_ACTIVE_JOB = None
+PICKER_SHUTDOWN = threading.Event()
+PICKER_TIMEOUT_SECONDS = 300
 ISLER = []                 # eklenme sırasıyla tüm işler (dict listesi)
 LOG = deque(maxlen=LOG_LIMIT)
+KATKI_ONIZLEMELERI = {}
 LOG_SAYAC = 0
 IS_SAYAC = 0
-CALISAN = {}               # {"pid": int, "is_id": str} — çalışan süreç
+CALISAN = {}               # {"pid": int, "is_id": str, "process": Popen} — çalışan süreç
 IPTAL_SETI = set()         # iptali istenen iş id'leri
 SUNUCU_BASLANGIC = time.time()
 
@@ -126,6 +268,7 @@ RE_DUSUK = re.compile(r"guveni dusuk(?: blok)? \(conf<[0-9.]+\): (\d+)/(\d+)")
 RE_YAZILDI = re.compile(r"SRT yazildi:\s*(.+?)\s*$")
 RE_ISTATISTIK = re.compile(r"istatistik:\s*(.+?)\s*$")
 RE_QA = re.compile(r"QA montajlari:\s*(.+?)\s*\((\d+) adet\)")
+RE_REVIEW_PACK = re.compile(r"^AI inceleme paketi yolu:\s*(.*)$")
 
 
 def log_ekle(seviye, metin, is_id=None):
@@ -154,13 +297,21 @@ def satir_seviyesi(satir):
     return "bilgi"
 
 
-def is_olustur(yol, sec):
+def is_olustur(yol, sec, is_id=None, enqueue_seq=None):
     global IS_SAYAC
-    with KILIT:
-        IS_SAYAC += 1
-        is_id = f"is-{IS_SAYAC}"
+    if is_id is None:
+        with KILIT:
+            IS_SAYAC += 1
+            is_id = f"is-{IS_SAYAC}"
+            enqueue_seq = IS_SAYAC
+    elif enqueue_seq is None:
+        try:
+            enqueue_seq = int(is_id.rsplit("-", 1)[1])
+        except (ValueError, IndexError):
+            enqueue_seq = None
     return {
         "id": is_id,
+        "enqueue_seq": enqueue_seq,
         "yol": str(yol),
         "ad": Path(yol).name,
         "durum": "bekliyor",           # bekliyor|çalışıyor|bitti|hata|iptal
@@ -175,6 +326,9 @@ def is_olustur(yol, sec):
         "dusuk_a": None,
         "dusuk_b": None,
         "srt": None,
+        "review_pack": None,
+        "run_dir": None,
+        "qa_root": None,
         "ass": None,
         "stats": None,
         "qa_dosyalari": [],
@@ -191,6 +345,7 @@ def is_snapshot(isim):
     """İşin kopyasını döndürür. ⚠️ Yalnız KILIT tutulurken çağrılır
     (kilit içinde kilit = threading.Lock'ta deadlock)."""
     s = dict(isim)
+    s.pop("_diag_phase", None)
     s["uyarilar"] = list(isim["uyarilar"])
     s["sec"] = dict(isim["sec"])
     s["vtt"] = dict(isim["vtt"]) if isim.get("vtt") else None
@@ -207,31 +362,156 @@ def isci():
                 if k["durum"] == "bekliyor":
                     k["durum"] = "çalışıyor"
                     k["basladi"] = time.time()
+                    k["_diag_phase"] = "setup"
                     isim = k
                     break
         if isim is None:
             time.sleep(0.4)
             continue
+        _job_history_record(isim, status="running", phase="setup")
         try:
             is_yurut(isim)
         except Exception as e:                      # worker ölmesin
-            with KILIT:
-                isim["durum"] = "hata"
-                isim["hata"] = f"worker istisnası: {e!r}"
-            log_ekle("hata", f"worker istisnası: {e!r}", isim["id"])
+            cleaned = _worker_failed(isim, e)
+            if not cleaned:
+                _wait_for_failed_child_cleanup(isim)
+
+
+def _worker_failed(isim, exc):
+    with KILIT:
+        isim["hata"] = f"worker istisnası: {exc!r}"
+    cleaned = _stop_failed_child(isim["id"])
+    if cleaned:
+        _finalize_worker_failure(isim)
+    else:
+        with KILIT:
+            isim["durum"] = "çalışıyor"
+        _job_history_record(isim, status="running", phase="child_running")
+    log_ekle("hata", f"worker istisnası: {exc!r}", isim["id"])
+    return cleaned
+
+
+def _wait_for_failed_child_cleanup(isim):
+    """Block the serial worker until the failed child's process is reaped."""
+    while not _stop_failed_child(isim["id"]):
+        time.sleep(0.5)
+    if isim.get("durum") != "hata":
+        _finalize_worker_failure(isim)
+
+
+def _close_job_owner_and_clear(is_id, owner):
+    """Retry handle close and retain the active slot until OS confirmation."""
+    warned = False
+    while owner is not None and getattr(owner, "handle", None) is not None:
+        try:
+            owner.close()
+        except Exception:
+            if not warned:
+                log_ekle("uyari", "Windows Job Object handle kapanışı bekleniyor", is_id)
+                warned = True
+            time.sleep(0.5)
+    with KILIT:
+        if CALISAN.get("is_id") == is_id:
+            CALISAN.clear()
+
+
+def _finalize_worker_failure(isim):
+    with KILIT:
+        isim["durum"] = "hata"
+        phase = isim.get("_diag_phase", "setup")
+    error_code = {
+        "setup": "setup_failed",
+        "process_start": "process_start_failed",
+    }.get(phase, "worker_failed")
+    _job_history_record(isim, status="failed", phase="complete",
+                        error_code=error_code, finish=True)
+
+
+def _stop_failed_child(is_id):
+    """Stop and reap a child before making its failed job terminal."""
+    with KILIT:
+        child = CALISAN.get("process") if CALISAN.get("is_id") == is_id else None
+        owner = CALISAN.get("job_owner") if CALISAN.get("is_id") == is_id else None
+        if child is None:
+            return CALISAN.get("is_id") != is_id
+        pid = CALISAN.get("pid")
+    try:
+        if owner is not None:
+            owner.close()
+        alive = child.poll() is None
+        if alive and os.name == "nt" and pid:
+            try:
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                               capture_output=True, timeout=10, env=_child_process_env())
+            except Exception:
+                pass
+        if child.poll() is None:
+            try:
+                child.terminate()
+            except Exception:
+                pass
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=10)
+        else:
+            # wait() reaps an already-exited process too.
+            child.wait(timeout=10)
+        if child.poll() is None:
+            return False
+    except Exception:
+        return False
+    finally:
+        try:
+            if child.stdout:
+                child.stdout.close()
+        except Exception:
+            pass
+    with KILIT:
+        if CALISAN.get("is_id") == is_id:
+            CALISAN.clear()
+    return True
+
+
+def _job_history_record(isim, *, status, phase, error_code=None,
+                        return_code=None, finish=False):
+    """Best-effort persistence; only enum values and numeric metadata leave this scope."""
+    if JOB_HISTORY is None:
+        return
+    started = isim.get("basladi")
+    duration = None
+    if finish and started is not None:
+        duration = max(0, time.time() - started)
+    try:
+        JOB_HISTORY.record(
+            isim.get("id"), status=status, phase=phase,
+            cpu=bool(isim.get("sec", {}).get("cpu")),
+            duration_seconds=duration, return_code=return_code,
+            error_code=error_code,
+        )
+    except Exception as exc:
+        # Keep even diagnostic failures out of durable logs and user data.
+        print(f"[ui] kalıcı iş tanılaması yazılamadı ({type(exc).__name__})")
 
 
 def is_yurut(isim):
     sec = isim["sec"]
     video = Path(isim["yol"])
-    cikti_k = Path(sec["cikti_klasor"])
+    cikti_k = Path(sec["cikti_klasor"]).expanduser().resolve()
     cikti_k.mkdir(parents=True, exist_ok=True)
+    run_dir = _run_klasoru(cikti_k, video, isim["id"])
     onek = sec.get("onek") or ""
-    srt = cikti_k / f"{onek}{video.stem}.srt"
-    qa_kok = cikti_k / "qa"
-    qa_dir = qa_kok / f"{onek}{video.stem}"
+    srt = run_dir / f"{onek}{video.stem}.srt"
+    qa_dir = run_dir / "qa"
+    with KILIT:
+        isim["run_dir"] = str(run_dir)
+        isim["qa_root"] = str(qa_dir)
+        isim["srt"] = str(srt)
 
     cmd = [sys.executable, "-u", str(ARAC), str(video), "-o", str(srt)]
+    if sec.get("cpu", False):
+        cmd.append("--cpu")
     if sec.get("ust_bant"):
         cmd.append("--ust-bant")
     if sec.get("dil"):
@@ -239,31 +519,61 @@ def is_yurut(isim):
     qa_sayi = int(sec.get("qa_sayi") or 0)
     if qa_sayi > 0:
         cmd += ["--qa", str(qa_sayi), "--qa-dir", str(qa_dir)]
+    if sec.get("review_pack", False):
+        cmd.append("--review-pack")
     limit = float(sec.get("limit_saniye") or 0)
     if limit > 0:
         cmd += ["--limit-seconds", str(limit)]
 
-    ortam = dict(os.environ)
+    ortam = _child_process_env()
     ortam["PYTHONUNBUFFERED"] = "1"
     ortam["PYTHONIOENCODING"] = "utf-8"
 
     log_ekle("bilgi", f"iş başladı: {video.name} -> {srt.name}", isim["id"])
     log_ekle("bilgi", "komut: " + " ".join(cmd), isim["id"])
 
-    surec = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,        # note() stderr'e yazıyor → birleştir
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-        cwd=str(KLASOR),
-        env=ortam,
-    )
+    with KILIT:
+        isim["_diag_phase"] = "process_start"
+    _job_history_record(isim, status="running", phase="process_start")
+    popen_options = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,        # note() stderr'e yazıyor → birleştir
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "bufsize": 1,
+        "cwd": str(KLASOR),
+        "env": ortam,
+    }
+    if os.name == "nt":
+        # Keep OCR dormant until the Job Object owns the process tree.
+        popen_options["creationflags"] = CREATE_SUSPENDED
+    surec = subprocess.Popen(cmd, **popen_options)
+    # Track immediately, so even a failed Job Object assignment can fall back
+    # to explicit termination/reap before the job is marked terminal.
     with KILIT:
         CALISAN["pid"] = surec.pid
         CALISAN["is_id"] = isim["id"]
+        CALISAN["process"] = surec
+        CALISAN["job_owner"] = None
+    job_owner = None
+    if os.name == "nt":
+        if WindowsJobObject is None:
+            try:
+                surec.terminate()
+                surec.wait(timeout=5)
+            except Exception:
+                try:
+                    surec.kill()
+                    surec.wait(timeout=5)
+                except Exception:
+                    pass
+            raise RuntimeError("Windows Job Object yönetimi kullanılamıyor; iş güvenli biçimde başlatılamadı")
+        job_owner = WindowsJobObject(surec)
+    with KILIT:
+        CALISAN["job_owner"] = job_owner
+        isim["_diag_phase"] = "child_running"
+    _job_history_record(isim, status="running", phase="child_running")
     log_ekle("bilgi", f"süreç başladı (pid {surec.pid})", isim["id"])
 
     stats_yol = None
@@ -304,13 +614,19 @@ def is_yurut(isim):
             m = RE_QA.search(satir)
             if m:
                 qa_adet = int(m.group(2))
+            m = RE_REVIEW_PACK.search(satir)
+            if m:
+                isim["review_pack"] = m.group(1).strip()
         log_ekle(seviye, satir, isim["id"])
 
     rc = surec.wait()
     with KILIT:
-        CALISAN.pop("pid", None)
-        CALISAN.pop("is_id", None)
+        active_owner = CALISAN.get("job_owner") if CALISAN.get("is_id") == isim["id"] else None
     isim["rc"] = rc
+    with KILIT:
+        isim["_diag_phase"] = "child_exit"
+    _job_history_record(isim, status="running", phase="child_exit", return_code=rc)
+    _close_job_owner_and_clear(isim["id"], active_owner)
     isim["bitti"] = time.time()
     if isim["basladi"]:
         isim["sure_sn"] = round(isim["bitti"] - isim["basladi"], 1)
@@ -320,12 +636,16 @@ def is_yurut(isim):
         isim["durum"] = "iptal"
         isim["hata"] = "kullanıcı iptal etti"
         log_ekle("uyari", f"iş iptal edildi (rc={rc})", isim["id"])
+        _job_history_record(isim, status="cancelled", phase="complete",
+                            error_code="cancelled", return_code=rc, finish=True)
         return
 
     if rc != 0:
         isim["durum"] = "hata"
         isim["hata"] = f"süreç rc={rc} ile bitti (ayrıntı: log)"
         log_ekle("hata", f"iş hatalı bitti (rc={rc}): {video.name}", isim["id"])
+        _job_history_record(isim, status="failed", phase="complete",
+                            error_code="child_nonzero", return_code=rc, finish=True)
         return
 
     srt_yol = Path(isim["srt"]) if isim["srt"] else srt
@@ -333,6 +653,8 @@ def is_yurut(isim):
         isim["durum"] = "hata"
         isim["hata"] = f"SRT üretilmedi: {srt_yol}"
         log_ekle("hata", isim["hata"], isim["id"])
+        _job_history_record(isim, status="failed", phase="complete",
+                            error_code="missing_srt", return_code=rc, finish=True)
         return
 
     # stats.json (aracın kendi çıktısı: <out>.stats.json)
@@ -349,7 +671,7 @@ def is_yurut(isim):
         if qa_dir.is_dir():
             for f in qa_dir.rglob("*.png"):
                 if f.stat().st_mtime >= sinir:
-                    dosyalar.append(f.relative_to(qa_kok).as_posix())
+                    dosyalar.append(f.relative_to(qa_dir).as_posix())
         isim["qa_dosyalari"] = sorted(dosyalar)
     except Exception as e:
         log_ekle("uyari", f"qa listesi okunamadı: {e!r}", isim["id"])
@@ -361,6 +683,8 @@ def is_yurut(isim):
     log_ekle("tamam", f"iş bitti: {srt_yol.name} "
                       f"(sure {isim['sure_sn']} sn, qa {qa_adet if qa_adet is not None else len(isim['qa_dosyalari'])})",
              isim["id"])
+    _job_history_record(isim, status="succeeded", phase="complete",
+                        return_code=rc, finish=True)
 
     # ASS üretimi (srt2ass.py çağrısı — dosya değiştirilmez)
     if sec.get("ass"):
@@ -372,6 +696,7 @@ def is_yurut(isim):
                  "-o", str(ass_yol)],
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=120, cwd=str(KLASOR),
+                env=_child_process_env(),
             )
             cikti = (r.stdout or "") + (r.stderr or "")
             for ln in cikti.splitlines():
@@ -384,6 +709,24 @@ def is_yurut(isim):
                 isim["uyarilar"].append(f"ASS üretilemedi (rc={r.returncode})")
         except Exception as e:
             isim["uyarilar"].append(f"ASS üretim istisnası: {e!r}")
+
+
+def _run_klasoru(cikti_k, video, is_id):
+    """Her UI işi için önceki çıktılara dokunmayan yeni bir klasör açar."""
+    kok = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", video.stem).rstrip(" .")
+    kok = (kok[:80] or "video")
+    # "video-" öneki Windows'un CON/PRN/NUL gibi aygıt adlarını önler.
+    grup = cikti_k / "runs" / ("video-" + kok)
+    zaman = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    for deneme in range(1000):
+        ek = "" if deneme == 0 else f"_{deneme}"
+        hedef = grup / f"{zaman}_{is_id}{ek}"
+        try:
+            hedef.mkdir(parents=True, exist_ok=False)
+            return hedef
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"benzersiz koşu klasörü açılamadı: {grup}")
 
 
 def vtt_bul(video, onek=""):
@@ -415,6 +758,7 @@ def vtt_kiyas(isim, srt_yol, video):
              "-o", str(rapor)],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=300, cwd=str(KLASOR),
+            env=_child_process_env(),
         )
         if r.returncode == 0 and rapor.exists():
             j = json.loads(rapor.read_text(encoding="utf-8"))
@@ -471,8 +815,24 @@ header .klasor{color:var(--soluk);font-size:12px;max-width:44%;
 #baglanti{margin-left:auto;font-size:12px;color:var(--soluk)}
 #baglanti.ok{color:var(--yesil)} #baglanti.kopuk{color:var(--kirmizi)}
 main{padding:14px 18px 40px;display:grid;gap:14px;
-  grid-template-columns:minmax(340px,460px) 1fr}
-@media (max-width:960px){main{grid-template-columns:1fr}}
+  grid-template-columns:minmax(0,min(440px,38vw)) minmax(0,1fr)}
+@media (max-width:960px){main{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:600px){
+  header{gap:8px;padding:10px 12px;flex-wrap:wrap}
+  header h1{font-size:15px}
+  header .klasor{order:4;flex-basis:100%;max-width:100%}
+  #baglanti{margin-left:auto}
+  main{padding:10px 10px 28px;gap:10px}
+  .kart{padding:12px}
+  .secenekler{grid-template-columns:minmax(0,1fr)}
+  .device-choices{grid-template-columns:minmax(0,1fr)}
+  .satir{align-items:stretch;flex-wrap:wrap}
+  .satir>*{min-width:0}
+  .satir button{flex:1 0 100%}
+  #kuyruk-alan table{min-width:700px}
+  #log{height:34vh;min-height:150px}
+  .editor-panel{width:96vw;max-height:92vh;padding:10px}
+}
 .kart{background:var(--panel);border:1px solid var(--cizgi);
   border-radius:10px;padding:14px}
 .kart h2{font-size:14px;margin:0 0 10px;color:var(--mavi);
@@ -493,6 +853,31 @@ button:disabled{opacity:.45;cursor:not-allowed}
 button:hover:not(:disabled){filter:brightness(1.12)}
 .not{font-size:12px;color:var(--soluk);border-left:3px solid var(--sari);
   padding:6px 10px;background:#20242f;border-radius:0 6px 6px 0;margin:10px 0}
+details>summary{cursor:pointer;color:var(--metin);font-size:13px;font-weight:600}
+.katla{border-top:1px solid var(--cizgi);margin-top:12px;padding-top:10px}
+.device-box{border:1px solid var(--cizgi);border-radius:8px;padding:10px 12px;margin:10px 0;background:#171b24}
+.device-title{font-size:12px;color:var(--soluk);margin-bottom:7px}
+.device-choices{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.device-choice{display:flex;align-items:flex-start;gap:8px;padding:9px 10px;border:1px solid var(--cizgi);border-radius:7px;background:#10131a;cursor:pointer}
+.device-choice input{width:auto;margin:3px 0 0;accent-color:var(--mavi)}
+.device-choice b{display:block;color:var(--metin);font-size:13px}
+.device-choice small{display:block;color:var(--soluk);font-size:11px;font-weight:400}
+.form-msg{min-height:18px;margin-top:8px;font-size:12px;color:var(--soluk)}
+.form-msg.ok{color:var(--yesil)} .form-msg.warn{color:var(--sari)} .form-msg.err{color:var(--kirmizi)}
+.bolum-baslik{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.bolum-baslik h2{margin:0}
+#kuyruk-alan{overflow-x:auto}
+#kuyruk-alan table{min-width:760px}
+tr.kuyruk-aktif{background:#1a2840}
+.mod-chip{display:inline-block;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-top:4px}
+.mod-gpu{background:#1b355d;color:#a9c9ff}.mod-cpu{background:#423017;color:#ffd18a}
+.empty-state{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px dashed var(--cizgi);border-radius:8px;padding:12px}
+.empty-state strong{color:var(--metin)}
+.empty-state span{color:var(--soluk);font-size:12px;flex:1}
+.log-summary{padding:2px 0 8px;list-style:none}
+.log-summary::-webkit-details-marker{display:none}
+.log-summary:after{content:"▾";float:right;color:var(--soluk)}
+#log-details:not([open]) .log-summary:after{content:"▸"}
 .secenekler{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px}
 .chk{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--metin);
   margin:8px 0 0}
@@ -584,6 +969,7 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
   <span class="klasor" id="sunucu-klasor" title="Sunucu klasörü (varsayılan çıktı klasörü)"></span>
   <button class="kirmizi" id="iptal-btn" onclick="iptalEt()" disabled>İptal (çalışanı öldür)</button>
   <button class="ikincil" id="pano-btn" onclick="panoAc()">Pano</button>
+  <a class="ikincil" href="/katki" style="text-decoration:none">İsteğe bağlı katkı</a>
   <span id="baglanti">bağlanıyor…</span>
 </header>
 
@@ -591,66 +977,91 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
   <section class="kart">
     <h2>Video ekleme</h2>
 
-    <label for="tara-dizin">Klasör tara (mp4 / mkv / avi)</label>
-    <div class="satir">
-      <input type="text" id="tara-dizin" placeholder="ör. C:\Videolarim">
-      <button class="ikincil" onclick="klasorTara()" style="flex:0 0 auto">Klasör Tara</button>
-    </div>
-    <div id="tarama-sonuc" class="tarama"></div>
-    <button class="ikincil" id="tarama-ekle" style="display:none;margin-top:8px"
-            onclick="secilenleriEkle()">Seçilenleri yol listesine ekle</button>
+    <details class="katla">
+      <summary>Klasörden video seç</summary>
+      <label for="tara-dizin">Video klasörü tara (mp4 / mkv / avi)</label>
+      <div class="satir">
+        <input type="text" id="tara-dizin" placeholder="ör. C:\Videos">
+        <button class="ikincil" data-picker-button onclick="windowsSecim('klasor')">Windows’tan klasör seç</button>
+        <button class="ikincil" onclick="klasorTara()">Klasör Tara</button>
+      </div>
+      <div id="tarama-sonuc" class="tarama"></div>
+      <button class="ikincil" id="tarama-ekle" style="display:none;margin-top:8px"
+              onclick="secilenleriEkle()">Seçilenleri yol listesine ekle</button>
+    </details>
 
     <label for="yollar">Video yolları (her satıra bir tane yapıştır)</label>
-    <textarea id="yollar" placeholder="C:\Videolarim\1. Bolum.mp4&#10;C:\Videolarim\2. Bolum.mp4"></textarea>
+    <button class="ikincil" data-picker-button onclick="windowsSecim('dosya')">Windows’tan videoları seç (çoklu)</button>
+    <textarea id="yollar" placeholder="C:\Videos\episode-01.mp4&#10;C:\Videos\episode-02.mp4"></textarea>
 
-    <div class="not">Sürükle-bırak yerine: bat'ler duruyor. Tarayıcılar güvenlik
-    nedeniyle dosyanın tam yolunu JavaScript'e vermez (yalnız dosya içeriğini
-    verir), bu yüzden burada yol yapıştırma + klasör tarama kullanılır.
-    Klasik yöntem (bat'lere çift tık) aynen çalışmaya devam eder.</div>
+    <div class="not">Video yollarını satır satır yapıştırın. Klasör seçici isteğe bağlıdır;
+    klasik .bat başlatıcıları da kullanılabilir.</div>
 
-    <h2 style="margin-top:14px">Seçenekler</h2>
-    <div class="secenekler">
-      <label class="chk"><input type="checkbox" id="opt-ust"> Üst yazılar da çıkarılsın (--ust-bant)</label>
-      <label class="chk"><input type="checkbox" id="opt-ass"> ASS üret (srt2ass)</label>
-      <div>
-        <label for="opt-dil">Dil (--lang)</label>
-        <input type="text" id="opt-dil" value="tr,en">
+    <fieldset class="device-box">
+      <legend class="device-title">OCR modu</legend>
+      <div class="device-choices">
+        <label class="device-choice"><input type="radio" name="ocr-mod" id="opt-gpu" checked>
+          <span><b>GPU · varsayılan</b><small>Uygun CUDA varsa GPU kullanılır.</small></span>
+        </label>
+        <label class="device-choice"><input type="radio" name="ocr-mod" id="opt-cpu">
+          <span><b>CPU · açık seçim</b><small>Seçilirse araca --cpu gönderilir; daha yavaş olabilir.</small></span>
+        </label>
       </div>
-      <div>
-        <label for="opt-qa">QA montaj sayısı</label>
-        <input type="number" id="opt-qa" value="4" min="0" max="12">
-      </div>
-      <div>
-        <label for="opt-limit">Test modu — ilk N sn (0 = tüm video)</label>
-        <input type="number" id="opt-limit" value="0" min="0" step="30">
-      </div>
-      <div>
-        <label for="opt-onek">Çıktı öneki (opsiyonel, ör. _ui-)</label>
-        <input type="text" id="opt-onek" value="">
-      </div>
-      <div style="grid-column:1/-1">
-        <label for="opt-cikti">Çıktı klasörü</label>
-        <input type="text" id="opt-cikti" placeholder="sunucu klasörü">
-      </div>
-    </div>
+    </fieldset>
 
-    <button style="margin-top:12px;width:100%" onclick="kuyrugaEkle()"
-            id="ekle-btn">Kuyruğa Ekle</button>
+    <details class="katla">
+      <summary>Gelişmiş ayarlar</summary>
+      <div class="secenekler">
+        <label class="chk"><input type="checkbox" id="opt-ust"> Üst yazıları da çıkar (--ust-bant)</label>
+        <label class="chk"><input type="checkbox" id="opt-ass"> ASS üret (srt2ass)</label>
+        <div>
+          <label for="opt-dil">Dil (--lang)</label>
+          <input type="text" id="opt-dil" value="tr,en">
+        </div>
+        <div>
+          <label for="opt-qa">QA montaj sayısı</label>
+          <input type="number" id="opt-qa" value="4" min="0" max="12">
+        </div>
+        <label class="chk" style="grid-column:1/-1"><input type="checkbox" id="opt-review-pack">
+          Yerel AI inceleme paketi oluştur (final SRT + cue başına tek altyazı kırpımı; otomatik paylaşım yok)</label>
+        <div>
+          <label for="opt-limit">Test modu — ilk N sn (0 = tüm video)</label>
+          <input type="number" id="opt-limit" value="0" min="0" step="30">
+        </div>
+        <div>
+          <label for="opt-onek">Çıktı öneki (opsiyonel, ör. _ui-)</label>
+          <input type="text" id="opt-onek" value="">
+        </div>
+        <div style="grid-column:1/-1">
+          <label for="opt-cikti">Çıktı klasörü</label>
+          <input type="text" id="opt-cikti" placeholder="sunucu klasörü">
+        </div>
+      </div>
+    </details>
+
+    <div id="ekle-mesaj" class="form-msg" role="status" aria-live="polite"></div>
+    <button style="margin-top:4px;width:100%" onclick="kuyrugaEkle()"
+            id="ekle-btn">Videoları kuyruğa ekle</button>
   </section>
 
   <section class="kart">
-    <h2>Kuyruk (sıralı çalışır — bir iş bitmeden diğeri başlamaz)</h2>
-    <div id="kuyruk-alan"><div class="bos">Kuyruk boş. Soldan video ekleyin.</div></div>
+    <div class="bolum-baslik">
+      <h2>Kuyruk</h2>
+      <span id="kuyruk-ozet" class="kucuk" aria-live="polite">0 iş</span>
+    </div>
+    <div id="kuyruk-alan"><div class="empty-state"><strong>Kuyruk boş</strong><span>Video yollarını ekleyince işler sırayla burada görünür.</span></div></div>
   </section>
 
   <section class="kart" style="grid-column:1/-1">
     <h2>Sonuçlar</h2>
-    <div id="sonuc-alan"><div class="bos">Henüz biten iş yok.</div></div>
+    <div id="sonuc-alan"><div class="empty-state"><strong>Henüz sonuç yok</strong><span>Tamamlanan ve hata alan işler burada görünür.</span></div></div>
   </section>
 
   <section class="kart" style="grid-column:1/-1">
-    <h2>Canlı log (son 200 satır)</h2>
-    <div id="log"></div>
+    <details id="log-details" open>
+      <summary class="log-summary">Canlı log <span class="kucuk">son 200 satır · daraltılabilir</span></summary>
+      <div id="log"></div>
+    </details>
   </section>
 
   <section class="kart" id="pano-kart" style="grid-column:1/-1;display:none">
@@ -706,6 +1117,7 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
 const $ = id => document.getElementById(id);
 let SON_N = 0;
 let IS_ADLARI = {};
+let pickerInFlight = false;
 
 function escapeHtml(s){
   return String(s ?? "").replace(/[&<>"']/g, c =>
@@ -729,27 +1141,101 @@ function seceneklerOku(){
     ass: $("opt-ass").checked,
     dil: $("opt-dil").value.trim() || "tr,en",
     qa_sayi: parseInt($("opt-qa").value || "4", 10) || 0,
+    review_pack: $("opt-review-pack").checked,
     cikti_klasor: $("opt-cikti").value.trim(),
     limit_saniye: parseFloat($("opt-limit").value || "0") || 0,
     onek: $("opt-onek").value.trim(),
+    cpu: $("opt-cpu").checked,
   };
+}
+
+function ekleMesaji(metin, tur=""){
+  const el = $("ekle-mesaj");
+  el.textContent = metin;
+  el.className = "form-msg" + (tur ? " " + tur : "");
 }
 
 async function kuyrugaEkle(){
   const yollar = $("yollar").value.split(/\r?\n/)
     .map(s => s.trim().replace(/^"|"$/g, "")).filter(Boolean);
-  if (!yollar.length){ alert("Önce video yolu yapıştırın (satır başına bir tane)."); return; }
-  const btn = $("ekle-btn"); btn.disabled = true;
+  if (!yollar.length){
+    ekleMesaji("Önce video yolu ekleyin (satır başına bir tane).", "warn");
+    $("yollar").focus();
+    return;
+  }
+  const btn = $("ekle-btn"); btn.disabled = true; btn.textContent = "Ekleniyor…";
   try{
-    const j = await api("/api/ekle", Object.assign({yollar}, seceneklerOku()));
-    let m = j.eklendi.length + " video kuyruğa eklendi.";
-    if (j.yinelenen.length) m += "\nZaten kuyrukta: " + j.yinelenen.join(", ");
-    if (j.hatali.length) m += "\nGeçersiz: " + j.hatali.map(h => h.yol + " (" + h.neden + ")").join(", ");
-    alert(m);
-    if (j.eklendi.length) $("yollar").value = "";
+    const sec = seceneklerOku(), eklendi = [], hatali = [], yinelenen = [];
+    let gonderilmeyen = [], hata = "";
+    for (let bas = 0; bas < yollar.length; bas += 100){
+      const parca = yollar.slice(bas, bas + 100);
+      try{
+        const j = await api("/api/ekle", Object.assign({yollar:parca}, sec));
+        eklendi.push(...j.eklendi); hatali.push(...j.hatali); yinelenen.push(...j.yinelenen);
+      }catch(e){ hata = e.message; gonderilmeyen = yollar.slice(bas); break; }
+    }
+    const kalan = hatali.map(h => h.yol).concat(gonderilmeyen);
+    $("yollar").value = kalan.join("\n");
+    let m = eklendi.length + " video kuyruğa eklendi.";
+    if (yinelenen.length) m += " Zaten kuyrukta: " + yinelenen.length;
+    if (hatali.length) m += " Geçersiz: " + hatali.slice(0, 5).map(h => h.yol + " (" + h.neden + ")").join(", ") +
+      (hatali.length > 5 ? " … (" + hatali.length + " toplam; yollar kutuda bırakıldı)." : " (yollar kutuda bırakıldı)." );
+    if (gonderilmeyen.length) m += " Kuyruğa girmeyen " + gonderilmeyen.length + " video kaldı: " + hata;
+    ekleMesaji(m, hatali.length || gonderilmeyen.length ? "warn" : "ok");
     poll();
-  }catch(e){ alert("Ekleme hatası: " + e.message); }
-  btn.disabled = false;
+  }catch(e){ ekleMesaji("Ekleme hatası: " + e.message, "err"); }
+  finally{ btn.disabled = false; btn.textContent = "Videoları kuyruğa ekle"; }
+}
+
+async function windowsSecim(tur){
+  if (pickerInFlight) return;
+  pickerInFlight = true;
+  const pickerButtons = [...document.querySelectorAll("[data-picker-button]")];
+  const oldLabels = pickerButtons.map(b => b.textContent);
+  pickerButtons.forEach(b => { b.disabled = true; b.textContent = "Windows seçicisi açılıyor…"; });
+  ekleMesaji("Windows seçicisi başlatılıyor…", "");
+  let slowHint = setTimeout(() => {
+    ekleMesaji("Seçici hâlâ hazırlanıyor. Windows penceresi başka bir pencerenin arkasında görünüyorsa görev çubuğundan öne alın.", "warn");
+  }, 1800);
+  try{
+    const started = await api("/api/secim", {tur});
+    if (!started.job_id) throw new Error("Seçici işi başlatılamadı.");
+    let j;
+    while (true){
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const state = await api("/api/secim/" + encodeURIComponent(started.job_id));
+      if (state.status === "done"){ j = state.result; break; }
+      if (["error", "timeout", "cancelled"].includes(state.status))
+        throw new Error(state.hata || "Windows seçicisi tamamlanamadı.");
+      const statusText = state.status === "opening"
+        ? "Windows seçicisi açılıyor; öne gelmezse görev çubuğundan öne alın."
+        : "Windows seçicisi hazırlanıyor…";
+      ekleMesaji(statusText, "");
+    }
+    if (tur === "klasor"){
+      if (!j.dizin){ ekleMesaji("Klasör seçimi iptal edildi.", ""); return; }
+      $("tara-dizin").value = j.dizin;
+      await klasorTara();
+    }else if (j.yollar && j.yollar.length){
+      const mevcut = $("yollar").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const anahtar = new Set(mevcut.map(s => s.toLocaleLowerCase()));
+      for (const yol of j.yollar){
+        if (!anahtar.has(yol.toLocaleLowerCase())) { mevcut.push(yol); anahtar.add(yol.toLocaleLowerCase()); }
+      }
+      $("yollar").value = mevcut.join("\n");
+      ekleMesaji(j.yollar.length + " dosya seçildi; eklemeden önce listeyi gözden geçirin.", "ok");
+    }else ekleMesaji("Dosya seçimi iptal edildi.", "");
+  }catch(e){
+    const detail = e instanceof TypeError && /fetch/i.test(e.message)
+      ? "UI sunucusuyla bağlantı kesildi. Başlatıcı penceresini yeniden açıp tekrar deneyin."
+      : e.message;
+    ekleMesaji("Dosya/klasör seçimi başarısız: " + detail, "err");
+  }
+  finally{
+    clearTimeout(slowHint);
+    pickerButtons.forEach((b, i) => { b.disabled = false; b.textContent = oldLabels[i]; });
+    pickerInFlight = false;
+  }
 }
 
 async function klasorTara(){
@@ -799,25 +1285,35 @@ function durumEtiketi(d){
           hata:"hata", iptal:"iptal"}[d] || d;
 }
 
-function kuyrukCiz(kuyruk){
+function kuyrukCiz(kuyruk, durum){
   IS_ADLARI = {};
   kuyruk.forEach(i => IS_ADLARI[i.id] = i.ad);
   const alan = $("kuyruk-alan");
+  const aktif = durum.aktif ? 1 : 0;
+  const bekleyen = durum.isler_bekleyen;
+  $("kuyruk-ozet").textContent = (aktif ? "1 çalışıyor · " : "") + bekleyen + " bekliyor";
+  $("kuyruk-ozet").textContent += " · gösterilen " + durum.kuyruk_gosterilen +
+    " / toplam kayıt " + durum.is_kaydi_toplam;
   if (!kuyruk.length){
-    alan.innerHTML = '<div class="bos">Kuyruk boş. Soldan video ekleyin.</div>';
+    alan.innerHTML = '<div class="empty-state"><strong>Kuyruk boş</strong>' +
+      '<span>Video yollarını ekleyince işler sırayla burada görünür.</span>' +
+      '<button class="ikincil" onclick="$(\'yollar\').focus()">Video ekle</button></div>';
     return;
   }
-  let h = '<table><tr><th>#</th><th>Dosya</th><th>Durum</th><th>İlerleme</th>' +
+  let h = '<table><tr><th>#</th><th>Dosya / mod</th><th>Durum</th><th>İlerleme</th>' +
           '<th>Algılama / uyarılar</th></tr>';
   kuyruk.forEach((i, sira) => {
+    const enqueueSeq = Number.isInteger(i.enqueue_seq) ? i.enqueue_seq : sira + 1;
     const barText = i.durum === "çalışıyor" || i.durum === "bitti"
       ? "%" + i.yuzde + " · " + i.seg_a + "/" + i.seg_b + " seg" +
         (i.kalan_sn !== null && i.durum === "çalışıyor" ? " · ~" + i.kalan_sn + " sn kaldı" : "")
       : "";
     const uyarilar = (i.uyarilar || []).map(u =>
       '<div class="uyari">' + escapeHtml(u) + '</div>').join("");
-    h += "<tr><td>" + (sira + 1) + "</td>" +
+    h += '<tr class="' + (i.durum === "çalışıyor" ? "kuyruk-aktif" : "") + '"><td>' + enqueueSeq + "</td>" +
       '<td style="max-width:220px;word-break:break-all">' + escapeHtml(i.ad) +
+      '<div class="mod-chip ' + (i.sec.cpu ? "mod-cpu" : "mod-gpu") + '">' +
+      (i.sec.cpu ? "CPU · --cpu" : "GPU · varsayılan") + "</div>" +
       (i.sec.limit_saniye > 0 ? ' <span class="kucuk">(ilk ' + i.sec.limit_saniye + ' sn)</span>' : "") +
       (i.sec.onek ? ' <span class="kucuk">[' + escapeHtml(i.sec.onek) + ']</span>' : "") +
       "</td>" +
@@ -861,7 +1357,8 @@ function sonucCiz(kuyruk){
   const hatalilar = kuyruk.filter(i => i.durum === "hata" || i.durum === "iptal")
                           .slice(-3).reverse();
   if (!bittiler.length && !hatalilar.length){
-    alan.innerHTML = '<div class="bos">Henüz biten iş yok.</div>';
+    alan.innerHTML = '<div class="empty-state"><strong>Henüz sonuç yok</strong>' +
+      '<span>Tamamlanan ve hata alan işler burada görünür.</span></div>';
     return;
   }
   let h = "";
@@ -870,6 +1367,8 @@ function sonucCiz(kuyruk){
     const cip = (etiket, deger) => deger === undefined || deger === null ? "" :
       '<span class="cip">' + etiket + ' <b>' + deger + "</b></span>";
     h += '<div class="sonuc"><div class="baslik"><span class="durum d-bitti">bitti</span>' +
+      '<span class="mod-chip ' + (i.sec.cpu ? "mod-cpu" : "mod-gpu") + '">' +
+      (i.sec.cpu ? "CPU · --cpu" : "GPU · varsayılan") + "</span>" +
       "<b>" + escapeHtml(i.ad) + "</b>" +
       (i.sure_sn !== null ? '<span class="kucuk">' + i.sure_sn + " sn</span>" : "") +
       (st.low_conf > 0 ? '<button style="margin-left:auto;padding:4px 10px" ' +
@@ -883,6 +1382,11 @@ function sonucCiz(kuyruk){
       'onclick="klasorAc(' + JSON.stringify(i.srt).replace(/"/g, "&quot;") +
       ')">Klasörü Aç</button></div>' +
       '<div class="yol">SRT: ' + escapeHtml(i.srt) + "</div>" +
+      (i.review_pack ? '<div class="yol">Yerel AI inceleme paketi: ' +
+        escapeHtml(i.review_pack) +
+        '<button class="ikincil" style="margin-left:8px;padding:3px 8px" ' +
+        'onclick="klasorAc(' + JSON.stringify(i.review_pack).replace(/"/g, "&quot;") +
+        ')">Paketi aç</button></div>' : "") +
       (i.ass ? '<div class="yol">ASS: ' + escapeHtml(i.ass) + "</div>" : "") +
       '<div class="cipler">' +
       cip("blok", st.blocks) + cip("düşük güven", st.low_conf) +
@@ -910,6 +1414,10 @@ function sonucCiz(kuyruk){
 function logCiz(log){
   const kutu = $("log");
   const sondayiz = kutu.scrollTop + kutu.clientHeight >= kutu.scrollHeight - 70;
+  if (!log.length){
+    kutu.innerHTML = '<div class="bos">Bir iş başlayınca canlı çıktı burada görünür.</div>';
+    return;
+  }
   kutu.innerHTML = log.map(l =>
     '<div class="lg"><span class="lg-t">' + l.t + '</span>' +
     (l.is && IS_ADLARI[l.is] ? '<span class="lg-is">[' + escapeHtml(IS_ADLARI[l.is]) + ']</span>' : "") +
@@ -1109,18 +1617,26 @@ function panoCiz(j){
                              : '<span class="kucuk">—</span>') + "</td>" +
       "<td>" + escapeHtml(s.tarih || "—") + "</td>" +
       "<td>" + (s.bloklar_var
-        ? '<a href="#" onclick="inceleAc(' + JSON.stringify(s.ad)
-          .replace(/"/g, "&quot;") + ');return false">İncele</a>' : "") +
+        ? '<a href="#" class="pano-incele" data-stats="' +
+          escapeHtml(s.stats_rel) + '" data-ad="' + escapeHtml(s.ad) +
+          '">İncele</a>' : "") +
       "</td></tr>";
   });
-  $("pano-alan").innerHTML = h + "</table>" +
+  const pano = $("pano-alan");
+  pano.innerHTML = h + "</table>" +
     '<div class="kucuk" style="margin-top:6px">low-conf% > %' +
     j.esik + " olanlar üstte ve kırmızı işaretlidir.</div>";
+  pano.querySelectorAll("a.pano-incele").forEach(link => {
+    link.addEventListener("click", ev => {
+      ev.preventDefault();
+      inceleAc(link.dataset.stats, link.dataset.ad);
+    });
+  });
 }
 
-async function inceleAc(ad){
+async function inceleAc(statsRel, ad){
   try{
-    const j = await api("/api/pano/incele?ad=" + encodeURIComponent(ad) +
+    const j = await api("/api/pano/incele?stats=" + encodeURIComponent(statsRel) +
                         "&klasor=" + encodeURIComponent(PANO_KLASOR));
     $("incele-ad").textContent = ad + " · " + j.bloklar.length + " blok";
     $("incele-durum").textContent = "eşik conf<" + (j.conf_thr ?? 0.75) +
@@ -1162,7 +1678,7 @@ async function poll(){
       $("tara-dizin").value = j.sunucu.klasor;
     $("sunucu-klasor").textContent = j.sunucu ? j.sunucu.klasor : "";
     $("iptal-btn").disabled = !j.pid;
-    kuyrukCiz(j.kuyruk);
+    kuyrukCiz(j.kuyruk, j);
     sonucCiz(j.kuyruk);
     logCiz(j.log);
   }catch(e){
@@ -1184,12 +1700,488 @@ def kok():
     return Response(HTML, mimetype="text/html")
 
 
+@app.get("/ocr-inceleme")
+def ocr_inceleme_sayfasi():
+    if ocr_review is None:
+        return Response("Yerel OCR inceleme modülü yüklenemedi.", status=503)
+    return Response(ocr_review.REVIEW_HTML, mimetype="text/html")
+
+
+@app.get("/katki")
+def katki_sayfasi():
+    if contribution_client is None:
+        return Response("Katkı modülü kullanılamıyor.", status=503)
+    status = contribution_client.config_status()
+    enabled = "true" if status["enabled"] else "false"
+    retention = (str(status["retention_days"]) + " gün") if status["retention_days"] else "yapılandırılmamış"
+    destination = (json.dumps(status.get("destination_host"), ensure_ascii=False)
+                   .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+                   .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+    html = r'''<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>İsteğe bağlı ölçüm katkısı</title><style>
+body{max-width:860px;margin:32px auto;padding:0 16px;background:#12141a;color:#dde3f0;font:15px/1.55 "Segoe UI",sans-serif}a,button{color:#fff;background:#315fae;border:0;border-radius:6px;padding:9px 13px;cursor:pointer}input,select,pre{background:#0e1016;color:#dde3f0;border:1px solid #394158;border-radius:6px;padding:10px}pre{white-space:pre-wrap;overflow-wrap:anywhere}.muted{color:#9aa6bd}.warn{color:#efbd66}button:disabled{opacity:.45;cursor:not-allowed}
+ul.contribution-list{padding-left:22px}ul.contribution-list li{margin:10px 0}ul.contribution-list button{margin-left:8px}
+</style><h1>İsteğe bağlı ölçüm katkısı</h1><p>Bu özellik varsayılan olarak kapalıdır. Önizleme oluşturmak ağ isteği göndermez. Yalnızca onaydan sonra, gösterilen sayısal ölçümler yapılandırılmış HTTPS hedefine gönderilir. Video, kırpım, SRT/VTT metni, dosya adı/yolu ve kullanıcı adı gönderilmez. GPT/DeepSeek API’si kullanılmaz.</p>
+<p id="config" class="warn"></p><label for="job">Tamamlanan yerel OCR işi</label><select id="job"></select> <button id="preview">Önizlemeyi oluştur</button>
+<h2>Gönderilecek alanların önizlemesi</h2><pre id="payload">Henüz önizleme yok.</pre><p class="muted">Sunucu, katkı satırında bearer token'ın özetini tutar; aynı token ile yapılan gönderimler bu özet üzerinden ilişkilendirilebilir. Özet token başına hız sınırı ve aynı token sahibinin silme yetkisi için kullanılır. Katkı kayıtları token'a göre değil alım yaşına göre, yukarıda belirtilen süre sonunda silinir. Ham token saklanmaz. Son 100 gönderimin silme kimliği bu tarayıcıda yerel olarak tutulur; payload ve token localStorage'a yazılmaz.</p>
+<label><input type="checkbox" id="consent"> Önizlemedeki sayısal ölçümlerin yukarıdaki HTTPS hedefine, belirtilen en fazla __RETENTION__ süreyle gönderilmesini ve aynı token ile yapılan gönderimlerin ilişkilendirilebilir olmasını bu gönderim için onaylıyorum.</label><p><button id="send" disabled>Onayla ve gönder</button> <a href="/">Arayüze dön</a></p><p id="status" role="status"></p>
+<h2>Gönderimlerim ve silme</h2><p class="muted">Silme için aynı HTTPS hedefi ve token yapılandırılmış olmalı. Sunucu 404 verirse kayıt silinmez: bu, saklama süresinin dolması veya token uyuşmazlığı anlamına gelebilir. Eski bir kimliği yalnız tarayıcı listesinden kaldırmak için ayrı düğmeyi kullanın. Saklama süresi dolunca sunucu kaydı otomatik temizlenir.</p><ul id="retractions" class="contribution-list"></ul>
+<script>const configured=__ENABLED__,destinationHost=__DESTINATION__;const STORE_KEY='hardsub2srt.contribution.retractions.v1',MAX_LOCAL_RECORDS=100;const job=document.querySelector('#job'),pre=document.querySelector('#payload'),send=document.querySelector('#send'),consent=document.querySelector('#consent'),status=document.querySelector('#status'),retractions=document.querySelector('#retractions');let current=null;
+document.querySelector('#config').textContent=configured?'HTTPS hedefi: https://'+destinationHost+'. Token hazır. Sunucunun saklama süresi: '+__RETENTION__+'. Gönderim yalnız bu sayfadaki açık onaydan sonra yapılır.':'Gönderim kapalı: HTTPS URL, token ve H2S_CONTRIB_RETENTION_DAYS birlikte ayarlanmalı.';
+async function api(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(!r.ok)throw Error(j.hata||j.error||('HTTP '+r.status));return j}
+function readRetractions(){try{const value=JSON.parse(localStorage.getItem(STORE_KEY)||'[]');if(!Array.isArray(value))return[];return value.filter(x=>x&&typeof x==='object'&&typeof x.submission_id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(x.submission_id)&&typeof x.destination_host==='string'&&typeof x.created_at==='string'&&['pending','submitted'].includes(x.state)).slice(-MAX_LOCAL_RECORDS)}catch(_){return[]}}
+function writeRetractions(records){try{localStorage.setItem(STORE_KEY,JSON.stringify(records.slice(-MAX_LOCAL_RECORDS)));return true}catch(_){return false}}
+function rememberSubmission(submissionId,state){const records=readRetractions().filter(x=>x.submission_id!==submissionId);records.push({submission_id:submissionId,destination_host:destinationHost,created_at:new Date().toISOString(),state});if(!writeRetractions(records))return false;renderRetractions();return true}
+function removeRetraction(submissionId){return writeRetractions(readRetractions().filter(x=>x.submission_id!==submissionId))}
+function renderRetractions(){retractions.replaceChildren();for(const record of readRetractions().reverse()){const li=document.createElement('li'),label=document.createElement('span'),button=document.createElement('button'),localButton=document.createElement('button');label.textContent=record.created_at+' · '+record.destination_host+' · '+(record.state==='submitted'?'gönderildi':'gönderim sonucu belirsiz');button.textContent='Sunucudan sil';button.disabled=!configured||record.destination_host!==destinationHost;button.onclick=async()=>{button.disabled=true;status.textContent='Silme isteği gönderiliyor…';try{const result=await api('/api/katki/sil',{submission_id:record.submission_id});if(result.status==='deleted'){const localCleared=removeRetraction(record.submission_id);renderRetractions();status.textContent=localCleared?'Katkı sunucudan silindi.':'Sunucu kaydı silindi ancak yerel kimlik listeden kaldırılamadı; tarayıcı depolaması yazılamadı.'}else if(result.status==='not_found'){button.disabled=false;status.textContent='Sunucu kaydı bulunamadı. Saklama süresi dolmuş veya token farklı olabilir; yerel kimlik korundu. Doğru token/hedefle yeniden deneyin ya da ayrı yerel kaldırma düğmesini kullanın.'}else throw Error('Silme sonucu doğrulanamadı.')}catch(e){button.disabled=false;status.textContent='Silme başarısız; yerel kimlik korundu. '+e.message}};localButton.textContent='Yalnız listeden kaldır';localButton.onclick=()=>{if(removeRetraction(record.submission_id)){renderRetractions();status.textContent='Kimlik yalnız bu tarayıcının listesinden kaldırıldı; sunucuya istek gönderilmedi.'}else status.textContent='Yerel liste güncellenemedi; kimlik korundu.'};if(record.destination_host!==destinationHost){const note=document.createElement('small');note.textContent=' · Silmek için aynı HTTPS hedefini yapılandırın';li.append(label,note,button,localButton)}else li.append(label,button,localButton);retractions.append(li)}if(!retractions.children.length){const li=document.createElement('li');li.textContent='Henüz saklanan gönderim kimliği yok.';retractions.append(li)}}
+fetch('/api/katki/isler').then(r=>r.json()).then(j=>{for(const x of j.jobs){const o=document.createElement('option');o.value=x.id;o.textContent=x.id;job.append(o)}if(!j.jobs.length)status.textContent='Bu oturumda tamamlanmış iş yok.'}).catch(()=>status.textContent='Yerel işler okunamadı.');
+document.querySelector('#preview').onclick=async()=>{current=null;consent.checked=false;send.disabled=true;status.textContent='';try{const j=await api('/api/katki/preview',{job_id:job.value});current=j.submission_id;pre.textContent=JSON.stringify(j.payload,null,2);status.textContent='Önizleme hazır. Henüz ağa hiçbir veri gönderilmedi.'}catch(e){pre.textContent='Önizleme oluşturulamadı.';status.textContent=e.message}};
+consent.onchange=()=>send.disabled=!(configured&&current&&consent.checked);
+send.onclick=async()=>{if(!configured||!current||!consent.checked)return;send.disabled=true;if(!rememberSubmission(current,'pending')){status.textContent='Yerel silme kimliği kaydedilemedi; gönderim yapılmadı.';send.disabled=false;return}status.textContent='Gönderiliyor…';try{const result=await api('/api/katki/gonder',{submission_id:current,consent:true});if(!rememberSubmission(result.submission_id,'submitted'))throw Error('Yanıt alındı, yerel kimlik güncellenemedi.');status.textContent='Gönderildi: '+result.submission_id+' ('+result.status+'). Silme kimliği kaydedildi.';current=null;consent.checked=false}catch(e){status.textContent='Gönderim sonucu belirsiz olabilir. Aynı kimlikle yeniden deneyebilir veya listedeki silme işlemini kullanabilirsiniz. '+e.message;send.disabled=false}};
+renderRetractions();
+</script></html>'''.replace("__ENABLED__", enabled)
+    html = html.replace("__RETENTION__", json.dumps(retention, ensure_ascii=False))
+    html = html.replace("__DESTINATION__", destination)
+    return Response(html, mimetype="text/html")
+
+
+@app.get("/api/katki/isler")
+def api_katki_isler():
+    with KILIT:
+        jobs = [{"id": x["id"]} for x in ISLER if x.get("durum") == "bitti" and isinstance(x.get("stats"), dict)]
+    return jsonify({"jobs": jobs[-100:]})
+
+
+@app.post("/api/katki/preview")
+def api_katki_preview():
+    if contribution_client is None:
+        return jsonify({"hata": "Katkı modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    body = request.get_json(silent=True) or {}
+    if set(body) != {"job_id"} or not isinstance(body.get("job_id"), str):
+        return jsonify({"hata": "Önizleme için yalnız iş kimliği gerekli"}), 400
+    job_id = body.get("job_id")
+    with KILIT:
+        job = next((is_snapshot(x) for x in ISLER if x["id"] == job_id and x.get("durum") == "bitti"), None)
+    if not job or not isinstance(job.get("stats"), dict):
+        return jsonify({"hata": "Tamamlanmış koşum istatistiği bulunamadı"}), 404
+    try:
+        payload = contribution_client.validate_payload(contribution_client.build_payload(job["stats"], job.get("sure_sn") or 0))
+    except Exception as exc:
+        return jsonify({"hata": str(exc)}), 422
+    now = time.time()
+    with KILIT:
+        if len(KATKI_ONIZLEMELERI) > 100:
+            KATKI_ONIZLEMELERI.clear()
+        KATKI_ONIZLEMELERI[payload["submission_id"]] = {"payload": payload, "expires": now + 600, "used": False}
+    return jsonify({"submission_id": payload["submission_id"], "payload": payload})
+
+
+@app.post("/api/katki/gonder")
+def api_katki_gonder():
+    if contribution_client is None:
+        return jsonify({"hata": "Katkı modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    body = request.get_json(silent=True) or {}
+    if set(body) != {"submission_id", "consent"} or body.get("consent") is not True:
+        return jsonify({"hata": "Bu gönderim için açık onay gerekli"}), 400
+    sid = body.get("submission_id")
+    with KILIT:
+        pending = KATKI_ONIZLEMELERI.get(sid)
+        if not pending or pending["expires"] < time.time() or pending["used"]:
+            return jsonify({"hata": "Önizleme bulunamadı veya süresi doldu; yeniden oluşturun"}), 409
+        pending["used"] = True
+    try:
+        result = contribution_client.send_payload(pending["payload"])
+        return jsonify(result)
+    except Exception as exc:
+        with KILIT:
+            pending["used"] = False
+        return jsonify({"hata": str(exc)}), 503
+
+
+@app.post("/api/katki/sil")
+def api_katki_sil():
+    if contribution_client is None:
+        return jsonify({"hata": "Katkı modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    body = request.get_json(silent=True) or {}
+    if set(body) != {"submission_id"} or not isinstance(body.get("submission_id"), str):
+        return jsonify({"hata": "Silme için yalnız gönderim kimliği gerekli"}), 400
+    try:
+        return jsonify(contribution_client.delete_submission(body["submission_id"]))
+    except Exception as exc:
+        return jsonify({"hata": str(exc)}), 503
+
+
+def _ocr_hata(exc):
+    if ocr_review is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("OCR review request failed")
+    return jsonify({"hata": "OCR inceleme işlemi tamamlanamadı; günlükte ayrıntı var"}), 500
+
+
+@app.post("/api/ocr-inceleme/ac")
+def api_ocr_inceleme_ac():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        review_id, pack = ocr_review.open_pack(v.get("path"))
+        pack["review_id"] = review_id
+        return jsonify(pack)
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.get("/api/ocr-inceleme/durum")
+def api_ocr_inceleme_durum():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    try:
+        return jsonify(ocr_review.pack_status(request.args.get("review_id", "")))
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.get("/api/ocr-inceleme/srt-lint")
+def api_ocr_inceleme_srt_lint():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    try:
+        return jsonify(ocr_review.srt_lint_report(request.args.get("review_id", "")))
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.get("/api/ocr-inceleme/<review_id>/crop/<cue_id>")
+def api_ocr_inceleme_crop(review_id, cue_id):
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    try:
+        path, mimetype = ocr_review.image_bytes_path(review_id, cue_id)
+        return send_file(path, mimetype=mimetype, conditional=True, max_age=0)
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.post("/api/ocr-inceleme/karar")
+def api_ocr_inceleme_karar():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        record = ocr_review.append_review(v.get("review_id", ""), v.get("cue_id", ""),
+                                          v.get("status", ""), v.get("correction", ""))
+        return jsonify({"ok": True, "event_id": record["event_id"]})
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.post("/api/ocr-inceleme/geri-al")
+def api_ocr_inceleme_geri_al():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        record = ocr_review.undo_review(v.get("review_id", ""), v.get("cue_id", ""))
+        return jsonify({"ok": True, "event_id": record["event_id"]})
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.post("/api/ocr-inceleme/disari-aktar")
+def api_ocr_inceleme_disari_aktar():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        path, count = ocr_review.export_dataset(v.get("review_id", ""))
+        return jsonify({"ok": True, "path": path.name, "count": count})
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+@app.post("/api/ocr-inceleme/metadata-sablonu")
+def api_ocr_inceleme_metadata_sablonu():
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    body = request.get_json(silent=True) or {}
+    if (not isinstance(body, dict) or set(body) != {"review_id", "dataset_name"} or
+            not isinstance(body.get("review_id"), str) or
+            not isinstance(body.get("dataset_name"), str)):
+        return jsonify({"hata": "review_id ve dataset_name gerekli"}), 400
+    try:
+        path = ocr_review.create_metadata_template(body["review_id"], body["dataset_name"])
+        pack = ocr_review.pack_for(body["review_id"])
+        return jsonify({"ok": True, "path": path.relative_to(pack["pack"]).as_posix()})
+    except Exception as exc:
+        return _ocr_hata(exc)
+
+
+def _translation_error(exc):
+    if translation_review is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("AI translation round-trip request failed")
+    return jsonify({"hata": "AI inceleme işlemi tamamlanamadı; günlükte ayrıntı var"}), 500
+
+
+def _ai_ocr_error(exc):
+    if ai_ocr_review is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("Manual AI OCR visual review request failed")
+    return jsonify({"hata": "AI OCR inceleme işlemi tamamlanamadı"}), 500
+
+
+@app.post("/api/ai-ocr-gorsel/paket")
+def api_ai_ocr_gorsel_paket():
+    if ai_ocr_review is None or ocr_review is None:
+        return jsonify({"hata": "Manuel AI OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    value = request.get_json(silent=True) or {}
+    try:
+        path, filename, _count = ai_ocr_review.create_package(value.get("review_id", ""), value.get("cue_ids"))
+        return send_file(path, mimetype="application/zip", as_attachment=True,
+                         download_name=filename, max_age=0)
+    except Exception as exc:
+        return _ai_ocr_error(exc)
+
+
+@app.post("/api/ai-ocr-gorsel/yanit")
+def api_ai_ocr_gorsel_yanit():
+    if ai_ocr_review is None or ocr_review is None:
+        return jsonify({"hata": "Manuel AI OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    if request.content_length and request.content_length > ai_ocr_review.MAX_RESPONSE_BYTES:
+        return jsonify({"hata": "AI OCR yanıtı 4 MiB sınırını aşıyor"}), 413
+    value = request.get_json(silent=True) or {}
+    try:
+        return jsonify(ai_ocr_review.import_response(value.get("review_id", ""), value.get("response")))
+    except Exception as exc:
+        return _ai_ocr_error(exc)
+
+
+@app.get("/api/ai-ocr-gorsel/durum")
+def api_ai_ocr_gorsel_durum():
+    if ai_ocr_review is None or ocr_review is None:
+        return jsonify({"hata": "Manuel AI OCR inceleme modülü kullanılamıyor"}), 503
+    try:
+        return jsonify(ai_ocr_review.status(request.args.get("review_id", "")))
+    except Exception as exc:
+        return _ai_ocr_error(exc)
+
+
+@app.post("/api/ai-ceviri/istek")
+def api_ai_ceviri_istek():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_review.create_request(
+            v.get("review_id", ""), v.get("drafts"),
+            v.get("source_language"), v.get("target_language"))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.post("/api/ai-ceviri/sohbet-paketi")
+def api_ai_ceviri_sohbet_paketi():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        path, filename, _count = translation_review.create_chat_export(
+            v.get("review_id", ""), v.get("drafts"),
+            v.get("source_language"), v.get("target_language"))
+        return send_file(path, mimetype="application/zip", as_attachment=True,
+                         download_name=filename, max_age=0)
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.get("/api/ai-ceviri/durum")
+def api_ai_ceviri_durum():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    try:
+        result = translation_review.proposal_status(request.args.get("review_id", ""))
+        result["review_id"] = request.args.get("review_id", "")
+        try:
+            result["translation_memory_sync"] = translation_review.sync_translation_memory(
+                request.args.get("review_id", ""))
+        except Exception as exc:
+            result["translation_memory_sync"] = {
+                "status": "pending",
+                "message": "Onay kararları kaydedildi; çeviri belleği görünümü henüz onarılamadı.",
+                "error_type": type(exc).__name__,
+            }
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.post("/api/ai-ceviri/bellek-yenile")
+def api_ai_ceviri_bellek_yenile():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        return jsonify(translation_review.sync_translation_memory(v.get("review_id", "")))
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.post("/api/ai-ceviri/yanit")
+def api_ai_ceviri_yanit():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    if request.content_length and request.content_length > translation_review.MAX_RESPONSE_BYTES + 4096:
+        return jsonify({"hata": "AI yanıtı 4 MiB sınırını aşıyor"}), 413
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_review.import_response(v.get("review_id", ""), v.get("response"))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+@app.post("/api/ai-ceviri/karar")
+def api_ai_ceviri_karar():
+    if translation_review is None or ocr_review is None:
+        return jsonify({"hata": "AI çeviri inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        record = translation_review.decide(
+            v.get("review_id", ""), v.get("proposal_id", ""),
+            v.get("decision", ""), v.get("translation"))
+        return jsonify({"ok": True, "event_id": record["event_id"],
+                        "translation_memory_sync": record.get("translation_memory_sync")})
+    except Exception as exc:
+        return _translation_error(exc)
+
+
+def _translation_memory_error(exc):
+    if translation_memory is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("Scoped translation memory request failed")
+    return jsonify({"hata": "Yerel çeviri belleği işlemi tamamlanamadı"}), 500
+
+
+@app.get("/api/ceviri-bellegi/durum")
+def api_ceviri_bellegi_durum():
+    if translation_memory is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    try:
+        result = translation_memory.status(request.args.get("project_key", ""),
+                    request.args.get("source_language", ""), request.args.get("target_language", ""))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
+
+
+@app.post("/api/ceviri-bellegi/ara")
+def api_ceviri_bellegi_ara():
+    if translation_memory is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_memory.suggest(v.get("review_id", ""), v.get("cue_id", ""),
+                    v.get("project_key", ""), v.get("source_language", ""),
+                    v.get("target_language", ""), v.get("source_text", ""), v.get("draft_translation", ""))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
+
+
+@app.post("/api/ceviri-bellegi/onaylilari-ekle")
+def api_ceviri_bellegi_onaylilari_ekle():
+    if translation_memory is None or translation_review is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_memory.add_approved(v.get("review_id", ""), v.get("project_key", ""),
+                    v.get("source_language", ""), v.get("target_language", ""), v.get("decision_event_ids"))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
+
+
+@app.post("/api/ceviri-bellegi/terim")
+def api_ceviri_bellegi_terim():
+    if translation_memory is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_memory.add_lexicon(v.get("project_key", ""), v.get("source_language", ""),
+                    v.get("target_language", ""), v.get("source_term", ""), v.get("target_term", ""))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
+
+
+@app.post("/api/ceviri-bellegi/geri-al")
+def api_ceviri_bellegi_geri_al():
+    if translation_memory is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri belleği modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    v = request.get_json(silent=True) or {}
+    try:
+        result = translation_memory.rollback(v.get("project_key", ""), v.get("source_language", ""),
+                    v.get("target_language", ""), v.get("event_id", ""))
+        return jsonify(result)
+    except Exception as exc:
+        return _translation_memory_error(exc)
+
+
 @app.get("/api/durum")
 def api_durum():
     with KILIT:
-        isler = [is_snapshot(i) for i in ISLER[-KUYRUK_YANIT:]]
+        aktif_raw = next((i for i in ISLER if i["durum"] == "çalışıyor"), None)
+        bekleyen = sum(1 for i in ISLER if i["durum"] == "bekliyor")
+        isler_raw = list(ISLER[-KUYRUK_YANIT:])
+        toplam = len(ISLER)
+        if aktif_raw and all(i["id"] != aktif_raw["id"] for i in isler_raw):
+            isler_raw.append(aktif_raw)
+        enqueue_order = {i["id"]: i.get("enqueue_seq", index + 1)
+                         for index, i in enumerate(ISLER)}
+        isler_raw.sort(key=lambda i: enqueue_order[i["id"]])
         log = list(LOG)[-LOG_YANIT:]
         pid = CALISAN.get("pid")
+        aktif = is_snapshot(aktif_raw) if aktif_raw else None
+        son_isler = [is_snapshot(i) for i in isler_raw]
     return jsonify({
         "sunucu": {
             "klasor": str(KLASOR),
@@ -1200,53 +2192,96 @@ def api_durum():
             "surum": "1.3",
         },
         "pid": pid,
-        "aktif": next((i for i in isler if i["durum"] == "çalışıyor"), None),
-        "isler_bekleyen": sum(1 for i in isler if i["durum"] == "bekliyor"),
-        "kuyruk": isler,
+        "aktif": aktif,
+        "isler_bekleyen": bekleyen,
+        "is_kaydi_toplam": toplam,
+        "kuyruk_gosterilen": len(son_isler),
+        "kuyruk": son_isler,
         "log": log,
     })
 
 
+@app.get("/api/is-gecmisi")
+def api_is_gecmisi():
+    """Return bounded lifecycle diagnostics; no media names or paths are stored."""
+    if JOB_HISTORY is None:
+        return jsonify({"etkin": False, "isler": [],
+                        "uyari": "Kalıcı iş tanılaması bu oturumda kullanılamıyor."})
+    try:
+        limit = request.args.get("limit", "20")
+        return jsonify({"etkin": True, "isler": JOB_HISTORY.recent(limit)})
+    except Exception:
+        # The endpoint is diagnostic only; malformed local state is fail-safe.
+        return jsonify({"etkin": False, "isler": [],
+                        "uyari": "İş geçmişi okunamadı; canlı kuyruk etkilenmedi."})
+
+
 @app.post("/api/ekle")
 def api_ekle():
+    global IS_SAYAC
     v = request.get_json(force=True, silent=True) or {}
     yollar = v.get("yollar")
     if yollar is None and v.get("yol"):
         yollar = [v["yol"]]
     if not isinstance(yollar, list) or not yollar:
         return jsonify({"hata": "yollar listesi gerekli (satır başına bir video yolu)"}), 400
+    if len(yollar) > MAX_BATCH:
+        return jsonify({"hata": f"Tek istekte en fazla {MAX_BATCH} video eklenebilir; seçilen: {len(yollar)}. Listeyi parçalara bölün."}), 413
 
     sec = {
         "ust_bant": bool(v.get("ust_bant")),
         "ass": bool(v.get("ass")),
+        "cpu": bool(v.get("cpu", False)),
+        "review_pack": bool(v.get("review_pack", False)),
         "dil": str(v.get("dil") or "tr,en"),
         "qa_sayi": int(v.get("qa_sayi", 4) or 0),
         "cikti_klasor": str(v.get("cikti_klasor") or KLASOR),
         "limit_saniye": float(v.get("limit_saniye") or 0),
         "onek": str(v.get("onek") or ""),
     }
+    if any(c in sec["onek"] for c in '<>:"/\\|?*\x00\r\n'):
+        return jsonify({"hata": "çıktı öneki dosya yolu ayıracı veya geçersiz karakter içeremez"}), 400
 
-    with KILIT:
-        kuyruktaki = {i["yol"] for i in ISLER if i["durum"] in ("bekliyor", "çalışıyor")}
-    eklendi, hatali, yinelenen = [], [], []
+    adaylar, hatali, yinelenen = [], [], []
+    bu_istek = set()
     for yol in yollar:
         yol = str(yol).strip().strip('"')
-        p = Path(yol)
+        p = Path(yol).expanduser()
         if not p.exists():
             hatali.append({"yol": yol, "neden": "dosya bulunamadı"})
+            continue
+        if not p.is_file():
+            hatali.append({"yol": yol, "neden": "dosya değil"})
             continue
         if p.suffix.lower() not in VIDEO_UZANTILARI:
             hatali.append({"yol": yol, "neden": f"uzantı desteklenmiyor ({p.suffix or 'yok'})"})
             continue
         p = p.resolve()
-        if str(p) in kuyruktaki:
+        anahtar = os.path.normcase(os.path.normpath(str(p)))
+        if anahtar in bu_istek:
             yinelenen.append(p.name)
             continue
-        kuyruktaki.add(str(p))
-        isim = is_olustur(p, sec)
-        with KILIT:
+        bu_istek.add(anahtar)
+        adaylar.append((p, anahtar))
+
+    eklendi = []
+    with KILIT:
+        kuyruktaki = {
+            os.path.normcase(os.path.normpath(str(Path(i["yol"]).resolve())))
+            for i in ISLER if i["durum"] in ("bekliyor", "çalışıyor")
+        }
+        yeni = [(p, key) for p, key in adaylar if key not in kuyruktaki]
+        yinelenen.extend(p.name for p, key in adaylar if key in kuyruktaki)
+        kuyruk_aktif = sum(1 for i in ISLER if i["durum"] in ("bekliyor", "çalışıyor"))
+        if kuyruk_aktif + len(yeni) > MAX_AKTIF_KUYRUK:
+            bos = max(0, MAX_AKTIF_KUYRUK - kuyruk_aktif)
+            return jsonify({"hata": f"Kuyruk sınırı {MAX_AKTIF_KUYRUK} iş. Şu an {kuyruk_aktif} aktif/bekleyen, bu istekte {len(yeni)} yeni ve {bos} boş yer var. Önce bekleyen işleri bitirin veya daha küçük grup ekleyin."}), 429
+        for p, _key in yeni:
+            IS_SAYAC += 1
+            isim = is_olustur(p, sec, f"is-{IS_SAYAC}", IS_SAYAC)
             ISLER.append(isim)
-        eklendi.append(isim["id"])
+            eklendi.append(isim["id"])
+    for p, _key in yeni:
         ek_not = f" (ilk {sec['limit_saniye']:.0f} sn)" if sec["limit_saniye"] > 0 else ""
         log_ekle("bilgi", f"kuyruğa eklendi: {p.name}{ek_not}")
     return jsonify({"eklendi": eklendi, "hatali": hatali, "yinelenen": yinelenen,
@@ -1262,7 +2297,7 @@ def api_iptal():
         return jsonify({"hata": "çalışan iş yok"}), 404
     IPTAL_SETI.add(is_id)
     r = subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=_child_process_env())
     log_ekle("uyari", f"İPTAL istendi: taskkill /T /F /PID {pid} → rc={r.returncode} "
                       f"{(r.stdout or r.stderr or '').strip()[:120]}")
     return jsonify({"ok": True, "pid": pid, "is_id": is_id,
@@ -1281,7 +2316,7 @@ def api_klasortara():
         return jsonify({"hata": f"klasör bulunamadı: {dizin}"}), 404
     videolar = []
     try:
-        for f in sorted(p.iterdir()):
+        for f in sorted(p.iterdir(), key=lambda x: natural_sort_key(x.name)):
             if f.is_file() and f.suffix.lower() in VIDEO_UZANTILARI:
                 try:
                     mb = round(f.stat().st_size / (1024 * 1024), 1)
@@ -1293,15 +2328,309 @@ def api_klasortara():
     return jsonify({"dizin": str(p.resolve()), "videolar": videolar})
 
 
+def _picker_terminate(process):
+    if process is None or process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            process.kill()
+            process.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            app.logger.exception("Windows picker helper could not be reaped")
+
+
+def _foreground_owner_hwnd():
+    """Return the current foreground window as a possible native-dialog owner."""
+    if os.name != "nt":
+        return 0
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
+        user32.GetForegroundWindow.argtypes = []
+        user32.IsWindow.argtypes = [ctypes.c_void_p]
+        user32.IsWindow.restype = ctypes.c_bool
+        handle = user32.GetForegroundWindow()
+        return int(handle) if handle and user32.IsWindow(handle) else 0
+    except (AttributeError, OSError, TypeError, ValueError):
+        app.logger.exception("could not capture foreground window for picker owner")
+        return 0
+
+
+def _picker_finish(job_id, status, result=None, error=None):
+    global PICKER_ACTIVE_JOB
+    now = time.time()
+    with PICKER_JOB_LOCK:
+        job = PICKER_JOBS.get(job_id)
+        if job is None:
+            return
+        job.update(status=status, result=result, hata=error, finished_at=now)
+        if PICKER_ACTIVE_JOB == job_id:
+            PICKER_ACTIVE_JOB = None
+
+
+def _watch_picker_job(job_id):
+    with PICKER_JOB_LOCK:
+        job = PICKER_JOBS.get(job_id)
+    if job is None:
+        return
+    process = job["process"]
+    marker = Path(job["marker"])
+    deadline = job["started_at"] + PICKER_TIMEOUT_SECONDS
+    timeout = False
+    dialog_marked = False
+    try:
+        while process.poll() is None:
+            if PICKER_SHUTDOWN.is_set():
+                _picker_terminate(process)
+                break
+            if not dialog_marked:
+                try:
+                    dialog_ms = int(marker.read_text(encoding="ascii").strip())
+                except (OSError, ValueError):
+                    dialog_ms = None
+                if dialog_ms is not None:
+                    dialog_marked = True
+                    spawn_ms = dialog_ms - job["process_started_epoch_ms"]
+                    request_ms = dialog_ms - job["request_started_epoch_ms"]
+                    with PICKER_JOB_LOCK:
+                        current = PICKER_JOBS.get(job_id)
+                        if current:
+                            current["status"] = "opening"
+                            current["timing"].update(spawn_to_showdialog_ms=spawn_ms,
+                                                     request_to_showdialog_ms=request_ms)
+                    app.logger.info("picker timing mode=%s spawn_to_showdialog_ms=%d request_to_showdialog_ms=%d",
+                                    job["mode"], spawn_ms, request_ms)
+            if time.time() >= deadline:
+                timeout = True
+                _picker_terminate(process)
+                break
+            PICKER_SHUTDOWN.wait(0.1)
+        stdout, stderr = process.communicate()
+        total_ms = int((time.time() - job["request_started_epoch_ms"] / 1000) * 1000)
+        if PICKER_SHUTDOWN.is_set():
+            _picker_finish(job_id, "cancelled", error="Sunucu kapanırken Windows seçicisi kapatıldı.")
+        elif timeout:
+            app.logger.warning("picker timeout mode=%s total_ms=%d", job["mode"], total_ms)
+            _picker_finish(job_id, "timeout", error="Windows seçicisi 5 dakika içinde tamamlanmadı; kapatıldı.")
+        elif process.returncode != 0:
+            detail = (stderr or stdout or "PowerShell seçicisi açılamadı").strip()
+            app.logger.warning("picker helper failed mode=%s exit=%s error=%s",
+                               job["mode"], process.returncode, detail[:400])
+            _picker_finish(job_id, "error", error=detail[:500])
+        else:
+            try:
+                result = json.loads(stdout.strip())
+                if job["mode"] == "dosya":
+                    result = {"yollar": [str(Path(p).resolve()) for p in result.get("yollar", [])]}
+                else:
+                    path = result.get("dizin") or ""
+                    result = {"dizin": str(Path(path).resolve()) if path else ""}
+                _picker_finish(job_id, "done", result=result)
+            except (ValueError, TypeError, OSError) as exc:
+                _picker_finish(job_id, "error", error=f"Windows seçicisi yanıtı okunamadı: {exc}")
+        app.logger.info("picker timing mode=%s post_total_ms=%d exit=%s",
+                        job["mode"], total_ms, process.returncode)
+    except Exception as exc:
+        app.logger.exception("Windows picker watcher failed")
+        _picker_terminate(process)
+        _picker_finish(job_id, "error", error=f"Windows seçicisi izlenemedi: {exc}")
+    finally:
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            app.logger.warning("picker marker cleanup failed: %s", marker)
+
+
+def _stop_picker_helpers():
+    PICKER_SHUTDOWN.set()
+    with PICKER_JOB_LOCK:
+        jobs = list(PICKER_JOBS.items())
+    for job_id, job in jobs:
+        _picker_terminate(job.get("process"))
+        watcher = job.get("watcher")
+        if watcher and watcher.ident is not None and watcher is not threading.current_thread():
+            watcher.join(timeout=3)
+        if job.get("status") in ("starting", "opening"):
+            _picker_finish(job_id, "cancelled", error="Sunucu kapanırken Windows seçicisi kapatıldı.")
+        try:
+            Path(job["marker"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+atexit.register(_stop_picker_helpers)
+
+
+@app.post("/api/secim")
+def api_secim():
+    """Başlatıcıyı hızlıca yanıtla; sonuç GET /api/secim/<job_id> ile izlenir."""
+    global PICKER_ACTIVE_JOB
+    if os.name != "nt":
+        return jsonify({"hata": "Windows seçicisi yalnız Windows sunucusunda kullanılabilir; yolu elle girin."}), 501
+    if PICKER_SHUTDOWN.is_set():
+        return jsonify({"hata": "UI sunucusu kapanıyor; başlatıcıyı yeniden açın."}), 503
+    v = request.get_json(force=True, silent=True) or {}
+    tur = v.get("tur")
+    if tur not in ("dosya", "klasor", "inceleme"):
+        return jsonify({"hata": "tur 'dosya', 'klasor' veya 'inceleme' olmalı"}), 400
+
+    powershell = shutil.which("powershell.exe")
+    if not powershell:
+        system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        candidate = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+        if candidate.is_file():
+            powershell = str(candidate)
+    if not powershell:
+        return jsonify({"hata": "Windows PowerShell bulunamadı"}), 500
+
+    script = r'''
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+Add-Type -AssemblyName System.Windows.Forms
+$mode = $env:HARDSUB_PICKER_MODE
+$owner = $null
+$ownerValue = 0L
+if ([long]::TryParse($env:HARDSUB_PICKER_OWNER_HWND, [ref]$ownerValue) -and $ownerValue -gt 0) {
+  try {
+    Add-Type -ReferencedAssemblies ([System.Windows.Forms.Form].Assembly.Location) -TypeDefinition @'
+using System;
+using System.Windows.Forms;
+public sealed class HardsubPickerOwner : IWin32Window {
+  public IntPtr Handle { get; private set; }
+  public HardsubPickerOwner(long handle) { Handle = new IntPtr(handle); }
+}
+'@
+    $owner = [HardsubPickerOwner]::new($ownerValue)
+  } catch {
+    [Console]::Error.WriteLine("Picker owner unavailable; using an unowned dialog: " + $_.Exception.Message)
+  }
+}
+function Show-HardsubDialog($dialog, $owner) {
+  if ($owner) {
+    try { return $dialog.ShowDialog($owner) }
+    catch { [Console]::Error.WriteLine("Owned picker failed; retrying without owner: " + $_.Exception.Message) }
+  }
+  return $dialog.ShowDialog()
+}
+$startPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyVideos)
+if (-not $startPath -or -not (Test-Path -LiteralPath $startPath -PathType Container)) { $startPath = $env:USERPROFILE }
+if ($mode -eq 'dosya') {
+  $dialog = New-Object System.Windows.Forms.OpenFileDialog
+  $dialog.Title = 'Videoları seçin (çoklu seçim açık)'
+  $dialog.Filter = 'Video dosyaları (*.mp4;*.mkv;*.avi)|*.mp4;*.mkv;*.avi|Tüm dosyalar (*.*)|*.*'
+  $dialog.Multiselect = $true
+  $dialog.CheckFileExists = $true
+  $dialog.InitialDirectory = $startPath
+  $paths = @()
+  [System.IO.File]::WriteAllText($env:HARDSUB_PICKER_STARTED, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString())
+  $dialogResult = Show-HardsubDialog $dialog $owner
+  if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) { $paths = @($dialog.FileNames) }
+  @{ yollar = $paths } | ConvertTo-Json -Compress
+} else {
+  $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+  if ($mode -eq 'inceleme') { $dialog.Description = 'Yerel .review-pack klasörünü seçin' }
+  else { $dialog.Description = 'Video klasörünü seçin' }
+  $dialog.SelectedPath = $startPath
+  $path = ''
+  [System.IO.File]::WriteAllText($env:HARDSUB_PICKER_STARTED, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString())
+  $dialogResult = Show-HardsubDialog $dialog $owner
+  if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) { $path = $dialog.SelectedPath }
+  @{ dizin = $path } | ConvertTo-Json -Compress
+}
+'''
+    encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    env = _child_process_env()
+    env["HARDSUB_PICKER_MODE"] = tur
+    env["HARDSUB_PICKER_OWNER_HWND"] = str(_foreground_owner_hwnd())
+    request_started_epoch_ms = int(time.time() * 1000)
+    marker_fd, marker_path = tempfile.mkstemp(prefix="hardsub-picker-", suffix=".started")
+    os.close(marker_fd)
+    env["HARDSUB_PICKER_STARTED"] = marker_path
+    job_id = uuid.uuid4().hex
+    process = None
+    try:
+        with PICKER_JOB_LOCK:
+            active = PICKER_JOBS.get(PICKER_ACTIVE_JOB) if PICKER_ACTIVE_JOB else None
+            if active and active.get("status") in ("starting", "opening"):
+                os.unlink(marker_path)
+                return jsonify({"hata": "Windows seçicisi zaten açık; önce mevcut seçimi tamamlayın."}), 409
+            now = time.time()
+            for old_id, old in list(PICKER_JOBS.items()):
+                if old.get("finished_at", now) < now - 600:
+                    PICKER_JOBS.pop(old_id, None)
+            process_started_epoch_ms = int(time.time() * 1000)
+            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            process = subprocess.Popen(
+                [powershell, "-NoProfile", "-STA", "-EncodedCommand", encoded_script],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace", env=env, cwd=str(KLASOR),
+                creationflags=flags,
+            )
+            PICKER_JOBS[job_id] = {
+                "process": process, "marker": marker_path, "mode": tur, "status": "starting",
+                "result": None, "hata": None, "started_at": now,
+                "request_started_epoch_ms": request_started_epoch_ms,
+                "process_started_epoch_ms": process_started_epoch_ms,
+                "timing": {"spawn_ms": process_started_epoch_ms - request_started_epoch_ms},
+            }
+            PICKER_ACTIVE_JOB = job_id
+            watcher = threading.Thread(target=_watch_picker_job, args=(job_id,), daemon=True)
+            PICKER_JOBS[job_id]["watcher"] = watcher
+    except Exception as exc:
+        _picker_terminate(process)
+        try:
+            os.unlink(marker_path)
+        except OSError:
+            pass
+        app.logger.exception("Windows picker helper could not start")
+        return jsonify({"hata": f"Windows seçicisi başlatılamadı: {exc}"}), 500
+
+    try:
+        watcher.start()
+    except Exception as exc:
+        _picker_terminate(process)
+        try:
+            process.communicate()
+        except (OSError, ValueError):
+            app.logger.exception("Windows picker helper output could not be closed")
+        _picker_finish(job_id, "error", error=f"Windows seçicisi izleyicisi başlatılamadı: {exc}")
+        try:
+            os.unlink(marker_path)
+        except OSError:
+            pass
+        app.logger.exception("Windows picker watcher could not start")
+        return jsonify({"hata": f"Windows seçicisi izlenemedi: {exc}"}), 500
+    app.logger.info("picker started mode=%s job_id=%s spawn_ms=%d",
+                    tur, job_id, process_started_epoch_ms - request_started_epoch_ms)
+    return jsonify({"job_id": job_id, "status": "starting"}), 202
+
+
+@app.get("/api/secim/<job_id>")
+def api_secim_durum(job_id):
+    with PICKER_JOB_LOCK:
+        job = PICKER_JOBS.get(job_id)
+        if job is None:
+            return jsonify({"hata": "Seçici işi bulunamadı veya süresi doldu."}), 404
+        result = {"job_id": job_id, "status": job["status"], "timing": dict(job["timing"])}
+        if job["status"] == "done":
+            result["result"] = job["result"]
+        elif job.get("hata"):
+            result["hata"] = job["hata"]
+    return jsonify(result)
+
+
 @app.post("/api/ac")
 def api_ac():
     v = request.get_json(force=True, silent=True) or {}
     yol = str(v.get("yol") or "").strip()
     p = Path(yol)
     if p.is_dir():
-        subprocess.Popen(["explorer", str(p)])
+        subprocess.Popen(["explorer", str(p)], env=_child_process_env())
     elif p.is_file():
-        subprocess.Popen(["explorer", "/select,", str(p)])
+        subprocess.Popen(["explorer", "/select,", str(p)], env=_child_process_env())
     else:
         return jsonify({"hata": f"yol bulunamadı: {yol}"}), 404
     return jsonify({"ok": True})
@@ -1309,7 +2638,7 @@ def api_ac():
 
 @app.get("/qa/<path:dosya>")
 def api_qa(dosya):
-    """/qa/<is-id>/<rel-yol> → o işin qa klasörü; /qa/<rel-yol> → son qa klasörü."""
+    """/qa/<is-id>/<rel-yol> → o işin QA klasörü; eski işler için kök fallback."""
     kok_qa = None
     rel = dosya
     parca = dosya.split("/", 1)
@@ -1317,12 +2646,14 @@ def api_qa(dosya):
         if len(parca) == 2 and parca[0].startswith("is-"):
             isim = next((i for i in ISLER if i["id"] == parca[0]), None)
             if isim is not None:
-                kok_qa = Path(isim["sec"]["cikti_klasor"]) / "qa"
+                kok_qa = Path(isim.get("qa_root") or
+                              (Path(isim["sec"]["cikti_klasor"]) / "qa"))
                 rel = parca[1]
         if kok_qa is None:
             for i in reversed(ISLER):
                 if i["qa_dosyalari"]:
-                    kok_qa = Path(i["sec"]["cikti_klasor"]) / "qa"
+                    kok_qa = Path(i.get("qa_root") or
+                                  (Path(i["sec"]["cikti_klasor"]) / "qa"))
                     break
     if kok_qa is None:
         kok_qa = KLASOR / "qa"
@@ -1369,7 +2700,7 @@ def srt_parse(metin):
 
 def is_srt_bul(is_id):
     """İşin SRT'sini bulur. Yol güvenliği: kayıt yalnız kuyruktaki işten gelir
-    ve çözümlenen yol işin kendi çıktı klasörü içinde olmak zorundadır.
+    ve çözümlenen yol işin kendi koşu klasörü içinde olmak zorundadır.
     Dönüş: (snapshot, srt_path, (hata, http_kod) | None)."""
     with KILIT:
         isim = next((i for i in ISLER if i["id"] == is_id), None)
@@ -1379,16 +2710,26 @@ def is_srt_bul(is_id):
     if not snap["srt"]:
         return snap, None, ("işin SRT kaydı yok", 400)
     srt = Path(snap["srt"])
-    cikti = Path(snap["sec"]["cikti_klasor"]).resolve()
+    cikti = Path(snap.get("run_dir") or
+                 snap["sec"]["cikti_klasor"]).expanduser().resolve()
     try:
         srt = srt.resolve()
     except OSError:
         return snap, None, ("SRT yolu çözülemedi", 400)
-    if srt.parent != cikti or srt.suffix.lower() != ".srt":
-        return snap, None, ("SRT yolu işin çıktı klasörü dışında — reddedildi", 403)
+    if not _yol_altinda(srt, cikti) or srt.suffix.lower() != ".srt":
+        return snap, None, ("SRT yolu işin koşu klasörü dışında — reddedildi", 403)
     if not srt.exists():
         return snap, None, (f"SRT bulunamadı: {srt}", 404)
     return snap, srt, None
+
+
+def _yol_altinda(yol, kok):
+    """Çözümlenmiş yolun kök klasör içinde kaldığını doğrular."""
+    try:
+        yol.relative_to(kok)
+        return True
+    except ValueError:
+        return False
 
 
 @app.get("/api/bloklar")
@@ -1667,7 +3008,7 @@ def api_kontrol():
 
 @app.get("/api/pano")
 def api_pano():
-    """Toplu kalite panosu: klasördeki TÜM *.stats.json taranır
+    """Toplu kalite panosu: klasörde ve alt klasörlerdeki *.stats.json taranır
     (varsayılan: sunucu klasörü; ?klasor= ile değiştirilir).
 
     Tablo: dosya | blok | low-conf% | konuşma sn | hardsub_shr | altyazısız? |
@@ -1682,7 +3023,12 @@ def api_pano():
     except OSError:
         pass
     satirlar = []
-    for sp in sorted(klasor.glob("*.stats.json")):
+    for sp in sorted(klasor.rglob("*.stats.json")):
+        try:
+            sp = sp.resolve()
+            stats_rel = sp.relative_to(klasor).as_posix()
+        except (OSError, ValueError):
+            continue
         kok_ad = sp.name[:-len(".stats.json")]
         if not kok_ad:
             continue
@@ -1710,7 +3056,8 @@ def api_pano():
         except OSError:
             tarih = ""
         satirlar.append({
-            "ad": kok_ad, "stats": sp.name,
+            "ad": (sp.parent / kok_ad).relative_to(klasor).as_posix(),
+            "stats": sp.name, "stats_rel": stats_rel,
             "blok": blok, "low_conf": low, "low_pct": low_pct,
             "low_yuksek": bool(low_pct is not None and
                                low_pct > PANO_LOW_YUZDE),
@@ -1718,7 +3065,7 @@ def api_pano():
             "altyazisiz": st.get("altyazisiz_rip_muhtemel") is True,
             "eski_format": not ("blocks" in st and "low_conf" in st and
                                 "conf_thr" in st),
-            "bloklar_var": (klasor / (kok_ad + ".bloklar.json")).exists(),
+            "bloklar_var": sp.with_name(kok_ad + ".bloklar.json").exists(),
             "tarih": tarih,
         })
     satirlar.sort(key=lambda r: (not r["low_yuksek"],
@@ -1742,14 +3089,11 @@ def api_pano():
 
 @app.get("/api/pano/incele")
 def api_pano_incele():
-    """Pano satırının blok dökümü: /api/pano/incele?ad=<stem>&klasor=<dir>.
+    """Pano satırının blok dökümü: /api/pano/incele?stats=<rel-yol>&klasor=<dir>.
 
     SALT-OKUNUR görüntüleyicidir — düzenleme kuyruktaki iş üzerinden
     (/api/kontrol + /api/blokkaydet) yapılır. .bloklar.json varsa koşu anındaki
     döküm döner; yoksa SRT conf'suz listelenir (eski çıktı yolu)."""
-    ad = (request.args.get("ad") or "").strip()
-    if not ad or "/" in ad or "\\" in ad or ad in (".", ".."):
-        return jsonify({"hata": "geçersiz ad"}), 400
     klasor = Path(request.args.get("klasor") or KLASOR)
     if not klasor.is_dir():
         return jsonify({"hata": f"klasör bulunamadı: {klasor}"}), 404
@@ -1757,12 +3101,40 @@ def api_pano_incele():
         klasor = klasor.resolve()
     except OSError:
         pass
-    srt = (klasor / (ad + ".srt")).resolve()
-    try:
-        if srt.parent != klasor:
+    stats_rel = (request.args.get("stats") or "").strip()
+    if stats_rel:
+        stats_input = Path(stats_rel)
+        if stats_input.is_absolute() or not stats_rel.endswith(".stats.json"):
+            return jsonify({"hata": "geçersiz stats yolu"}), 400
+        try:
+            stats_path = (klasor / stats_input).resolve()
+        except (OSError, RuntimeError):
+            return jsonify({"hata": "stats yolu çözülemedi"}), 400
+        if not _yol_altinda(stats_path, klasor):
             return jsonify({"hata": "yol klasör dışına çıkıyor"}), 403
-    except OSError:
-        return jsonify({"hata": "yol çözülemedi"}), 400
+        kok_ad = stats_path.name[:-len(".stats.json")]
+        ad = (stats_path.parent / kok_ad).relative_to(klasor).as_posix()
+        srt = stats_path.with_name(kok_ad + ".srt")
+    else:
+        # Önceki arayüz sürümünün API çağrıları için geriye dönük uyum.
+        ad = (request.args.get("ad") or "").strip()
+        if not ad or "/" in ad or "\\" in ad or ad in (".", ".."):
+            return jsonify({"hata": "geçersiz ad"}), 400
+        srt = (klasor / (ad + ".srt")).resolve()
+        if not _yol_altinda(srt, klasor):
+            return jsonify({"hata": "yol klasör dışına çıkıyor"}), 403
+    try:
+        srt = srt.resolve()
+        stats_companion = srt.with_suffix(".stats.json").resolve()
+        bloklar_companion = srt.with_name(srt.stem + ".bloklar.json").resolve()
+    except (OSError, RuntimeError):
+        return jsonify({"hata": "koşu dosyalarının yolu çözülemedi"}), 400
+    if not _yol_altinda(srt, klasor):
+        return jsonify({"hata": "SRT yolu klasör dışına çıkıyor"}), 403
+    if not _yol_altinda(stats_companion, klasor):
+        return jsonify({"hata": "stats yolu klasör dışına çıkıyor"}), 403
+    if not _yol_altinda(bloklar_companion, klasor):
+        return jsonify({"hata": "bloklar.json yolu klasör dışına çıkıyor"}), 403
     conf_thr = _stats_conf_thr(srt)
     ana_bj, ekran_bj = _bloklar_json_oku(srt)
 
@@ -1813,8 +3185,10 @@ def api_vttrapor():
     if not yol or not Path(yol).exists():
         return jsonify({"hata": "bu iş için VTT raporu yok"}), 404
     p = Path(yol).resolve()
-    if p.parent != Path(snap["sec"]["cikti_klasor"]).resolve():
-        return jsonify({"hata": "rapor yolu işin çıktı klasörü dışında"}), 403
+    run_dir = Path(snap.get("run_dir") or
+                   snap["sec"]["cikti_klasor"]).expanduser().resolve()
+    if not _yol_altinda(p, run_dir):
+        return jsonify({"hata": "rapor yolu işin koşu klasörü dışında"}), 403
     return send_from_directory(p.parent, p.name, mimetype="application/json")
 
 
@@ -1838,8 +3212,13 @@ def main():
     log_ekle("bilgi", f"sunucu başladı: http://127.0.0.1:{PORT} — klasör: {KLASOR}")
     print(f"[ui] http://127.0.0.1:{PORT}  (durdurmak icin Ctrl+C)")
     print(f"[ui] arac: {ARAC}")
-    app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False,
-            threaded=True)
+    try:
+        app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False,
+                threaded=True)
+    except KeyboardInterrupt:
+        print("[ui] kapanış istendi; Windows seçicisi varsa kapatılıyor")
+    finally:
+        _stop_picker_helpers()
 
 
 if __name__ == "__main__":

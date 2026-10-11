@@ -162,8 +162,8 @@ ile kapatılır. Test koşularında (--limit-seconds > 0) varsayılan kapalıdı
      denenir). Sözlük: turkce-sozluk.txt
      (OPUS OpenSubtitles v2018 tr frekans listesi, freq>=5, ~987K kelime);
      dosya yoksa gömülü ~300 kelimelik çekirdek devreye girer.
-     Ölçüm (BLEND-S S01E01, _gt2-blends.vtt): diyalog CER %5.41 -> %3.15
-     (36 -> 21 edit / 666 karakter; kalibrasyon _pf-kalibrasyon3.py).
+     Ölçüm (BLEND-S S01E01, samples/references/BLEND-S/S01E01/_gt2-blends.vtt): diyalog CER %5.41 -> %3.15
+     (36 -> 21 edit / 666 karakter; kalibrasyon arsiv/11-deneyler/_pf-kalibrasyon3.py).
   2) EKRAN-YAZI SINIFLANDIRICISI (_split_noise üstüne): mevcut conf/süre/
      harf profili KORUNUR; eklenen kurallar bloğu <ad>_ekran.srt'ye taşır:
      (a) CJK oranı >%15; (b1) >=4-harfli kelimelerin <%30'u sözlükte VE
@@ -179,7 +179,7 @@ ile kapatılır. Test koşularında (--limit-seconds > 0) varsayılan kapalıdı
      geçildiği ilk kareye taşınır (ölçüm: B12 start ~1.4 sn erkendi).
      stats.fade_duzeltilen sayar.
   4) UPSCALE2X EŞİĞİ 45 -> 50 px (UPSCALE_TEXT_H): algılanan satır
-     yüksekliği <50 px ise OCR girişi 2x. Ölçüm (_pf-texth-probe.json):
+     yüksekliği <50 px ise OCR girişi 2x. Ölçüm (arsiv/11-deneyler/_pf-texth-probe.json):
      4 test videosunda text_h 60-80 px -> dördünde de davranış değişmedi.
 
 04.10.2026 — KULLANICI SÖZLÜĞÜ ENTEGRASYONU: UI'daki 'Öğret' hedefi
@@ -187,7 +187,7 @@ kullanici-sozlugu.txt (`eski<TAB>yeni`) post-fix zincirine bağlandı; kural
 ham OCR ve post-fix yüzeyinde uygulanır, günlüğe "kullanici" sınıfıyla
 yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
 
-04.10.2026 — 8. TUR (algılama kalitesi; ölçüm zemini _kal-oku.py):
+04.10.2026 — 8. TUR (algılama kalitesi; ölçüm zemini arsiv/11-deneyler/_kal-oku.py):
   * DÜŞÜK-KONSENSUS TAKASI: ikinci motorun okuması, konsensus fiilen
     çökmüşken (conf<0.30) ve net üstünken (>=0.80, fark>=0.50) metni
     devralır; metin kısa parça olamaz (>=%60 uzunluk — tam bölüm koşusunda
@@ -235,7 +235,7 @@ yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
   değişiklik yoktur (parite korunur). Eski çıktılarda bu dosya YOKTUR; ui
   paneli conf'suz listeyle zarifçe düşer ve "yeniden koşun" der.
 
-05.10.2026 — WANO TEŞHİS DÜZELTMELERİ (ölçümlü; inceleme _op-rapor.md,
+05.10.2026 — WANO TEŞHİS DÜZELTMELERİ (ölçümlü; inceleme arsiv/11-deneyler/_op-rapor.md,
   One Piece 124 bölümlük batch E1017-E1080 çöküşü):
   1) DAR BANT SAĞLIK KONTROLÜ (_dar_bant_genislet): algılanan bant
      h<150px (1080p tabanında ölçekli) ise taban ekran tabanında kalmak
@@ -272,8 +272,8 @@ yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
   1) EŞİK TAVANI 246 → 240 (THR_TAVAN sabiti): Eleber ripinde glif
      çekirdeği gri 242-252 ölçüldü; eski koşuda fiilen kullanılan 250
      eşiği maskenin %41'ini eritiyordu. Piksel sayımı (E1049 t=715,
-     _wn-full-1049-715.png, bant 810-1080): >240: 5008 · >246: 4564 ·
-     >250: 2939 piksel — _wn-mask-1049-715-thr240.png katı glifler,
+     qa/evidence/_wn-full-1049-715.png, bant 810-1080): >240: 5008 · >246: 4564 ·
+     >250: 2939 piksel — qa/evidence/_wn-mask-1049-715-thr240.png katı glifler,
      -thr250.png paramparça. min(240, core-6) artık üç yerde:
      detect_style, detect_style_upper, _candidate_band.
      DEFAULT_WHITE_THR 250 → 240 (--no-auto ve algılama-başarısızlığı
@@ -282,7 +282,7 @@ yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
      (önce -5). Ölçümlü vaka E1049: low-conf 10/17 (%59) iken deneme
      hiç tetiklenmemişti (auto_esik_kayit.denendi=false).
   2) DAR BANT TETİĞİ 150 → 180: ölçüm (E1049 t=1145,
-     _wn-full-1049-1145.png, thr240 satır profili ≥8 piksel): iki
+     qa/evidence/_wn-full-1049-1145.png, thr240 satır profili ≥8 piksel): iki
      satırlı diyalog y=945..1039 (üst satır 945-975, alt satır
      1000-1039). E1071'in ölçülen (976,104) bandı üst satırı 945'ten
      BİÇER (31 px kayıp); E1007'nin (952,128) bandı 7 px biyer. Taban
@@ -313,7 +313,7 @@ yazılır (kullanıcı beyanı son söz; --no-duzelt kapatır).
   4) VIDEO KİMLİĞİ stats["video"] SÖZLÜĞÜ: tur 1'in ayrı "video_kimlik"
      anahtarı yerine "video" artık {ad, mtime, boyut, sha1_ilk_1MB}
      sözlüğü (E02 vakasının kalıcı önlemi; görev spesifikasyonu).
-     "video"yu düz isim olarak okuyan kod YOK (ölçüldü: _op-katman1.py
+     "video"yu düz isim olarak okuyan kod YOK (ölçüldü: arsiv/11-deneyler/_op-katman1.py
      kendi "video" alanını üretiyor, ui_server okumuyor); isim bilgi
      kaybı olmasın diye sözlüğün "ad" alanında yaşar.
 
@@ -377,15 +377,19 @@ import argparse
 import difflib
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from itertools import combinations
 from pathlib import Path
 
 import cv2
 import numpy as np
+from qa_labels import draw_qa_label
+from srt_format import fmt_ts, render_srt_cues_with_timing_diagnostics
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
@@ -441,7 +445,7 @@ BEYAZ_FON_SON_PENCERE_SN = 11.0  # son pencere uzunluğu (mutlak saniye)
 BEYAZ_FON_SON_ORNEK = 37         # son pencere örnek sayısı (~0.3s aralık)
 
 # OCR girişi 2x büyütme eşiği (04.10.2026: 45 -> 50 px, görev fix 4).
-# ÖLÇÜM (_pf-texth-probe.json): 4 test videosunun algılanan text_h'i
+# ÖLÇÜM (arsiv/11-deneyler/_pf-texth-probe.json): 4 test videosunun algılanan text_h'i
 # 60-80 px (BLEND-S 70, ep1 60, ep2 60, 86tr 80) -> bu değişiklik dört test
 # videosunda davranış DEĞİŞTİRMEZ; 45-49 px bandındaki videolar için.
 UPSCALE_TEXT_H = 50
@@ -529,7 +533,7 @@ LOW_CONF_THR = 0.75    # bu eşiğin altındaki segmentlere ikinci motor oy veri
                        # değiştirilebilir)
 
 # --- 8. tur (04.10.2026): DÜŞÜK-KONSENSUS TAKASI --------------------------
-# Ölçüm zemini _kal-oku.py (BLEND-S GT 24 cue; aynı karede 3-varyant
+# Ölçüm zemini arsiv/11-deneyler/_kal-oku.py (BLEND-S GT 24 cue; aynı karede 3-varyant
 # konsensus vs PP-OCRv6):
 #   00:10:25 "ama sana göre değil gibb seni zolamayacağım 1 Mafka"
 #             konsensus conf=0.20 CER=0.132   ← fiilen çökmüş okuma
@@ -753,7 +757,7 @@ def _video_kimlik(video):
 
     Ölçümlü vaka: E02 SRT'si farklı bir ripten üretilmişti; video dosyası
     koşudan SONRA değişmişti (mtime 30.09 15:04) ve kayıtta hiçbir iz
-    yoktu — uyumsuzluk ancak görsel örneklemeyle yakalandı (_op-rapor.md
+    yoktu — uyumsuzluk ancak görsel örneklemeyle yakalandı (arsiv/11-deneyler/_op-rapor.md
     §c.1). Bu kayıt sonrakilerin aynısını önler: SRT ile video
     eşleşmesi sonradan sha1+boyut+mtime üçlüsüyle doğrulanabilir.
 
@@ -1328,7 +1332,7 @@ def _candidate_band(path, width, height, duration, probe_seconds=60.0):
 
 
 # 05.10.2026 — DAR BANT SAĞLIK KONTROLÜ (Wano E1017-E1080 çöküşü) ----------
-# Ölçülen arıza imzaları (stats.json, 124 bölümlük batch; _op-rapor.md b.3):
+# Ölçülen arıza imzaları (stats.json, 124 bölümlük batch; arsiv/11-deneyler/_op-rapor.md b.3):
 #   E1071 (976,104) · E1007 (952,128) · E1074/75 (940,140) · E1076 (932,148)
 # 95px fontta iki satırlı diyalog ~200px yer kaplar; h<150 bandı ikinci
 # satırı KESER ve kendi kendini güçlendiren döngü başlar: üst satır hiç
@@ -1341,7 +1345,7 @@ def _candidate_band(path, width, height, duration, probe_seconds=60.0):
 # satır rahat sığar) — düzeltme yalnız şüpheli-dar durumu etkiler, sağlıklı
 # videoların bandı bit-bit aynı kalır (parite).
 # TUR 2 (05.10.2026): tetik 150 → 180. Yeni ölçüm (E1049 t=1145,
-# _wn-full-1049-1145.png, thr240 satır profili ≥8 piksel): iki satırlı
+# qa/evidence/_wn-full-1049-1145.png, thr240 satır profili ≥8 piksel): iki satırlı
 # diyalog beyaz-çekirdek span'ı y=945..1039 — üst satır 945-975, alt satır
 # 1000-1039. E1071'in (976,104) bandı üst satırı 945'ten BİÇER (31 px
 # kayıp), E1007'nin (952,128) bandı 7 px biyer; 150 tabanıyla üretilen
@@ -2113,7 +2117,7 @@ def _split_noise(blocks, fps, ayir=True, conf_thr=0.45, dur_thr=0.6,
       (c)  <=2 harf dışı tamamen sembol
     conf<0.15 tabanı probe2 ölçümü: ekran bloklarının conf'u 0.033-0.077,
     GT diyalog conf'larının en düşüğü 0.248. Denge (kalibrasyon
-    _pf-kalibrasyon3.py, önceki SRT'nin 310 bloğu): GT'nin 4 ekran bloğu
+    arsiv/11-deneyler/_pf-kalibrasyon3.py, önceki SRT'nin 310 bloğu): GT'nin 4 ekran bloğu
     ayrıldı, 20 GT diyalog bloğunun hiçbiri ayrılmadı. `istatistik` verilirse
     kural bazlı sayılar oraya yazılır."""
     if not ayir:
@@ -2254,7 +2258,7 @@ def _split_repeat(ana, gurultu, fps, sim=REP_SIM, win=REP_WIN,
 # --- 8. tur (04.10.2026): --jenerik: zaman aralığıyla kredi ayırma -------
 # Kayan jenerik/kredi blokları İÇERİK kuralıyla yakalanamaz: BLEND-S
 # 00:22:14'teki Vietnamca kredi bloğu sözlük eşiğini geçiyor ve ekran
-# sınıflandırıcısından kaçıyor (ölçüm: _pf2-cer-rapor.json 'ekran' çifti —
+# sınıflandırıcısından kaçıyor (ölçüm: arsiv/11-deneyler/_pf2-cer-rapor.json 'ekran' çifti —
 # ana SRT'de kalmıştı). Kayan kredi OCR'a göre karakter karakter değişir;
 # güvenilir sinyal İÇERİK değil ZAMANDIR. Kullanıcı jenerik penceresini
 # işaretler; aralıkta BAŞLAYAN bloklar ana SRT'ye girmez, <ad>_ekran.srt'ye
@@ -2322,7 +2326,7 @@ def _jenerik_ayir(bloklar, araliklar, fps):
 
 
 # =====================================================================
-# İNCELEME TURU (04.10.2026, _rev-RAPOR.md bulguları) — beş kural --------
+# İNCELEME TURU (04.10.2026, arsiv/11-deneyler/_rev-RAPOR.md bulguları) — beş kural --------
 # Derinlik incelemesi (25 ana SRT + 21 kare kanıt) ölçümlü boşluklar
 # buldu; hepsi TAŞIMA/TEMİZLİK kuralıdır, hiçbiri SİLMEZ (Kural 1):
 #
@@ -2338,7 +2342,7 @@ def _jenerik_ayir(bloklar, araliklar, fps):
 #     oranı >= 0.6 + >= 2 sesli + sözlükte kelime taşıyan satırlar
 #     ("Türkçe-karakter ağırlıklı") ana SRT'ye geri konur; ardışık
 #     kırıntılar tek blok olur; kalan çöp satırlar _ekran'da kalır.
-#     Denge (GT, _pf2-blends_ekran.srt): Japonca kredi / "OurpıIse" /
+#     Denge (GT, arsiv/11-deneyler/_pf2-blends_ekran.srt): Japonca kredi / "OurpıIse" /
 #     "inya" GERİ DÖNMEZ (CJK ve sözlük eşiği); ölçüm README'de.
 #  3) TEK BAŞINA CJK KALINTISI (6+ örnek: 中/テ/著/二 diyalog satırında):
 #     post-fix'te çevresi boşluk/satır sınırı olan TEK CJK karakter
@@ -2424,7 +2428,7 @@ def _diyalog_kirintisi(satir, sozluk):
     Dört şart BİRLİKTE: CJK içermemesi, harf oranı >= MIKRO_GERI_HARF,
     >= MIKRO_GERI_SESLI sesli harf ve >=3 harfli en az bir kelimenin
     sözlükte FREQ_MIN üstü frekansla bulunması ("Türkçe-karakter
-    ağırlıklı"). Ölçüm tabanı (_pf2-blends_ekran.srt + _ekran Kaya Bocchi):
+    ağırlıklı"). Ölçüm tabanı (arsiv/11-deneyler/_pf2-blends_ekran.srt + _ekran Kaya Bocchi):
     "Kes şunu!" / "Beni öldürüyorsun." True; "OurpıIse", "inya", "JI I
     VII", "IijUi", "Anhi", "V:+ 47t 4 R 17", "49" False."""
     if _CJK_RE.search(satir):
@@ -2611,9 +2615,9 @@ def _mikro_geri(ana, adaylar, fps, sozluk):
 # =====================================================================
 # TÜRKÇE POST-FIX KATMANI + EKRAN-YAZI SINIFLANDIRICISI (04.10.2026) ---
 #
-# BLEND-S GT ölçümü (_gt2-rapor.json): diyalog CER %5.41, ekran %58.
+# BLEND-S GT ölçümü (arsiv/11-deneyler/_gt2-rapor.json): diyalog CER %5.41, ekran %58.
 # Hata sınıfları: kelime kaynaşması %31, ekran-yazısı %31, diakritik %23,
-# harf yutma %15. Bu bölümün motoru _pf-kalibrasyon3.py'de ÖLÇÜMLÜ
+# harf yutma %15. Bu bölümün motoru arsiv/11-deneyler/_pf-kalibrasyon3.py'de ÖLÇÜMLÜ
 # geliştirildi ve birebir taşındı:
 #   * diyalog CER: %5.41 -> %3.15 (36 -> 21 edit / 666 GT karakter)
 #   * ekran ayrımı: GT'nin 4 ekran bloğu ayrılıyor, 20 GT diyalog bloğunun
@@ -2963,7 +2967,7 @@ def _kelime_duzelt(token, sozluk):
         # komşu >= ZAYIF_SOZLUK_DOMINANS kat daha sık ise komşu kazanır
         # ('gibi' 2.430.246 / 'gibb' 133 -> 18 272x). Lowercase şartı ve
         # yalnız DEĞİŞTİRME (ekle/sil YOK) — mevcut güvenlik kurallarıyla
-        # aynı aile. Ölçüm: _kal-oku.py token testi + GT koşusu.
+        # aynı aile. Ölçüm: arsiv/11-deneyler/_kal-oku.py token testi + GT koşusu.
         f0 = sozluk[kucuk]
         if core.islower() and f0 < ZAYIF_SOZLUK_FREQ:
             en_iyi = None
@@ -3051,7 +3055,7 @@ def _duzelt_metin(metin, sozluk, kayit=None, zaman=None):
     for satir in metin.split("\n"):
         orijinal = satir
         # --- ekran-kalinti (inceleme turu 3): tek başına duran CJK harf ---
-        # Ölçüm (_rev-RAPOR.md (c)-2): 6+ örnek — "…söylemiştim. 中",
+        # Ölçüm (arsiv/11-deneyler/_rev-RAPOR.md (c)-2): 6+ örnek — "…söylemiştim. 中",
         # "テ Amanın…", "著 / Karides.", "二 Horeket etti!". Yalnız
         # çevresi boşluk/satır sınırı olan TEK CJK karakter (U+3000-U+9FFF)
         # kaldırılır; CJK'lı uzun satırlar (tam Japonca satır) DOKUNULMAZ —
@@ -3431,6 +3435,7 @@ def get_second_engine(lang_list, gpu_flag, ocr_mode="auto",
         _SECOND["state"] = "failed"
         note("[i] ikinci motor eklenmedi: zaten ['en'] okunuyor")
         return _SECOND
+
     try:
         import easyocr
         engine2 = easyocr.Reader(["en"], gpu=gpu_flag, verbose=False)
@@ -3445,15 +3450,60 @@ def get_second_engine(lang_list, gpu_flag, ocr_mode="auto",
         return _SECOND
 
 
-def fmt_ts(seconds):
-    ms = int(round(seconds * 1000))
-    h, rem = divmod(ms, 3600000)
-    m, rem = divmod(rem, 60000)
-    s, ms = divmod(rem, 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+def _run_timing_snapshot(run_started, stage_durations, stage_status, now=None):
+    """Build additive, JSON-safe profiling fields from monotonic timestamps.
+
+    Durations are informational and intentionally do not affect OCR decisions.
+    Stage values can overlap (for example recovery runs after extraction and is
+    included in total run elapsed); callers must not sum them as a partition.
+    """
+    now = time.monotonic() if now is None else float(now)
+    elapsed = max(0.0, now - float(run_started))
+    stages = {}
+    for name, seconds in stage_durations.items():
+        stages[name] = (None if seconds is None
+                        else round(max(0.0, float(seconds)), 3))
+    return {
+        "clock": "monotonic",
+        "run_elapsed_seconds": round(elapsed, 3),
+        "stage_durations_seconds": stages,
+        "stage_status": dict(stage_status),
+        "stage_durations_may_overlap": True,
+    }
+
+
+def _atomic_write_json(path, payload):
+    """Atomically replace one JSON file using a unique same-directory temp."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main():
+    run_started = time.monotonic()
     global HWACCEL
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
@@ -3546,6 +3596,10 @@ def main():
                          "(varsayılan: tam koşuda 6, test koşusunda kapalı; "
                          "0 = kapalı)")
     ap.add_argument("--qa-dir", default="qa")
+    ap.add_argument("--review-pack", action="store_true",
+                    help="yerel AI-inceleme paketi üret: final SRT + cue başına "
+                         "tek sıkıştırılmış altyazı-ROI kırpımı + manifest; "
+                         "API çağrısı/yükleme yok")
     ap.add_argument("--ust-bant", action="store_true",
                     help="diyalog taramasindan SONRA ikinci gecis: cercevenin "
                          "ust %%35'indeki yazilari (mesaj kutusu, tabela, "
@@ -3606,7 +3660,13 @@ def main():
         extract_softsub(video, out, 0)
         print(f"[OK] softsub bulundu ({info['subtitles'][0]['codec']}), "
               f"kaynaktan birebir cikarildi: {out}")
+        if args.review_pack:
+            print("[!] AI inceleme paketi atlandı: softsub girdisinde OCR kare eşlemesi yok")
         return
+
+    review_target = out.with_name(out.stem + ".review-pack")
+    if args.review_pack and review_target.exists():
+        ap.error(f"inceleme paketi zaten var, üstüne yazılmadı: {review_target}")
 
     # --- Stil: otomatik algılama (varsayılan) / elle override ---
     manual = {"band_y": args.band_y, "band_h": args.band_h,
@@ -3836,8 +3896,8 @@ def main():
         denemesinin UCUZ ÖNİNDEĞERi için kullanılır — bkz. Task 4).
         Verilmezse `args.limit_seconds` (yani normal tam gidiş) kullanılır.
 
-        Döner: (merged, mikro_tasınanlar, scanned, second_votes,
-        second_takas, fade_n, cjk_blok, cjk_kayit)."""
+        Döner: OCR/cleanup çıktıları ve birleştirme öncesi özgün OCR
+        segmentlerinin (başlangıç, bitiş, örnek kare) listesi."""
         print("[1/3] altyazi bandi taraniyor...")
         t0 = time.time()
         segments, scanned, fade_n = scan_band(
@@ -3901,6 +3961,11 @@ def main():
         # çöp deseni filtresi: en az 3 harf ardışık + en az bir sesli harf
         results = [r for r in results
                    if word_re.search(r[2]) and vowel_re.search(r[2])]
+        # Keep the original sampled OCR frame boundaries before merging. A
+        # later final cue may span multiple reads; it must not inherit a
+        # guessed midpoint from that merged interval.
+        source_frame_evidence = [
+            (int(r[0]), int(r[1]), int((r[0] + r[1]) // 2)) for r in results]
         # ardışık aynı metin / benzer metin / çakışan okuma birleştirmesi
         # ortak fonksiyona taşındı (--ust-bant aynı zinciri kullanır); kod
         # birebir aynıdır, sıra ve yan etkiler değişmedi.
@@ -3915,12 +3980,19 @@ def main():
             print(f"    ikinci motor: {_SECOND['name']} — {second_votes} "
                   f"blokta oy verdi{ek}")
         return (merged, merged_raw, micro_moved, scanned, second_votes,
-                len(takas_kayit), takas_kayit, fade_n, cjk_blok, cjk_kayit)
+                len(takas_kayit), takas_kayit, fade_n, cjk_blok, cjk_kayit,
+                source_frame_evidence)
 
+    first_extraction_started = time.monotonic()
     (merged, merged_raw, micro_moved, scanned, second_votes, second_takas,
-     takas_kayit, fade_n, cjk_blok, cjk_kayit) = _extract(cfg)
+     takas_kayit, fade_n, cjk_blok, cjk_kayit,
+     main_review_evidence) = _extract(cfg)
+    first_extraction_seconds = time.monotonic() - first_extraction_started
 
+    upper_review_evidence = []
+    upper_band_seconds = None
     def _ust_pass():
+        nonlocal upper_review_evidence
         """--ust-bant: üst %35 bölgesinin AYRI geçişi.
 
         Ana diyalog taraması BİTMİŞTİR — bu fonksiyon yalnız kendi bandını
@@ -4112,6 +4184,8 @@ def main():
         u_ok = [r for r in u_results if r[2].strip()]
         u_ok = [r for r in u_ok
                 if word_re.search(r[2]) and vowel_re.search(r[2])]
+        upper_review_evidence = [
+            (int(r[0]), int(r[1]), int((r[0] + r[1]) // 2)) for r in u_ok]
         u_dropped = len(u_results) - len(u_ok)
         ust = _merge_readings(u_ok, fps, SIM)
         ust = [r for r in ust if r[2].strip()]
@@ -4195,17 +4269,17 @@ def main():
             note(f"[ust] DIYALOG SUPHESI: 0/{len(ust)} blok")
 
         # --- 4) çıktı: SRT temiz + konum AYRI json'da ---
-        with ust_srt.open("w", encoding="utf-8") as f:
-            for i, (a, b, text, conf) in enumerate(ust, 1):
-                start = frame_time(a)
-                end = frame_time(b + 1)
-                if i < len(ust):
-                    end = min(end, frame_time(ust[i][0]))
-                f.write(f"{i}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{text}\n\n")
+        ust_srt_text, ust_end_clamps = \
+            render_srt_cues_with_timing_diagnostics(ust, frame_time)
+        ust_srt.write_text(ust_srt_text, encoding="utf-8")
         u_data = {"video": video.name, "bolge": [0, ucfg["band_h"]],
                   "oran": UST_REGION_FRAC, "mask": ucfg["mask"],
                   "esik": u_esik,
                   "diyalog_supheli": u_sus_n, "bloklar": []}
+        if ust_end_clamps:
+            u_data["writer_end_clamps"] = {
+                "time_basis": "frame_index / reported FPS; approximate; source PTS not preserved",
+                "cues": ust_end_clamps}
         for i, (a, b, text, conf) in enumerate(ust, 1):
             bb = u_bb[i - 1]
             u_data["bloklar"].append({
@@ -4258,9 +4332,8 @@ def main():
                          (w, min(ucfg["band_h"], h - 1)), (0, 0, 255), 2)
                 label = f"UST: {text!r} (conf={conf:.2f}, " \
                         f"t={frame_time(mid):.2f}s)"
-                cv2.putText(canvas, label[:170], (10, h + 45),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255),
-                            1, cv2.LINE_AA)
+                draw_qa_label(canvas, label[:170], (10, h + 45),
+                              (255, 255, 255), cv2)
                 cv2.imwrite(str(out_png), canvas)
 
             n = min(args.qa, 4, len(ust))      # şartname: 4 montaj
@@ -4269,7 +4342,7 @@ def main():
                 _qa_ust(blk, qa_dir / f"ust_{k:03d}_f{(blk[0]+blk[1])//2}.png")
             print(f"    QA ust montajlari: {qa_dir}/ust_*.png ({len(picks)} adet)")
 
-        return {"blok": len(ust), "statik_elenen": round(statik_oran, 6),
+        ust_stats = {"blok": len(ust), "statik_elenen": round(statik_oran, 6),
                 "statik_elenen_piksel": n_drop,
                 "statik_olcusan_piksel": n_band,
                 "statik_kare": sfr,
@@ -4293,7 +4366,12 @@ def main():
                                  "y_lo": UST_SUS_Y_LO, "y_hi": UST_SUS_Y_HI},
                 "second_engine_votes": u_second,
                 "srt": ust_srt.name, "json": ust_json.name,
-                "sure_sn": round(time.time() - t_all, 1)}, [list(x) for x in ust]
+                "sure_sn": round(time.time() - t_all, 1)}
+        if ust_end_clamps:
+            ust_stats["writer_end_clamps"] = {
+                "time_basis": "frame_index / reported FPS; approximate; source PTS not preserved",
+                "cues": ust_end_clamps}
+        return ust_stats, [list(x) for x in ust]
 
     # --- Düzeltme 1c: oto-eşik kendini iyileştirme (BİR KEZ) ---
     # Wano tur 2 (05.10.2026) tetiği: ort. conf < 0.55 VEYA low-conf oranı
@@ -4382,13 +4460,13 @@ def main():
                     "low_oran": round(low_oran, 3),
                     "ornek_sn": round(ornek_sn, 1),
                     "tam_sn": round(tam_sn, 1)})
-                t_esik = time.time()
+                t_esik = time.monotonic()
                 esik_kayit["tam_gecis_yapildi"] = False
                 # referans (eski esik) ornegi: eldeki `merged` zaten tam
                 # gecisin ciktisi; yalniz ilk penceredeki bloklar alinir.
                 orn_f = ornek_sn * fps
                 m0_ornek = [r for r in merged if r[0] < orn_f]
-                m2_ornek, _mr, _mv, _s, _v, _tk, _tkl, _fd, _cb, _ck = \
+                m2_ornek, _mr, _mv, _s, _v, _tk, _tkl, _fd, _cb, _ck, _ev = \
                     _extract(cfg2, limit_s=ornek_sn)
                 s0o, s1o = _score(m0_ornek), _score(m2_ornek)
                 esik_kayit.update({
@@ -4405,10 +4483,10 @@ def main():
                     note(f"[auto] esik yeniden denemesi REDDEDILDI "
                          f"(ORNEK {ornek_sn:.0f} sn): {esik_anahtari}={yeni} "
                          f"skor {s0o:.1f} -> {s1o:.1f}; tam gecis "
-                         f"YAPILMADI ({time.time() - t_esik:.0f} sn)")
+                         f"YAPILMADI ({time.monotonic() - t_esik:.0f} sn)")
                 else:
                     # Ornek kazanci gosterdi -> simdi tam gecise harcanir.
-                    m2, mr2, mv2, s2, v2, tk2, tkl2, fd2, cb2, ck2 = \
+                    m2, mr2, mv2, s2, v2, tk2, tkl2, fd2, cb2, ck2, ev2 = \
                         _extract(cfg2)
                     esik_kayit["tam_gecis_yapildi"] = True
                     s0, s1_ = _score(merged), _score(m2)
@@ -4421,6 +4499,7 @@ def main():
                         scanned, second_votes, second_takas = s2, v2, tk2
                         takas_kayit, fade_n = tkl2, fd2
                         cjk_blok, cjk_kayit = cb2, ck2
+                        main_review_evidence = ev2
                         cfg[esik_anahtari] = yeni
                         esik_denemesi = yeni
                         esik_kayit.update({"karar": "kabul",
@@ -4439,7 +4518,7 @@ def main():
                              f"(skor {s0:.1f} -> {s1_:.1f}; {len(m2)} blok, "
                              f"{sum(1 for r in m2 if r[3] < args.conf_thr)} "
                              f"dusuk guven)")
-                esik_kayit["sure_s"] = round(time.time() - t_esik, 1)
+                esik_kayit["sure_s"] = round(time.monotonic() - t_esik, 1)
 
     # --- Low-conf kurtarma turu (06.10.2026; --no-kurtarma kapatır) ---------
     # YERİ ÖNEMLİ (iki neden):
@@ -4466,7 +4545,7 @@ def main():
     kurtarma_kayit = []                # <ad>.kurtarma-gunlugu.json gövdesi
     kurtarma_havuzu = list(merged) + list(micro_moved)
     if args.kurtarma and kurtarma_havuzu:
-        t_k = time.time()
+        t_k = time.monotonic()
         # ikinci motor: _read_chunk'ta kurulmamış olabilir (tüm low-conf
         # segmentler boş metin ürettiyse); burada tembel kurulur, yoksa (c)
         # atlanır — (a)/(b) ana okuyucuyla yine de denenir.
@@ -4564,7 +4643,7 @@ def main():
                      f"{eski_metin[:40]!r} -> {y_metin[:40]!r}")
             else:
                 kurtarma_bilgi["degismeyen"] += 1
-        kurtarma_bilgi["sure_sn"] = round(time.time() - t_k, 1)
+        kurtarma_bilgi["sure_sn"] = round(time.monotonic() - t_k, 1)
         if kurtarma_bilgi["denenen"]:
             note(f"[kurtarma] tamam: {kurtarma_bilgi['denenen']} denenen, "
                  f"{kurtarma_bilgi['kurtarilan']} kurtarilan, "
@@ -4578,7 +4657,7 @@ def main():
     ana, gurultu = _split_noise(merged, fps, ayir=args.ayir_gurultu,
                                 sozluk=sozluk, istatistik=ekran_ist)
     # --- inceleme turu 5: SFX çöp profili (eşiğin genişletmesi) ---
-    # Ölçüm (_rev-RAPOR.md (b) BOCCHI): "V;+ 4+ @ R k7" gibi SFX çöpü
+    # Ölçüm (arsiv/11-deneyler/_rev-RAPOR.md (b) BOCCHI): "V;+ 4+ @ R k7" gibi SFX çöpü
     # mevcut profili (conf<0.45 ∧ dur<0.6) kaçırabiliyor. Genişletme:
     # harf oranı < SFX_HARF ∧ süre < SFX_DUR ∧ komşu metin bağı yok.
     # Ön ölçüm (eski ana SRT'ler): BLEND-S 1 aday (22:04 çöp bloğu),
@@ -4703,7 +4782,7 @@ def main():
                          "tasinan": len(_jn_tasan), "bloklar": _jn_bilgi}
 
     # --- inceleme turu 2: mikro-fragman geri birleştirme ---------------
-    # Ölçüm (_rev-RAPOR.md (b) BOCCHI): gerçek diyalog "Kes şunu!"
+    # Ölçüm (arsiv/11-deneyler/_rev-RAPOR.md (b) BOCCHI): gerçek diyalog "Kes şunu!"
     # (12:08.4-12:09.3) _ekran'da 0.125 sn'lik kırıntılarda kalmıştı.
     # Aday havuz: micro_moved + gurultu (tekrar ve jenerik ile taşınanlar
     # — kullanıcı beyanı/aday-tarama çıktısı — DÖNMEZ). Uygun kırıntılar
@@ -4750,6 +4829,8 @@ def main():
             note("[!] Bu videoda hardsub bulunamadi olabilir "
                  "(logo/poster gurultusu). Yan dosyada .vtt var mi kontrol et.")
 
+    artifact_generation_started = time.monotonic()
+
     # --- Task 2: ust bant ikinci gecisi ANA SRT'den ONCE calisir ---
     # Varsayilan davranis BITBIT AYNIDIR (bayrak yoksa ust_pass hic cagrilmaz,
     # ana SRT bayraksiz kosuyla ayni kalir). `--ust-ana` verildiginde ust
@@ -4758,11 +4839,19 @@ def main():
     # Kullanici bu bayragi vererek "bu yapimda diyalog ustte de ciziliyor"
     # DEMEDIR; arac tahmin etmez. Hicbir blok SILINMEZ.
     ust_bant = None
+    review_regions = None
     if args.ust_bant or args.ust_ana:
+        upper_band_started = time.monotonic()
         ust_bant, _ust_bloklar = _ust_pass()
+        upper_band_seconds = time.monotonic() - upper_band_started
         if args.ust_ana:
-            ana = sorted(ana + [list(x) for x in _ust_bloklar],
-                         key=lambda r: r[0])
+            # Keep the independently known OCR pass for each final cue. The
+            # stable sort preserves the existing main-before-upper tie order.
+            tagged = [(r, "main_band") for r in ana]
+            tagged.extend((list(x), "upper_band") for x in _ust_bloklar)
+            tagged.sort(key=lambda item: item[0][0])
+            ana = [r for r, _region in tagged]
+            review_regions = [region for _r, region in tagged]
             note(f"[ust-ana] ust bandin {len(_ust_bloklar)} "
                  f"blogu ANA SRT'ye eklendi (siniflandirma yapilmadi; "
                  f"hicbir blok silinmedi)")
@@ -4804,26 +4893,20 @@ def main():
 
     # --- SRT yaz ---
     out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w", encoding="utf-8") as f:
-        for i, (a, b, text, conf) in enumerate(ana, 1):
-            start = frame_time(a)
-            end = frame_time(b + 1)
-            if i < len(ana):
-                end = min(end, frame_time(ana[i][0]))
-            f.write(f"{i}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{text}\n\n")
+    srt_write_started = time.monotonic()
+    main_srt_text, main_end_clamps = \
+        render_srt_cues_with_timing_diagnostics(ana, frame_time)
+    out.write_text(main_srt_text, encoding="utf-8")
     # F6: _ekran.srt HER ZAMAN yazilir. Eskiden yalnizca ekran_bloklari
     # doluysa dosya dokunulmazdi; 0 blok ayrilan bir kosuda bir onceki
     # kosunun _ekran.srt'i yeni bir dosya adiyla ("bu kosunun ciktisi")
     # hayatta kaliyordu. Artik dosya her kosuda yeniden yazilir; 0 blok
     # ayrilmissa BOS (0 bayt) birakilir -> bayat icerik taklit edilemez.
     ekran_path = out.with_name(out.stem + "_ekran.srt")
-    with ekran_path.open("w", encoding="utf-8") as f:
-        for i, (a, b, text, conf) in enumerate(ekran_bloklari, 1):
-            start = frame_time(a)
-            end = frame_time(b + 1)
-            if i < len(ekran_bloklari):
-                end = min(end, frame_time(ekran_bloklari[i][0]))
-            f.write(f"{i}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{text}\n\n")
+    screen_srt_text, screen_end_clamps = \
+        render_srt_cues_with_timing_diagnostics(ekran_bloklari, frame_time)
+    ekran_path.write_text(screen_srt_text, encoding="utf-8")
+    srt_write_seconds = time.monotonic() - srt_write_started
     if ekran_bloklari:
         print(f"    gurultu ayrimi: {len(ekran_bloklari)} blok -> "
               f"{ekran_path.name}")
@@ -4972,9 +5055,8 @@ def main():
             canvas[:h] = img
             label = f"{etiket}: {text!r} (conf={conf:.2f}, " \
                     f"t={frame_time(mid):.2f}s)"
-            cv2.putText(canvas, label[:160], (10, h + 45),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255),
-                        1, cv2.LINE_AA)
+            draw_qa_label(canvas, label[:160], (10, h + 45),
+                          (255, 255, 255), cv2)
             cv2.imwrite(str(out_png), canvas)
 
         n = min(args.qa, len(ana))
@@ -5013,6 +5095,8 @@ def main():
                             "TEKRAR-FILIGRAN(_ekran.srt)")
                 print(f"    QA tekrar/filigran bloklari: {te_dir}/ "
                       f"({len(te_bloklar)} adet)")
+
+    artifact_generation_seconds = time.monotonic() - artifact_generation_started
 
     # "video" 05.10.2026 tur 2'den beri kimlik SÖZLÜĞÜDÜR:
     # {ad, mtime, boyut, sha1_ilk_1MB} (E02 vakasının kalıcı önlemi;
@@ -5054,6 +5138,18 @@ def main():
              "second_engine_takas": second_takas,
              "second_engine_cuda": _ORT["durum"],
              "onnxruntime": _ORT["surum"]}
+    # Bind optional raw writer-end diagnostics to the exact main SRT bytes
+    # only when a review pack is requested. This hash stays local in stats.
+    if args.review_pack:
+        stats["main_srt_sha256"] = _sha256_file(out)
+    # Writer clamps do not change SRT timestamps: they only expose cases where
+    # a cue's frame/FPS-derived end was shortened to the next cue's start.
+    # Source PTS is not preserved, so these times remain approximate (VFR risk).
+    if main_end_clamps or screen_end_clamps:
+        stats["writer_end_clamps"] = {
+            "time_basis": "frame_index / reported FPS; approximate; source PTS not preserved",
+            "main": main_end_clamps,
+            "screen": screen_end_clamps}
     # ust_bant YALNIZ --ust-bant verildiğinde eklenir (bayraksız koşunun
     # stats.json'u bit-bit aynı kalmalı).
     if ust_bant is not None:
@@ -5101,6 +5197,137 @@ def main():
     meta_yol.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"    meta: {meta_yol}")
+
+    review_pack_seconds = None
+    review_pack_status = "not_requested"
+    if args.review_pack:
+        review_pack_started = time.monotonic()
+        review_pack_status = "failed"
+        # Lazy import keeps importlib-based legacy tools compatible when they
+        # load this script without adding its directory to sys.path.
+        from review_bundle import build_review_pack
+
+        review_cues = []
+        for i, (a, b, text, conf) in enumerate(ana):
+            start = frame_time(a)
+            end = frame_time(b + 1)
+            if i + 1 < len(ana):
+                end = min(end, frame_time(ana[i + 1][0]))
+            region = review_regions[i] if review_regions else "main_band"
+            evidence = upper_review_evidence if region == "upper_band" \
+                else main_review_evidence
+            exact_frames = [mid for ev_a, ev_b, mid in evidence
+                            if ev_a == a and ev_b == b]
+            frame_index = exact_frames[0] if len(exact_frames) == 1 else None
+            band_y = 0 if region == "upper_band" else cfg["band_y"]
+            band_height = (ust_bant["bolge"][1] if region == "upper_band"
+                           else cfg["band_h"])
+            review_cues.append({
+                "start_ms": int(round(start * 1000)),
+                "end_ms": int(round(end * 1000)),
+                "start_frame": int(a),
+                "end_frame_inclusive": int(b),
+                "text": text,
+                "confidence": round(float(conf), 4),
+                "frame_index": frame_index,
+                "frame_ms": (int(round(frame_time(frame_index) * 1000))
+                             if frame_index is not None else None),
+                "mapping_status": ("exact_original_ocr_segment_needs_visual_confirmation"
+                                   if frame_index is not None
+                                   else "merged_or_ambiguous_source_frame_unavailable"),
+                "source_region": region,
+                "band_y": band_y,
+                "band_height": band_height,
+            })
+        review_metadata = {
+            "tool_version": ARAC_SURUM,
+            "device": str(device),
+            "requested_ocr_mode": args.ocr,
+            "second_engine": second_used,
+            "onnxruntime_version": _ORT.get("surum"),
+            "languages": list(lang_list),
+            "batch": args.batch,
+            "upscale2x": bool(upscale2x),
+            "fps": fps,
+            "limit_seconds": args.limit_seconds or None,
+            "band_y": cfg["band_y"],
+            "band_height": cfg["band_h"],
+            "mask": cfg["mask"],
+            "white_threshold": cfg["white_thr"],
+            "tophat_threshold": cfg["tophat_thr"],
+            "confidence_threshold": args.conf_thr,
+            "postfix_enabled": bool(args.duzelt),
+            "review_frame_reader": "single_opencv_capture_sequential_cues",
+            "frame_timestamp_basis": "frame_index_over_reported_fps; source_pts_not_preserved",
+        }
+        capture = None
+
+        def _review_crop(frame_index, band_y, band_height):
+            nonlocal capture
+            if capture is None:
+                capture = cv2.VideoCapture(str(video))
+                if not capture.isOpened():
+                    capture.release()
+                    capture = None
+                    raise RuntimeError("video_capture_unavailable")
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                raise RuntimeError("representative_frame_unavailable")
+            y0 = max(0, int(band_y))
+            y1 = min(frame.shape[0], y0 + int(band_height))
+            if y1 <= y0:
+                raise RuntimeError("representative_roi_unavailable")
+            return frame[y0:y1, :]
+
+        try:
+            review_dir, review_manifest = build_review_pack(
+                out, review_cues, review_metadata, _review_crop,
+                generation_stats=stats)
+            review_pack_status = "completed"
+            print(f"AI inceleme paketi: {review_dir} "
+                  f"({review_manifest['unique_crop_count']} kırpım / "
+                  f"{review_manifest['cue_count']} cue; yerel, yükleme yok)")
+            print(f"AI inceleme paketi yolu: {review_dir}")
+        except Exception as exc:
+            note(f"[!] AI inceleme paketi oluşturulamadı: {type(exc).__name__}")
+        finally:
+            if capture is not None:
+                capture.release()
+        review_pack_seconds = time.monotonic() - review_pack_started
+
+    # Write final profiling metadata after optional review-pack work so total
+    # elapsed includes it. Stage values intentionally overlap: retry/recovery
+    # occur within the run, and SRT writing is part of artifact generation.
+    stats["timing"] = _run_timing_snapshot(
+        run_started,
+        {
+            "first_extraction": first_extraction_seconds,
+            "threshold_retry": esik_kayit.get("sure_s"),
+            "low_confidence_recovery": (
+                kurtarma_bilgi.get("sure_sn")
+                if kurtarma_bilgi.get("denenen", 0) else None),
+            "artifact_generation": artifact_generation_seconds,
+            "srt_render_and_write": srt_write_seconds,
+            "review_pack": review_pack_seconds,
+            "upper_band_pass": upper_band_seconds,
+        },
+        {
+            "first_extraction": "completed",
+            "threshold_retry": ("completed" if "sure_s" in esik_kayit
+                                else "not_triggered"),
+            "low_confidence_recovery": (
+                "completed" if kurtarma_bilgi.get("denenen", 0)
+                else "disabled" if not args.kurtarma else "no_candidates"),
+            "artifact_generation": "completed",
+            "srt_render_and_write": "completed",
+            "review_pack": review_pack_status,
+            "upper_band_pass": ("completed" if upper_band_seconds is not None
+                                else "not_requested"),
+        },
+    )
+    stats_path = out.with_suffix(".stats.json")
+    _atomic_write_json(stats_path, stats)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-prediction-manifest-v1.schema.json",
+  "title": "Fixed local full-episode OCR prediction manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "records"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "records": {"type": "array", "minItems": 6, "items": {"$ref": "#/$defs/record"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["engine_id", "source_id", "episode_id", "split", "media_sha256", "prediction_srt_path", "prediction_srt_sha256", "model_sha256", "config_sha256", "device", "backend"],
+      "properties": {
+        "engine_id": {"type": "string", "minLength": 1},
+        "source_id": {"type": "string", "minLength": 1},
+        "episode_id": {"type": "string", "minLength": 1},
+        "split": {"enum": ["train", "validation", "test"]},
+        "media_sha256": {"$ref": "#/$defs/sha256"},
+        "prediction_srt_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\:]+$"},
+        "prediction_srt_sha256": {"$ref": "#/$defs/sha256"},
+        "model_sha256": {"$ref": "#/$defs/sha256"},
+        "config_sha256": {"$ref": "#/$defs/sha256"},
+        "device": {"enum": ["gpu", "cpu"]},
+        "backend": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-video-evaluation-templates-draft-v1.schema.json",
+  "title": "Incomplete Phase 5 local evaluation manifest templates",
+  "description": "Draft-only schema. These documents are intentionally rejected by ocr_video_eval.py and cannot establish rights, measurement PASS, or Phase 6 eligibility.",
+  "oneOf": [
+    {"$ref": "#/$defs/timedReferences"},
+    {"$ref": "#/$defs/predictions"}
+  ],
+  "$defs": {
+    "group": {
+      "type": "object",
+      "required": ["source_id", "episode_id", "split"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "episode_id": {"type": "string", "minLength": 1},
+        "split": {"enum": ["train", "validation", "test"]}
+      }
+    },
+    "referenceRecord": {
+      "allOf": [{"$ref": "#/$defs/group"}],
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id", "episode_id", "split", "language", "media_sha256", "reference_srt_path", "reference_srt_sha256", "alignment_review"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "episode_id": {"type": "string", "minLength": 1},
+        "split": {"enum": ["train", "validation", "test"]},
+        "language": {"const": ""},
+        "media_sha256": {"const": ""},
+        "reference_srt_path": {"const": ""},
+        "reference_srt_sha256": {"const": ""},
+        "alignment_review": {"type": "object", "additionalProperties": false,
+          "required": ["status", "reviewer", "reviewed_at", "media_sha256"],
+          "properties": {"status": {"const": "pending"}, "reviewer": {"const": ""},
+            "reviewed_at": {"const": ""}, "media_sha256": {"const": ""}}
+        }
+      }
+    },
+    "predictionRecord": {
+      "type": "object", "additionalProperties": false,
+      "required": ["engine_id", "source_id", "episode_id", "split", "media_sha256", "prediction_srt_path", "prediction_srt_sha256", "model_sha256", "config_sha256", "device", "backend"],
+      "properties": {
+        "engine_id": {"type": "string", "minLength": 1},
+        "source_id": {"type": "string", "minLength": 1},
+        "episode_id": {"type": "string", "minLength": 1},
+        "split": {"enum": ["train", "validation", "test"]},
+        "media_sha256": {"const": ""},
+        "prediction_srt_path": {"const": ""},
+        "prediction_srt_sha256": {"const": ""},
+        "model_sha256": {"const": ""},
+        "config_sha256": {"const": ""},
+        "device": {"const": ""},
+        "backend": {"const": ""}
+      }
+    },
+    "timedReferences": {
+      "type": "object", "additionalProperties": false,
+      "required": ["draft_type", "schema_version", "template_only", "template_status", "records"],
+      "properties": {
+        "draft_type": {"const": "hardsub2srt.timed-reference-manifest"},
+        "schema_version": {"const": "draft-v1"},
+        "template_only": {"const": true},
+        "template_status": {"const": "INCOMPLETE_NOT_FOR_EVALUATION"},
+        "records": {"type": "array", "minItems": 3, "items": {"$ref": "#/$defs/referenceRecord"}}
+      }
+    },
+    "predictions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["draft_type", "schema_version", "template_only", "template_status", "baseline_id", "candidate_id", "records"],
+      "properties": {
+        "draft_type": {"const": "hardsub2srt.prediction-manifest"},
+        "schema_version": {"const": "draft-v1"},
+        "template_only": {"const": true},
+        "template_status": {"const": "INCOMPLETE_NOT_FOR_EVALUATION"},
+        "baseline_id": {"type": "string", "minLength": 1},
+        "candidate_id": {"type": "string", "minLength": 1},
+        "records": {"type": "array", "minItems": 6, "items": {"$ref": "#/$defs/predictionRecord"}}
+      }
+    }
+  }
+}

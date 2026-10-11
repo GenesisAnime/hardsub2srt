@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-experiment-metadata-v1.schema.json",
+  "title": "Local OCR experiment dataset metadata v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "records"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cue_id", "source_id", "episode_id", "license"],
+        "properties": {
+          "cue_id": {"type": "string", "minLength": 1},
+          "source_id": {"type": "string", "minLength": 1},
+          "episode_id": {"type": "string", "minLength": 1},
+          "license": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status", "identifier", "evidence_path", "evidence_sha256", "human_review"],
+            "properties": {
+              "status": {"enum": ["public_domain", "permissive_license", "permission_granted", "user_owned"]},
+              "identifier": {"type": "string", "minLength": 1},
+              "evidence_path": {"type": "string", "minLength": 1, "description": "Local relative evidence file; never an absolute path."},
+              "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "human_review": {
+                "type": "object", "additionalProperties": false,
+                "required": ["status", "reviewer", "reviewed_at"],
+                "properties": {
+                  "status": {"enum": ["pending", "reviewed"]},
+                  "reviewer": {"type": ["string", "null"]},
+                  "reviewed_at": {"type": ["string", "null"]}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "blend-s-ep01-240",
+      "title": "BLEND-S S01E01 ilk 240 saniye",
+      "video_glob": "S01E01 - İlk kez süper sadist*.mp4",
+      "reference_vtt": "_gt2-blends.vtt",
+      "window_seconds": 240,
+      "lang": "tr",
+      "ocr_args": [
+        "--band-y", "820",
+        "--band-h", "260",
+        "--mask", "thr",
+        "--white-thr", "240"
+      ],
+      "baseline": {
+        "corpus_cer": 0.014925373134328358,
+        "aligned_pairs": 6,
+        "gt_chars": 201,
+        "source": "regresyon/README-kisa.md: documented BLEND-S wf-5/bf-2 baseline"
+      },
+      "gate": {
+        "max_corpus_cer": 0.035,
+        "min_aligned_pairs": 6,
+        "min_gt_chars": 201,
+        "min_reference_cues": 8,
+        "source": "regresyon/README-kisa.md: documented BLEND-S wf-5/bf-2 acceptance limit, <= 3.5% corpus CER"
+      }
+    }
+  ],
+  "exclusions": {
+    "86tr": "The available _mx-gt-86.vtt is not time-compatible with the current 86tr output; measured by vtt-qa at 1.0311 corpus CER with a timing compatibility warning. It is not used as a gate.",
+    "Wano": "No trusted, time-compatible VTT reference is present for the measured Wano cases."
+  }
+}
