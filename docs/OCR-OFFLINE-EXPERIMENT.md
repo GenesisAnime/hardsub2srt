@@ -6,6 +6,33 @@
 
 Phase 2 dışa aktarımı yalnızca geçerli `accepted`/`corrected` kararlarını hedefler. Araç, export klasörünün doğrudan üst dizinindeki `.review-pack` ile `manifest.json`, SRT ve `review-events.jsonl` zincirini tekrar doğrular; event'in aktif son karar olduğunu, event/cue/hash/metin/zaman/confidence eşleşmelerini kontrol eder. Zincir doğrulanamazsa çıktıdaki provenance `self_attested` olur ve `experiment_run_blocked` true kalır. Başarılı yerel bağlantı da hesabın/kişinin kimliğini kanıtlamaz; yerel UI journal'ına bağlı olduğunu gösterir. AI önerileri export'a alınmaz.
 
+### Birden fazla review-pack export'unu birleştirme
+
+UI her `.review-pack` için ayrı bir verified export üretir. Phase 5 split'i en az üç bağımsız source+episode grubu istediği için bu export'ları satır/crop kopyalayarak elle birleştirmeyin. `ocr_dataset_merge.py` doğrulanmış export'ları, her cue'yu özgün export'a ve etkin review event'ine bağlayan `source-lineage-v1.json` ile bir araya getirir. Birleşik klasör yalnız export manifest satırlarını ve doğrulanmış crop baytlarını kopyalar; kaynak review pack/export'larına yazmaz.
+
+Ortak kök mevcut ve yerel olmalı; kaynak review-pack'ler ile birleşik export bunun altında bulunur. Kaynak yolları ortak köke göreli verilir. Çıktı da ortak kökte yeni bir alt klasördür:
+
+```powershell
+py -3 ocr_dataset_merge.py `
+  --root "C:\LOCAL-ONLY-PLACEHOLDER\local-review-root" `
+  --source-export "run-01\synthetic.review-pack\verified-ocr-dataset-PLACEHOLDER" `
+  --source-export "run-02\synthetic.review-pack\verified-ocr-dataset-PLACEHOLDER" `
+  --source-export "run-03\synthetic.review-pack\verified-ocr-dataset-PLACEHOLDER" `
+  --out-name "verified-ocr-dataset-composite-SYNTHETIC"
+```
+
+Yollar sentetik örnektir. Her kaynak pack'in tüm cue'ları metadata'da tek gerçek source+episode grubuna, farklı pack'ler ise farklı gerçek gruplara bağlanmalıdır. Bir cue collision'ı, yinelenen pack, kaynak export hash'i, etkin karar veya crop uyuşmazlığı, kök dışı/reparse path ya da toplam boyut sınırında merge durur. `source-lineage-v1.json` source export manifestini ve parent review manifesti, SRT ve event journal hash'lerini bağlar; validator bunları her hazırlık/değerlendirme çağrısında yeniden kontrol eder. Metadata, hak kanıtı ve insan hak incelemesi ayrıca gereklidir; merge bunları üretmez veya onaylamaz.
+
+Birleşik export için boş metadata şablonunu CLI ile oluşturun; review UI şablon düğmesi tek açık review-pack içindeki export'a bağlıdır:
+
+```powershell
+py -3 ocr_dataset_metadata.py `
+  "C:\LOCAL-ONLY-PLACEHOLDER\local-review-root\verified-ocr-dataset-composite-SYNTHETIC" `
+  --out "C:\LOCAL-ONLY-PLACEHOLDER\local-review-root\dataset-metadata.template.json"
+```
+
+Şablondaki kimlik, lisans ve hak incelemesi alanları boş/pending'dir. Bunları gerçek materyal ve incelenmiş kanıta göre doldurmak kullanıcı sorumluluğudur; şablon, evidence file ya da `human_review` işareti hukuki kullanım hakkı vermez.
+
 ## Metadata girdisi
 
 ### Boş metadata şablonu oluşturma
@@ -161,7 +188,7 @@ dosya yazılmaz. Bu yardımcı doğrulamayı gevşetmez.
 py -3 ocr_video_eval_templates.py "D:\yerel\verified-ocr-dataset-..." `
   --metadata "D:\yerel\dataset-metadata.json" `
   --experiment "D:\yerel\experiment-...\experiment-report.json" `
-  --out-parent "D:\yerel\phase5-drafts" `
+  --out-parent "D:\phase5-drafts" `
   --protect-dir "D:\yerel\future-references" `
   --protect-dir "D:\yerel\future-predictions"
 ```
@@ -334,6 +361,7 @@ Rapor çalıştırılmadan önce `--max-cer-regression` sabitlenir. Aday, dondur
 - source/episode grup bilgisi veya hash'i eşleşen lisans kanıt dosyası yoksa split üretme. Kanıt varlığı hukuki uygunluk sayılmaz; insan rights review tamamlanmamışsa deney çalıştırma.
 - Parent review-pack zinciri doğrulanamıyorsa provenance `self_attested` yazılır ve deney çalıştırma kapısı kapalı kalır.
 - Üçten az bağımsız grup varsa: train/validation/test kurma; değerlendirmeyi yetersiz veri olarak durdur.
+- Her kaynak review-pack birden fazla source+episode grubu olarak işaretlenmişse veya iki pack aynı grubu iddia ediyorsa metadata lineage'i reddedilir.
 - Trusted, zamanla uyumlu source-language reference yoksa: OCR accuracy, model gain veya regression pass raporlama.
 - Baseline/aday engine, config, device/backend, metrik normalization/alignment veya predeclared gate eksikse: sonuç üretimini reddet.
 - Bu teslimatta model eğitimi, model ağırlığı değişimi ve kullanıcı videosu/corpus işlemi **yapılmadı**. Yeterli veri, lisans ve engine-specific reference gelene kadar bunlar bloklu kalır.

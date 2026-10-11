@@ -65,12 +65,30 @@ def _safe_crop(root: Path, raw: object) -> Path:
     rel = PurePosixPath(raw)
     if rel.is_absolute() or ".." in rel.parts or "\\" in raw:
         raise InputError(f"Güvensiz crop_path: {raw!r}")
-    path = root.joinpath(*rel.parts).resolve()
+    root = root.resolve(strict=True)
+    candidate = root.joinpath(*rel.parts)
+    _reject_reparse_path(candidate, root)
+    path = candidate.resolve(strict=True)
     try:
         path.relative_to(root.resolve())
     except ValueError as exc:
         raise InputError(f"crop_path veri kümesi dışına çıkıyor: {raw!r}") from exc
     return path
+
+
+def _reject_reparse_components(path: Path) -> None:
+    import os
+    import stat
+    absolute = Path(os.path.abspath(path))
+    for component in list(reversed(absolute.parents)) + [absolute]:
+        try:
+            info = component.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise InputError(f"Yol bileşeni denetlenemedi: {component.name}") from exc
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+            raise InputError(f"Sembolik bağlantı/junction kabul edilmez: {component.name}")
 
 
 def _decode_image(path: Path, data: bytes) -> tuple[int, int]:
@@ -132,7 +150,10 @@ def _jpeg_dimensions(data: bytes, label: str) -> tuple[int, int]:
 
 
 def validate_dataset(root: Path) -> list[dict]:
+    _reject_reparse_components(root)
+    root = root.expanduser().resolve(strict=True)
     manifest = root / "manifest.jsonl"
+    _reject_reparse_path(manifest, root)
     if not root.is_dir() or not manifest.is_file():
         raise InputError("Girdi, manifest.jsonl içeren verified OCR veri kümesi klasörü olmalı")
     manifest_bytes = _read_capped(manifest, 64 * 1024 * 1024, "manifest.jsonl")
@@ -191,11 +212,17 @@ def validate_dataset(root: Path) -> list[dict]:
 
 
 def validate_metadata(path: Path, rows: list[dict]) -> dict[str, dict]:
+    # Metadata is user-selected input too; reject a link/junction before the
+    # initial stat or JSON read follows it.
+    path = path.expanduser()
+    _reject_reparse_components(path)
     try:
+        path = path.resolve(strict=True)
         if path.stat().st_size > MAX_METADATA_BYTES:
             raise InputError("Metadata 16 MiB sınırını aşıyor")
     except OSError as exc:
         raise InputError("Metadata dosyası okunamıyor") from exc
+    metadata_root = path.parent.resolve(strict=True)
     doc = _json(path)
     if not isinstance(doc, dict) or set(doc) != {"schema_version", "records"} or doc.get("schema_version") != 1:
         raise InputError("Metadata kök şeması schema_version=1 ve records olmalı")
@@ -227,9 +254,11 @@ def validate_metadata(path: Path, rows: list[dict]) -> dict[str, dict]:
         if (evidence_rel.is_absolute() or ".." in evidence_rel.parts or "\\" in lic["evidence_path"]
                 or re.match(r"^[A-Za-z]:", lic["evidence_path"])):
             raise InputError(f"{cue}: evidence_path mutlak/kaçışlı yol olamaz")
-        evidence = (path.resolve().parent.joinpath(*evidence_rel.parts)).resolve()
+        evidence_candidate = metadata_root.joinpath(*evidence_rel.parts)
+        _reject_reparse_existing_path(evidence_candidate, metadata_root)
         try:
-            evidence.relative_to(path.resolve().parent)
+            evidence = evidence_candidate.resolve(strict=True)
+            evidence.relative_to(metadata_root)
             evidence_key = str(evidence)
             if evidence_key in evidence_cache:
                 evidence_digest, evidence_size = evidence_cache[evidence_key]
@@ -281,43 +310,341 @@ def _group_key(record: dict) -> str:
 
 
 def verify_phase2_provenance(dataset: Path, rows: list[dict]) -> dict:
-    """Re-link export rows to the parent review pack and its active review journal."""
+    """Re-link an export to one or more parent packs and their active journals."""
     try:
-        import ocr_review
         if not dataset.name.startswith("verified-ocr-dataset-"):
             raise InputError("dataset klasör adı verified-ocr-dataset-* değil")
-        parent = dataset.resolve().parent
-        info = ocr_review._validated_pack(parent)
-        active, warnings = ocr_review._active(info, force=True)
-        if warnings:
-            raise InputError("review-events.jsonl contains invalid, stale, or excluded records")
-        cues = {cue["cue_id"]: cue for cue in info["cues"]}
-        if not {row["cue_id"] for row in rows}.issubset(cues):
-            raise InputError("export contains a cue absent from its parent manifest")
-        for row in rows:
-            cue = cues[row["cue_id"]]
-            event = active.get(row["cue_id"])
-            if (not event or event.get("status") not in ("accepted", "corrected")
-                    or event.get("event_id") != row["review_event_id"]
-                    or event.get("verified_source_text") != row["source_text_verified"]
-                    or event.get("crop_sha256_local") != row["crop_sha256_local"]
-                    or cue.get("crop_sha256_local") != row["crop_sha256_local"]
-                    or not cue.get("crop_valid")
-                    or cue.get("start_ms") != row["start_ms"]
-                    or cue.get("end_ms") != row["end_ms"]
-                    or cue.get("ocr_confidence") != row.get("ocr_confidence")):
-                raise InputError("export row does not match its active parent review decision")
-        event_bytes = info["events_path"].read_bytes()
+        # Inspect every original path component before resolve/stat-style
+        # probes can follow a symlink, junction, or other Windows reparse point.
+        _reject_reparse_components(dataset)
+        dataset = dataset.resolve(strict=True)
+        lineage_path = dataset / "source-lineage-v1.json"
+        _reject_reparse_existing_path(lineage_path, dataset)
+        try:
+            lineage_info = lineage_path.lstat()
+        except FileNotFoundError:
+            lineage_info = None
+        if lineage_info is not None:
+            return _verify_composite_provenance(dataset, rows, lineage_path)
+        member = _verify_single_pack_export(dataset, rows)
         return {"status": "verified_against_parent_review_pack",
-                "review_manifest_sha256": info["manifest_sha256"],
-                "review_srt_sha256": info["srt_sha256"],
-                "review_events_sha256": _sha256(event_bytes),
+                "mode": "single_pack", "members": [{
+                    "source_export_manifest_sha256": member["source_export_manifest_sha256"],
+                    "review_manifest_sha256": member["review_manifest_sha256"],
+                    "review_srt_sha256": member["review_srt_sha256"],
+                    "review_events_sha256": member["review_events_sha256"],
+                    "active_rows_verified": len(member["cue_ids"]),
+                    "cue_ids": member["cue_ids"],
+                }],
                 "active_rows_verified": len(rows)}
     except Exception as exc:
         # A copied/export-only dataset is usable as a self-attested snapshot, but
         # must not pass the run gate without a verifiable source decision chain.
         return {"status": "self_attested", "reason": str(exc)[:240],
                 "active_rows_verified": 0}
+
+
+def _verify_single_pack_export(dataset: Path, rows: list[dict]) -> dict:
+    """Validate one immutable Phase 2 export and its direct parent review pack."""
+    import ocr_review
+    _reject_reparse_components(dataset)
+    dataset = dataset.resolve(strict=True)
+    pack = dataset.parent.resolve(strict=True)
+    if not dataset.is_dir() or not pack.is_dir() or not pack.name.endswith(".review-pack"):
+        raise InputError("Phase 2 export must be directly inside its .review-pack")
+    _reject_reparse_components(pack)
+    # _validated_pack resolves its manifest, SRT and crops internally. Inspect
+    # those lexical entries first so a link/junction is rejected before that
+    # helper follows it. Manifest itself is safe to parse only after its entry
+    # has passed the no-follow check.
+    _reject_reparse_existing_path(pack / "manifest.json", pack)
+    _reject_reparse_existing_path(pack / "review-events.jsonl", pack)
+    import json
+    try:
+        manifest = json.loads(ocr_review._manifest_bytes(pack).decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, ocr_review.ReviewError) as exc:
+        raise InputError("Review-pack manifest could not be safely inspected") from exc
+    if type(manifest) is not dict:
+        raise InputError("Review-pack manifest is invalid")
+    srt_name = manifest.get("srt_filename")
+    if isinstance(srt_name, str):
+        _reject_reparse_existing_path(pack / srt_name, pack)
+    for cue in manifest.get("cues", []):
+        crop_rel = cue.get("crop_path") if isinstance(cue, dict) else None
+        if isinstance(crop_rel, str):
+            rel = PurePosixPath(crop_rel)
+            if not rel.is_absolute() and ".." not in rel.parts and "\\" not in crop_rel:
+                _reject_reparse_existing_path(pack.joinpath(*rel.parts), pack)
+    info = ocr_review._validated_pack(pack)
+    protected_files = [pack / "manifest.json", info["events_path"]]
+    srt_name = info["manifest"].get("srt_filename")
+    if isinstance(srt_name, str):
+        protected_files.append(pack / srt_name)
+    for cue in info["manifest"].get("cues", []):
+        crop_rel = cue.get("crop_path") if isinstance(cue, dict) else None
+        if isinstance(crop_rel, str):
+            rel = PurePosixPath(crop_rel)
+            if not rel.is_absolute() and ".." not in rel.parts and "\\" not in crop_rel:
+                protected_files.append(pack.joinpath(*rel.parts))
+    for protected in protected_files:
+        # This includes missing entries safely and detects dangling symlinks;
+        # .exists() would follow a link before the rejection could run.
+        _reject_reparse_existing_path(protected, pack)
+    active, warnings = ocr_review._active(info, force=True)
+    if warnings:
+        raise InputError("review-events.jsonl contains invalid, stale, or excluded records")
+    cues = {cue["cue_id"]: cue for cue in info["cues"]}
+    if not {row["cue_id"] for row in rows}.issubset(cues):
+        raise InputError("export contains a cue absent from its parent manifest")
+    for row in rows:
+        cue = cues[row["cue_id"]]
+        event = active.get(row["cue_id"])
+        if (not event or event.get("status") not in ("accepted", "corrected")
+                or event.get("event_id") != row["review_event_id"]
+                or event.get("verified_source_text") != row["source_text_verified"]
+                or event.get("crop_sha256_local") != row["crop_sha256_local"]
+                or cue.get("crop_sha256_local") != row["crop_sha256_local"]
+                or not cue.get("crop_valid")
+                or cue.get("start_ms") != row["start_ms"]
+                or cue.get("end_ms") != row["end_ms"]
+                or cue.get("ocr_confidence") != row.get("ocr_confidence")):
+            raise InputError("export row does not match its active parent review decision")
+    event_bytes = ocr_review._read_bounded(
+        info["events_path"], ocr_review.MAX_EVENTS_BYTES, "review-events.jsonl")
+    export_manifest = _read_capped(dataset / "manifest.jsonl", 64 * 1024 * 1024,
+                                   "source export manifest")
+    return {"source_pack_path": pack, "source_export_path": dataset,
+            "source_export_manifest_sha256": _sha256(export_manifest),
+            "review_manifest_sha256": info["manifest_sha256"],
+            "review_srt_sha256": info["srt_sha256"],
+            "review_events_sha256": _sha256(event_bytes),
+            "cue_ids": sorted(row["cue_id"] for row in rows)}
+
+
+def _resolve_root_relative(root: Path, value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise InputError(f"{label}: root-relative POSIX path required")
+    rel = PurePosixPath(value)
+    if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+        raise InputError(f"{label}: unsafe root-relative path")
+    path = root.joinpath(*rel.parts)
+    _reject_reparse_path(path, root)
+    resolved = path.resolve(strict=True)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise InputError(f"{label}: path escapes the composite root") from exc
+    return resolved
+
+
+def _reject_reparse_path(path: Path, root: Path) -> None:
+    """Reject symlinks/junctions along a path beneath the composite root."""
+    import os
+    import stat
+    try:
+        relative = path.absolute().relative_to(root.absolute())
+    except ValueError as exc:
+        raise InputError("Path is outside the composite root") from exc
+    current = root.absolute()
+    candidates = [current]
+    for part in relative.parts:
+        current = current / part
+        candidates.append(current)
+    for candidate in candidates:
+        try:
+            info = candidate.lstat()
+        except OSError as exc:
+            raise InputError(f"Path component unavailable: {candidate.name}") from exc
+        attrs = getattr(info, "st_file_attributes", 0)
+        if stat.S_ISLNK(info.st_mode) or attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+            raise InputError(f"Path contains a symlink or reparse point: {candidate.name}")
+
+
+def _reject_reparse_existing_path(path: Path, root: Path) -> None:
+    """Reject reparse points on an in-root path without following the final entry.
+
+    Unlike _reject_reparse_path, absent components are allowed. This is useful
+    for optional protected files while still detecting dangling links with
+    lstat rather than Path.exists().
+    """
+    import os
+    import stat
+    try:
+        relative = Path(os.path.abspath(path)).relative_to(Path(os.path.abspath(root)))
+    except ValueError as exc:
+        raise InputError("Path is outside the protected root") from exc
+    current = Path(os.path.abspath(root))
+    for part in ("", *relative.parts):
+        if part:
+            current = current / part
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise InputError(f"Path component unavailable: {current.name}") from exc
+        attrs = getattr(info, "st_file_attributes", 0)
+        if stat.S_ISLNK(info.st_mode) or attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+            raise InputError(f"Path contains a symlink or reparse point: {current.name}")
+
+
+def _verify_composite_provenance(dataset: Path, rows: list[dict], lineage_path: Path) -> dict:
+    import ocr_review
+    root = dataset.parent.resolve(strict=True)
+    if dataset.resolve().parent != root:
+        raise InputError("Composite dataset must be a direct child of its local root")
+    _reject_reparse_path(dataset, root)
+    _reject_reparse_path(lineage_path, root)
+    lineage_bytes = _read_capped(lineage_path, 16 * 1024 * 1024,
+                                 "source-lineage-v1.json")
+    try:
+        lineage = json.loads(lineage_bytes.decode("utf-8"), object_pairs_hook=_unique_json_pairs)
+    except (UnicodeError, json.JSONDecodeError, InputError) as exc:
+        raise InputError("source-lineage-v1.json is invalid JSON") from exc
+    if (type(lineage) is not dict or set(lineage) != {"schema_version", "kind", "members"}
+            or type(lineage.get("schema_version")) is not int or lineage["schema_version"] != 1
+            or lineage.get("kind") != "phase2-multi-pack-verified-export"
+            or type(lineage.get("members")) is not list
+            or not 3 <= len(lineage["members"]) <= 1000):
+        raise InputError("source-lineage-v1.json schema/member count invalid")
+    composite_by_id = {row["cue_id"]: row for row in rows}
+    if len(composite_by_id) != len(rows):
+        raise InputError("Composite dataset has cue_id collisions")
+    seen_cues, seen_exports, seen_packs = set(), set(), set()
+    verified_members = []
+    source_crop_cache = {}
+    for member in lineage["members"]:
+        required = {"source_pack_path", "source_export_path", "source_export_manifest_sha256",
+                    "review_manifest_sha256", "review_srt_sha256", "review_events_sha256", "cue_ids"}
+        if (type(member) is not dict or set(member) != required
+                or type(member.get("cue_ids")) is not list or not member["cue_ids"]
+                or any(type(cue_id) is not str for cue_id in member["cue_ids"])):
+            raise InputError("Malformed composite source member")
+        pack = _resolve_root_relative(root, member["source_pack_path"], "source_pack_path")
+        export = _resolve_root_relative(root, member["source_export_path"], "source_export_path")
+        if (pack == root or not pack.is_relative_to(root)
+                or pack.is_relative_to(dataset)
+                or not pack.name.endswith(".review-pack") or export.parent != pack
+                or not export.name.startswith("verified-ocr-dataset-")
+                or not pack.is_dir() or not export.is_dir()):
+            raise InputError("Source export must be directly inside its .review-pack")
+        pack_key, export_key = str(pack), str(export)
+        if pack_key in seen_packs or export_key in seen_exports:
+            raise InputError("Duplicate source review pack/export in composite lineage")
+        seen_packs.add(pack_key)
+        seen_exports.add(export_key)
+        _reject_reparse_path(export / "manifest.jsonl", pack)
+        source_rows = validate_dataset(export)
+        source_manifest = _read_capped(export / "manifest.jsonl", 64 * 1024 * 1024,
+                                       "source export manifest")
+        if _sha256(source_manifest) != member["source_export_manifest_sha256"]:
+            raise InputError("Source export manifest hash changed")
+        source_info = _verify_single_pack_export(export, source_rows)
+        for hash_name in ("review_manifest_sha256", "review_srt_sha256", "review_events_sha256"):
+            if source_info[hash_name] != member[hash_name]:
+                raise InputError(f"Source review-pack {hash_name} changed")
+        source_ids = {row["cue_id"] for row in source_rows}
+        member_ids = set(member["cue_ids"])
+        if len(member_ids) != len(member["cue_ids"]) or member_ids != source_ids:
+            raise InputError("Lineage cue list does not exactly match source export")
+        for source_row in source_rows:
+            cue_id = source_row["cue_id"]
+            if cue_id in seen_cues:
+                raise InputError("Duplicate cue_id across source exports")
+            seen_cues.add(cue_id)
+            composite_row = composite_by_id.get(cue_id)
+            if composite_row is None:
+                raise InputError("Composite row missing its source export cue")
+            expected = {key: value for key, value in source_row.items()
+                        if not key.startswith("_")}
+            source_crop = _safe_crop(export, source_row["crop_path"])
+            digest = source_row["crop_sha256_local"]
+            target_crop = f"crops/{digest}.jpg"
+            expected["crop_path"] = target_crop
+            composite_row_public = {key: value for key, value in composite_row.items()
+                                    if not key.startswith("_")}
+            if composite_row_public != expected:
+                mismatches = [key for key in set(composite_row_public) | set(expected)
+                              if composite_row_public.get(key) != expected.get(key)]
+                raise InputError("Composite cue differs from its human-reviewed source export: " +
+                                 ",".join(sorted(mismatches)))
+            cached = source_crop_cache.get(digest)
+            if cached is None:
+                crop_bytes = _read_capped(source_crop, MAX_CROP_BYTES, "source crop")
+                source_crop_cache[digest] = crop_bytes
+                cached = crop_bytes
+            composite_crop = _safe_crop(dataset, target_crop)
+            _reject_reparse_path(composite_crop, dataset)
+            data = _read_capped(composite_crop, MAX_CROP_BYTES, "composite crop")
+            if _sha256(data) != digest or data != cached:
+                raise InputError("Composite crop does not byte-match its source export")
+        verified_members.append({
+            "source_pack_sha256": _sha256(_read_capped(pack / "manifest.json", ocr_review.MAX_MANIFEST_BYTES,
+                                                        "source review manifest")),
+            "source_export_manifest_sha256": member["source_export_manifest_sha256"],
+            "review_srt_sha256": member["review_srt_sha256"],
+            "review_events_sha256": member["review_events_sha256"],
+            "active_rows_verified": len(source_rows),
+            "cue_ids": sorted(source_ids),
+        })
+    if seen_cues != set(composite_by_id):
+        raise InputError("Composite rows are not exactly covered by source lineage")
+    return {"status": "verified_against_parent_review_pack", "mode": "composite",
+            "lineage_sha256": _sha256(lineage_bytes), "members": verified_members,
+            "active_rows_verified": len(seen_cues)}
+
+
+def _unique_json_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise InputError(f"Duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def validate_provenance_groups(provenance: dict, metadata: dict[str, dict], rows: list[dict]) -> None:
+    """Require one truthful source+episode group per independent review pack."""
+    if provenance.get("status") != "verified_against_parent_review_pack":
+        raise InputError("Phase 2 source lineage is not verified")
+    row_ids = {row["cue_id"] for row in rows}
+    groups_seen = set()
+    member_cues_seen = set()
+    members = provenance.get("members")
+    if not isinstance(members, list) or len(members) < 3:
+        raise InputError("At least three independent source review packs are required")
+    for member in members:
+        cue_ids = member.get("cue_ids") if isinstance(member, dict) else None
+        if (not isinstance(cue_ids, list) or not cue_ids or
+                any(not isinstance(cue_id, str) for cue_id in cue_ids)):
+            raise InputError("Verified lineage member cue list is invalid")
+        member_ids = set(cue_ids)
+        if len(member_ids) != len(cue_ids) or not member_ids.issubset(row_ids) or member_cues_seen & member_ids:
+            raise InputError("Source lineage cue coverage/collision invalid")
+        member_cues_seen.update(member_ids)
+        group_keys = {_group_key(metadata[cue_id]) for cue_id in member_ids if cue_id in metadata}
+        if len(group_keys) != 1:
+            raise InputError("Every source review pack must map to exactly one source+episode group")
+        group = next(iter(group_keys))
+        if group in groups_seen:
+            raise InputError("Different source review packs cannot claim the same source+episode group")
+        groups_seen.add(group)
+    if member_cues_seen != row_ids or set(metadata) != row_ids or len(groups_seen) < 3:
+        raise InputError("At least three distinct, fully covered source+episode groups are required")
+
+
+def provenance_summary(provenance: dict) -> dict:
+    """Return hash-bound lineage summary without private cue IDs or local paths."""
+    summary = {key: value for key, value in provenance.items() if key != "members"}
+    members = []
+    for member in provenance.get("members", []):
+        members.append({key: value for key, value in member.items()
+                        if key not in {"cue_ids", "source_pack_path", "source_export_path"}})
+    summary["members"] = members
+    stable = json.dumps(summary, ensure_ascii=False, sort_keys=True,
+                        separators=(",", ":"), allow_nan=False).encode("utf-8")
+    summary["provenance_sha256"] = _sha256(stable)
+    return summary
 
 
 def assign_splits(rows: list[dict], metadata: dict[str, dict], seed: str) -> dict[str, str]:
@@ -354,8 +681,10 @@ def make_artifacts(dataset: Path, metadata_path: Path, out_dir: Path, seed: str,
                    timing_tolerance_ms: int | None) -> None:
     rows = validate_dataset(dataset)
     metadata = validate_metadata(metadata_path, rows)
+    provenance_full = verify_phase2_provenance(dataset, rows)
+    validate_provenance_groups(provenance_full, metadata, rows)
+    provenance = provenance_summary(provenance_full)
     split = assign_splits(rows, metadata, seed)
-    provenance = verify_phase2_provenance(dataset, rows)
     human_rights_review_complete = all(
         meta["license"]["human_review"]["status"] == "reviewed" for meta in metadata.values())
     try:
@@ -380,7 +709,8 @@ def make_artifacts(dataset: Path, metadata_path: Path, out_dir: Path, seed: str,
                           "width": row["_width"], "height": row["_height"],
                           "review_event_id": row["review_event_id"]})
     split_doc = {"schema_version": 1, "dataset_manifest_sha256": _sha256((dataset / "manifest.jsonl").read_bytes()),
-                 "metadata_sha256": _sha256(metadata_path.read_bytes()), "seed": seed,
+                 "metadata_sha256": _sha256(metadata_path.read_bytes()),
+                 "provenance_sha256": provenance["provenance_sha256"], "seed": seed,
                  "algorithm": "sha256(seed + NUL + canonical-source-episode-group), rank then fixed 80/10/10 group counts",
                  "group_split": group_split, "rows": crop_rows,
                  "invariants": {"all_rows_assigned_once": True, "group_leakage": False,

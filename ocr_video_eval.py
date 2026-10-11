@@ -285,7 +285,7 @@ def _validated_split(experiment_path: Path, split_path: Path, dataset: Path,
         raise VideoEvalError("Split satırı JSON nesnesi olmalı")
     # This rechecks the Phase 2 active event chain, rights evidence/review,
     # hashes, split assignment, and test presence using the existing contract.
-    _, _, _, manifest_hash, metadata_hash, split_hash = crop_eval.validate_run(
+    _, _, provenance, manifest_hash, metadata_hash, split_hash = crop_eval.validate_run(
         dataset, metadata_path, split_path)
     experiment, _ = _json(experiment_path)
     if (type(experiment) is not dict or type(experiment.get("schema_version")) is not int
@@ -293,11 +293,14 @@ def _validated_split(experiment_path: Path, split_path: Path, dataset: Path,
             or experiment.get("status") != "PREPARED_NOT_RUN"):
         raise VideoEvalError("Yalnız Phase 5 PREPARED_NOT_RUN manifesti referans alınabilir")
     ds = experiment.get("dataset")
+    exp_provenance = experiment.get("provenance")
     exp = experiment.get("experiment")
     stop = experiment.get("stop_gate")
     if (type(ds) is not dict or type(exp) is not dict or type(stop) is not dict
             or ds.get("manifest_sha256") != manifest_hash
             or ds.get("metadata_sha256") != metadata_hash
+            or type(exp_provenance) is not dict
+            or exp_provenance.get("provenance_sha256") != provenance.get("provenance_sha256")
             or exp.get("baseline_id") in (None, "")
             or exp.get("candidate_id") in (None, "")
             or exp["baseline_id"] == exp["candidate_id"]

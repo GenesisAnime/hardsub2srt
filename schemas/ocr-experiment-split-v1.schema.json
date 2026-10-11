@@ -3,11 +3,12 @@
   "$id": "https://example.invalid/hardsub2srt/ocr-experiment-split-v1.schema.json",
   "title": "Local OCR experiment group split v1",
   "type": "object",
-  "required": ["schema_version", "dataset_manifest_sha256", "metadata_sha256", "seed", "algorithm", "group_split", "rows", "invariants"],
+  "required": ["schema_version", "dataset_manifest_sha256", "metadata_sha256", "provenance_sha256", "seed", "algorithm", "group_split", "rows", "invariants"],
   "properties": {
     "schema_version": {"const": 1},
     "dataset_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "provenance_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "seed": {"type": "string", "minLength": 1},
     "algorithm": {"type": "string"},
     "group_split": {"type": "object", "additionalProperties": {"enum": ["train", "validation", "test"]}},

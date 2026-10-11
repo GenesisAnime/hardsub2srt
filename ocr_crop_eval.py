@@ -64,12 +64,17 @@ def validate_run(dataset: Path, metadata_path: Path, split_path: Path):
     provenance = prep.verify_phase2_provenance(dataset, rows)
     if provenance.get("status") != "verified_against_parent_review_pack":
         raise EvalError("Phase 2 parent review-pack/active-event bağlantısı doğrulanmadı")
+    try:
+        prep.validate_provenance_groups(provenance, metadata, rows)
+    except prep.InputError as exc:
+        raise EvalError(str(exc)) from exc
+    provenance = prep.provenance_summary(provenance)
     if not all(m["license"]["human_review"]["status"] == "reviewed"
                for m in metadata.values()):
         raise EvalError("Her kayıt için insan rights review status=reviewed gerekli; rights_verified yine false kalır")
 
     split_doc, split_raw = _json_unique(split_path, MAX_SPLIT_BYTES)
-    required = {"schema_version", "dataset_manifest_sha256", "metadata_sha256", "seed",
+    required = {"schema_version", "dataset_manifest_sha256", "metadata_sha256", "provenance_sha256", "seed",
                 "algorithm", "group_split", "rows", "invariants"}
     if set(split_doc) != required or type(split_doc.get("schema_version")) is not int or split_doc["schema_version"] != 1:
         raise EvalError("split-manifest.json Phase 5 split v1 şemasıyla eşleşmiyor")
@@ -79,6 +84,8 @@ def validate_run(dataset: Path, metadata_path: Path, split_path: Path):
         raise EvalError("Veri kümesi manifest hash'i split manifest ile eşleşmiyor")
     if split_doc["metadata_sha256"] != sha256(metadata_bytes):
         raise EvalError("Metadata hash'i split manifest ile eşleşmiyor")
+    if split_doc.get("provenance_sha256") != provenance.get("provenance_sha256"):
+        raise EvalError("Phase 2 source-lineage hash'i frozen split ile eşleşmiyor")
     seed = split_doc.get("seed")
     if type(seed) is not str or not seed.strip():
         raise EvalError("Split tohumu eksik")

@@ -23,9 +23,13 @@
         }}
       }
     },
-    "provenance": {"type": "object", "required": ["status", "active_rows_verified"], "properties": {
+    "provenance": {"type": "object", "required": ["status", "active_rows_verified", "provenance_sha256"], "properties": {
       "status": {"enum": ["verified_against_parent_review_pack", "self_attested"]},
       "active_rows_verified": {"type": "integer", "minimum": 0},
+      "provenance_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "mode": {"enum": ["single_pack", "composite"]},
+      "lineage_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "members": {"type": "array", "items": {"type": "object"}},
       "reason": {"type": "string"}, "review_manifest_sha256": {"type": "string"},
       "review_srt_sha256": {"type": "string"}, "review_events_sha256": {"type": "string"}
     }},
