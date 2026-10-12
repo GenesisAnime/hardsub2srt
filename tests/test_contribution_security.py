@@ -124,11 +124,14 @@ class ContributionApiDeleteAndRetentionTests(unittest.TestCase):
             cls.api = importlib.import_module("contribution_api")
         cls.token = "h2s_synthetic_" + secrets.token_urlsafe(36)
         with cls.api._connection() as con:
-            con.execute("INSERT INTO tokens(token_hash,created_at) VALUES(?,?)", (
-                cls.api._token_hash(cls.token), datetime.now(timezone.utc).isoformat()))
+            now = datetime.now(timezone.utc)
+            con.execute("INSERT INTO tokens(token_hash,created_at,expires_at) VALUES(?,?,?)", (
+                cls.api._token_hash(cls.token), cls.api._utc_timestamp(now),
+                cls.api._utc_timestamp(now + timedelta(days=7))))
             cls.other_token = "h2s_other_" + secrets.token_urlsafe(36)
-            con.execute("INSERT INTO tokens(token_hash,created_at) VALUES(?,?)", (
-                cls.api._token_hash(cls.other_token), datetime.now(timezone.utc).isoformat()))
+            con.execute("INSERT INTO tokens(token_hash,created_at,expires_at) VALUES(?,?,?)", (
+                cls.api._token_hash(cls.other_token), cls.api._utc_timestamp(now),
+                cls.api._utc_timestamp(now + timedelta(days=7))))
         cls.http = cls.api.app.test_client()
 
     @classmethod

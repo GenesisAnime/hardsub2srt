@@ -12,6 +12,7 @@
   <env name="PYTHONDONTWRITEBYTECODE" value="1" />
   <env name="H2S_CONTRIB_DB" value="__ABSOLUTE_DATA_DIRECTORY_OUTSIDE_REPOSITORY__\contributions.sqlite3" />
   <env name="H2S_CONTRIB_RETENTION_DAYS" value="__OPERATOR_MUST_CHOOSE_NUMERIC_DAYS__" />
+  <env name="H2S_CONTRIB_TOKEN_TTL_DAYS" value="7" />
   <env name="H2S_CONTRIB_SERVICE_ACCOUNT" value="NT SERVICE\hardsub-contribution-api" />
   <env name="H2S_CONTRIB_PURGE_ACCOUNT" value="__DEDICATED_NON_ADMIN_PURGE_ACCOUNT__" />
   <env name="H2S_CONTRIB_LOG_DIR" value="__ABSOLUTE_LOG_DIRECTORY_OUTSIDE_REPOSITORY__" />

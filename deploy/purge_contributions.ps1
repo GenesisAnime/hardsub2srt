@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$AppRoot,
     [Parameter(Mandatory=$true)][string]$DatabasePath,
     [Parameter(Mandatory=$true)][ValidateRange(1,3650)][int]$RetentionDays,
+    [Parameter(Mandatory=$true)][ValidateRange(1,30)][int]$TokenTtlDays,
     [Parameter(Mandatory=$true)][string]$ServiceAccount,
     [Parameter(Mandatory=$true)][string]$PurgeAccount
 )
@@ -14,6 +15,7 @@ $actual = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 if ($actual -ne $expected) { throw 'Purge scheduled task yanlış Windows hesabı altında çalışıyor.' }
 $env:H2S_CONTRIB_DB = [System.IO.Path]::GetFullPath($DatabasePath)
 $env:H2S_CONTRIB_RETENTION_DAYS = [string]$RetentionDays
+$env:H2S_CONTRIB_TOKEN_TTL_DAYS = [string]$TokenTtlDays
 $env:H2S_CONTRIB_SERVICE_ACCOUNT = $ServiceAccount
 $env:H2S_CONTRIB_PURGE_ACCOUNT = $PurgeAccount
 Push-Location -LiteralPath $AppRoot

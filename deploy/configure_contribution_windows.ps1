@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory=$true)][string]$CertificateDirectory,
     [Parameter(Mandatory=$true)][string]$PurgeAccount,
     [Parameter(Mandatory=$true)][string]$CaddyAccount,
-    [Parameter(Mandatory=$true)][ValidateRange(1,3650)][int]$RetentionDays
+    [Parameter(Mandatory=$true)][ValidateRange(1,3650)][int]$RetentionDays,
+    [ValidateRange(1,30)][int]$TokenTtlDays = 7
 )
 
 $ErrorActionPreference = 'Stop'
@@ -120,8 +121,9 @@ if ($envMap['H2S_CONTRIB_DB'] -ne $expectedDb -or
     $envMap['H2S_CONTRIB_SERVICE_ACCOUNT'] -ne $serviceAccount -or
     $envMap['H2S_CONTRIB_PURGE_ACCOUNT'] -ne $PurgeAccount -or
     $envMap['H2S_CONTRIB_RETENTION_DAYS'] -ne [string]$RetentionDays -or
+    $envMap['H2S_CONTRIB_TOKEN_TTL_DAYS'] -ne [string]$TokenTtlDays -or
     $envMap['H2S_CONTRIB_LOG_DIR'] -ne $logPath) {
-    throw 'WinSW XML ayarları verilen DB, hesap, log klasörü ve retention değerleriyle eşleşmiyor.'
+    throw 'WinSW XML ayarları verilen DB, hesap, log, retention ve token TTL değerleriyle eşleşmiyor.'
 }
 
 $denied = @('localsystem','local system','nt authority\system','system',

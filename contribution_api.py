@@ -18,7 +18,7 @@ import time
 import uuid
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -28,6 +28,10 @@ import contribution_client as contract
 MAX_BODY = 16 * 1024
 RATE_LIMIT = 60
 RATE_WINDOW = 3600
+DEFAULT_TOKEN_TTL_DAYS = 7
+MIN_TOKEN_TTL_DAYS = 1
+MAX_TOKEN_TTL_DAYS = 30
+EXPIRED_TIMESTAMP = "1970-01-01T00:00:00Z"
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_BODY
 _rates: dict[str, list[float]] = {}
@@ -47,6 +51,13 @@ def _settings():
         raise RuntimeError("H2S_CONTRIB_RETENTION_DAYS tam sayı olmalı") from exc
     if not 1 <= retention_days <= 3650:
         raise RuntimeError("H2S_CONTRIB_RETENTION_DAYS 1..3650 aralığında olmalı")
+    token_ttl_raw = os.environ.get("H2S_CONTRIB_TOKEN_TTL_DAYS", str(DEFAULT_TOKEN_TTL_DAYS)).strip()
+    try:
+        token_ttl_days = int(token_ttl_raw)
+    except ValueError as exc:
+        raise RuntimeError("H2S_CONTRIB_TOKEN_TTL_DAYS tam sayı olmalı") from exc
+    if not MIN_TOKEN_TTL_DAYS <= token_ttl_days <= MAX_TOKEN_TTL_DAYS:
+        raise RuntimeError("H2S_CONTRIB_TOKEN_TTL_DAYS 1..30 aralığında olmalı")
     raw_db = os.environ.get("H2S_CONTRIB_DB", "").strip()
     if not raw_db:
         raise RuntimeError("H2S_CONTRIB_DB açıkça ayarlanmalı")
@@ -74,7 +85,7 @@ def _settings():
         raise RuntimeError("Ayrı düşük yetkili H2S_CONTRIB_PURGE_ACCOUNT zorunlu")
     if service_account.casefold() == purge_account.casefold():
         raise RuntimeError("API ve retention purge için ayrı hesaplar gerekli")
-    config = (db, retention_days, service_account, purge_account)
+    config = (db, retention_days, service_account, purge_account, token_ttl_days)
     # Called only after the security helpers are defined at module startup.
     validator = globals().get("_validate_storage_security")
     if validator is not None:
@@ -177,7 +188,7 @@ def _check_acl(path: Path, *, is_directory: bool, required_owners: set[str],
 
 
 def _validate_storage_security(*, config, require_service_identity: bool):
-    db, _days, _service, _purge = config
+    db, _days, _service, _purge = config[:4]
     parent = db.parent
     if not parent.is_dir():
         raise RuntimeError("H2S_CONTRIB_DB üst dizini önceden oluşturulmalı ve ACL ile korunmalı")
@@ -216,21 +227,39 @@ def _db():
     path = _CONFIG[0]
     con = sqlite3.connect(path, timeout=5)
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA busy_timeout=5000")
-    con.execute("PRAGMA secure_delete=ON")
-    con.executescript("""
-      CREATE TABLE IF NOT EXISTS tokens (
-        token_hash TEXT PRIMARY KEY, created_at TEXT NOT NULL, revoked_at TEXT
-      );
-      CREATE TABLE IF NOT EXISTS contributions (
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=5000")
+        con.execute("PRAGMA secure_delete=ON")
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("""CREATE TABLE IF NOT EXISTS tokens (
+            token_hash TEXT PRIMARY KEY, created_at TEXT NOT NULL,
+            revoked_at TEXT, expires_at TEXT NOT NULL
+        )""")
+        token_columns = {row["name"] for row in con.execute("PRAGMA table_info(tokens)")}
+        if "expires_at" not in token_columns:
+            # Legacy tokens receive only the original configured lifetime measured
+            # from their creation time. Invalid timestamps expire immediately.
+            con.execute("ALTER TABLE tokens ADD COLUMN expires_at TEXT")
+            for row in con.execute("SELECT token_hash,created_at FROM tokens WHERE expires_at IS NULL").fetchall():
+                expires_at = _legacy_expiry(row["created_at"], _CONFIG[4])
+                con.execute("UPDATE tokens SET expires_at=? WHERE token_hash=?",
+                            (expires_at, row["token_hash"]))
+        # Even if a partially migrated database has nullable expiry, NULL is never
+        # treated as perpetual; repair it to an already expired value.
+        con.execute("UPDATE tokens SET expires_at=? WHERE expires_at IS NULL", (EXPIRED_TIMESTAMP,))
+        con.execute("""CREATE TABLE IF NOT EXISTS contributions (
         submission_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL,
         created_at TEXT NOT NULL, received_at TEXT NOT NULL, consent_version TEXT NOT NULL,
         cer_consent INTEGER NOT NULL, payload_json TEXT NOT NULL,
         FOREIGN KEY(token_hash) REFERENCES tokens(token_hash)
-      );
-      CREATE INDEX IF NOT EXISTS contribution_created_idx ON contributions(received_at);
-    """)
+        )""")
+        con.execute("CREATE INDEX IF NOT EXISTS contribution_created_idx ON contributions(received_at)")
+        con.commit()
+    except Exception:
+        con.rollback()
+        con.close()
+        raise RuntimeError("contribution database schema migration failed; service remains unavailable") from None
     return con
 
 
@@ -251,6 +280,36 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _legacy_expiry(created_at: str, ttl_days: int) -> str:
+    created = _parse_timestamp(created_at)
+    if created is None:
+        return EXPIRED_TIMESTAMP
+    try:
+        return _utc_timestamp(created + timedelta(days=ttl_days))
+    except (OverflowError, ValueError):
+        return EXPIRED_TIMESTAMP
+
+
 def _auth(con):
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer ") or len(header) > 512:
@@ -259,8 +318,13 @@ def _auth(con):
     if len(raw) < 40 or len(raw) > 256:
         return None
     digest = _token_hash(raw)
-    row = con.execute("SELECT token_hash FROM tokens WHERE token_hash=? AND revoked_at IS NULL", (digest,)).fetchone()
-    return digest if row else None
+    row = con.execute("SELECT token_hash,expires_at FROM tokens WHERE token_hash=? AND revoked_at IS NULL", (digest,)).fetchone()
+    if row is None:
+        return None
+    expires = _parse_timestamp(row["expires_at"])
+    if expires is None or _utc_now() >= expires:
+        return None
+    return digest
 
 
 def _rate_ok(token_hash):
@@ -405,8 +469,11 @@ def _cli(argv=None):
     args = parser.parse_args(argv)
     if args.command == "issue-token":
         token = "h2s_" + secrets.token_urlsafe(36)
+        issued = _utc_now()
+        expires = issued + timedelta(days=_CONFIG[4])
         with _connection() as con:
-            con.execute("INSERT INTO tokens(token_hash,created_at) VALUES(?,?)", (_token_hash(token), datetime.now(timezone.utc).isoformat()))
+            con.execute("INSERT INTO tokens(token_hash,created_at,expires_at) VALUES(?,?,?)",
+                        (_token_hash(token), _utc_timestamp(issued), _utc_timestamp(expires)))
         print("Token yalnızca şimdi gösteriliyor; güvenli parola yöneticisine kaydedin:\n" + token)
     elif args.command == "revoke-token":
         import getpass
