@@ -807,21 +807,34 @@ HTML = r"""<!DOCTYPE html>
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--metin);
   font:14px/1.45 "Segoe UI",system-ui,sans-serif}
-header{display:flex;align-items:center;gap:14px;padding:12px 18px;
+header{display:flex;align-items:center;gap:12px;padding:10px 18px;
   border-bottom:1px solid var(--cizgi);background:#151822;position:sticky;top:0;z-index:5}
 header h1{font-size:17px;margin:0;font-weight:600}
 header .klasor{color:var(--soluk);font-size:12px;max-width:44%;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #baglanti{margin-left:auto;font-size:12px;color:var(--soluk)}
 #baglanti.ok{color:var(--yesil)} #baglanti.kopuk{color:var(--kirmizi)}
+.app-nav{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.app-nav a{color:var(--soluk);text-decoration:none;padding:7px 10px;border-radius:6px;font-size:13px;font-weight:600}
+.app-nav a:hover{background:#222a3a;color:var(--metin)}
+.app-nav a[aria-current="page"]{background:#243758;color:#a9c9ff}
+:focus-visible{outline:2px solid #78aaff;outline-offset:2px}
 main{padding:14px 18px 40px;display:grid;gap:14px;
-  grid-template-columns:minmax(0,min(440px,38vw)) minmax(0,1fr)}
+  grid-template-columns:minmax(0,min(420px,34vw)) minmax(0,1fr);align-items:start}
 @media (max-width:960px){main{grid-template-columns:minmax(0,1fr)}}
+@media (min-width:601px) and (max-width:1350px){
+  header h1{white-space:nowrap}
+  header .klasor{max-width:28%}
+  header .app-nav{order:6;flex-basis:100%;overflow-x:auto;flex-wrap:nowrap}
+  header .app-nav a{white-space:nowrap}
+}
 @media (max-width:600px){
   header{gap:8px;padding:10px 12px;flex-wrap:wrap}
   header h1{font-size:15px}
   header .klasor{order:4;flex-basis:100%;max-width:100%}
   #baglanti{margin-left:auto}
+  .app-nav{order:5;flex-basis:100%;overflow-x:auto;flex-wrap:nowrap}
+  .app-nav a{white-space:nowrap}
   main{padding:10px 10px 28px;gap:10px}
   .kart{padding:12px}
   .secenekler{grid-template-columns:minmax(0,1fr)}
@@ -835,6 +848,7 @@ main{padding:14px 18px 40px;display:grid;gap:14px;
 }
 .kart{background:var(--panel);border:1px solid var(--cizgi);
   border-radius:10px;padding:14px}
+.queue-card{align-self:start;min-width:0}
 .kart h2{font-size:14px;margin:0 0 10px;color:var(--mavi);
   text-transform:uppercase;letter-spacing:.4px}
 label{font-size:12px;color:var(--soluk);display:block;margin:8px 0 3px}
@@ -849,6 +863,7 @@ button{background:var(--mavi);color:#fff;border:0;border-radius:6px;
   padding:8px 14px;font-size:13px;cursor:pointer;font-weight:600}
 button.ikincil{background:#2a3145}
 button.kirmizi{background:var(--kirmizi)}
+header #iptal-btn{flex:0 0 auto;white-space:nowrap}
 button:disabled{opacity:.45;cursor:not-allowed}
 button:hover:not(:disabled){filter:brightness(1.12)}
 .not{font-size:12px;color:var(--soluk);border-left:3px solid var(--sari);
@@ -927,6 +942,10 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
 .tarama label{display:flex;gap:7px;align-items:center;margin:3px 0;
   color:var(--metin);font-size:12px;font-family:Consolas,monospace}
 .bos{color:var(--soluk);font-size:13px;padding:10px 4px}
+.summary-row{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;color:var(--mavi);font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.summary-row .kucuk{font-weight:400;text-transform:none;letter-spacing:0}
+.summary-row:focus-visible{outline:2px solid #78aaff;outline-offset:3px}
+.view-production-hidden{display:none!important}
 /* blok editörü paneli */
 .editor-kapla{position:fixed;inset:0;background:rgba(4,6,11,.72);z-index:60;
   display:none;align-items:center;justify-content:center}
@@ -967,14 +986,18 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
 <header>
   <h1>Hardsub Altyazı Arayüzü</h1>
   <span class="klasor" id="sunucu-klasor" title="Sunucu klasörü (varsayılan çıktı klasörü)"></span>
-  <button class="kirmizi" id="iptal-btn" onclick="iptalEt()" disabled>İptal (çalışanı öldür)</button>
-  <button class="ikincil" id="pano-btn" onclick="panoAc()">Pano</button>
-  <a class="ikincil" href="/katki" style="text-decoration:none">İsteğe bağlı katkı</a>
+  <button class="kirmizi" id="iptal-btn" onclick="iptalEt()" disabled>İşi durdur</button>
   <span id="baglanti">bağlanıyor…</span>
+  <nav class="app-nav" aria-label="Ana gezinme">
+    <a href="/" id="nav-uretim" aria-current="page">Üretim</a>
+    <a href="/ocr-inceleme">İnceleme</a>
+    <a href="/?view=kalite" id="nav-kalite">Kalite ve öğrenme</a>
+    <a href="/katki">İsteğe bağlı katkı</a>
+  </nav>
 </header>
 
 <main>
-  <section class="kart">
+  <section class="kart view-production" id="video-kart">
     <h2>Video ekleme</h2>
 
     <details class="katla">
@@ -1044,7 +1067,7 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
             id="ekle-btn">Videoları kuyruğa ekle</button>
   </section>
 
-  <section class="kart">
+  <section class="kart queue-card" id="kuyruk-kart">
     <div class="bolum-baslik">
       <h2>Kuyruk</h2>
       <span id="kuyruk-ozet" class="kucuk" aria-live="polite">0 iş</span>
@@ -1052,20 +1075,22 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
     <div id="kuyruk-alan"><div class="empty-state"><strong>Kuyruk boş</strong><span>Video yollarını ekleyince işler sırayla burada görünür.</span></div></div>
   </section>
 
-  <section class="kart" style="grid-column:1/-1">
-    <h2>Sonuçlar</h2>
-    <div id="sonuc-alan"><div class="empty-state"><strong>Henüz sonuç yok</strong><span>Tamamlanan ve hata alan işler burada görünür.</span></div></div>
+  <section class="kart view-production" id="sonuc-kart" style="grid-column:1/-1">
+    <details id="sonuc-details">
+      <summary class="summary-row">Sonuçlar <span id="sonuc-ozet" class="kucuk">Henüz tamamlanan iş yok</span></summary>
+      <div id="sonuc-alan"><div class="empty-state"><strong>Henüz sonuç yok</strong><span>Tamamlanan ve hata alan işler burada görünür.</span></div></div>
+    </details>
   </section>
 
-  <section class="kart" style="grid-column:1/-1">
-    <details id="log-details" open>
+  <section class="kart view-production" id="log-kart" style="grid-column:1/-1">
+    <details id="log-details">
       <summary class="log-summary">Canlı log <span class="kucuk">son 200 satır · daraltılabilir</span></summary>
       <div id="log"></div>
     </details>
   </section>
 
   <section class="kart" id="pano-kart" style="grid-column:1/-1;display:none">
-    <h2>Toplu kalite panosu</h2>
+    <div class="bolum-baslik"><h2>Kalite ve öğrenme</h2><span class="kucuk">Toplu kalite panosu</span></div>
     <div class="satir">
       <input type="text" id="pano-klasor"
              placeholder="stats.json klasörü (boş = sunucu klasörü)">
@@ -1118,6 +1143,7 @@ const $ = id => document.getElementById(id);
 let SON_N = 0;
 let IS_ADLARI = {};
 let pickerInFlight = false;
+let LAST_RESULT_SIGNATURE = "";
 
 function escapeHtml(s){
   return String(s ?? "").replace(/[&<>"']/g, c =>
@@ -1356,6 +1382,13 @@ function sonucCiz(kuyruk){
   const bittiler = kuyruk.filter(i => i.durum === "bitti").slice(-4).reverse();
   const hatalilar = kuyruk.filter(i => i.durum === "hata" || i.durum === "iptal")
                           .slice(-3).reverse();
+  const toplam = bittiler.length + hatalilar.length;
+  $("sonuc-ozet").textContent = toplam
+    ? toplam + " son tamamlanan / hatalı iş"
+    : "Henüz tamamlanan iş yok";
+  const signature = bittiler.concat(hatalilar).map(i => i.id + ":" + i.durum).join("|");
+  if (signature && signature !== LAST_RESULT_SIGNATURE) $("sonuc-details").open = true;
+  LAST_RESULT_SIGNATURE = signature;
   if (!bittiler.length && !hatalilar.length){
     alan.innerHTML = '<div class="empty-state"><strong>Henüz sonuç yok</strong>' +
       '<span>Tamamlanan ve hata alan işler burada görünür.</span></div>';
@@ -1556,14 +1589,28 @@ async function ogret(k){
 let PANO_ACIK = false;
 let PANO_KLASOR = "";
 
-function panoAc(){
-  PANO_ACIK = !PANO_ACIK;
-  $("pano-btn").textContent = PANO_ACIK ? "Arayüze dön" : "Pano";
-  document.querySelectorAll("main > section").forEach(s => {
-    if (s.id !== "pano-kart") s.style.display = PANO_ACIK ? "none" : "";
-  });
+function panoGoster(acik){
+  PANO_ACIK = Boolean(acik);
+  document.querySelectorAll(".view-production").forEach(s =>
+    s.classList.toggle("view-production-hidden", PANO_ACIK));
+  // Kuyruk ana iş akışının parçası olarak kalite görünümünde de görünür kalır.
   $("pano-kart").style.display = PANO_ACIK ? "" : "none";
   if (PANO_ACIK && !$("pano-klasor").value) panoYukle();
+  const nav = $("nav-kalite");
+  if (nav) {
+    if (PANO_ACIK) nav.setAttribute("aria-current", "page");
+    else nav.removeAttribute("aria-current");
+  }
+  const uretim = $("nav-uretim");
+  if (uretim) {
+    if (PANO_ACIK) uretim.removeAttribute("aria-current");
+    else uretim.setAttribute("aria-current", "page");
+  }
+  if (PANO_ACIK) $("pano-kart").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+function panoAc(){
+  panoGoster(!PANO_ACIK);
 }
 
 async function panoYukle(){
@@ -1689,6 +1736,7 @@ async function poll(){
 }
 poll();
 setInterval(poll, 1000);
+if (new URLSearchParams(location.search).get("view") === "kalite") panoGoster(true);
 </script>
 </body>
 </html>
@@ -1719,15 +1767,16 @@ def katki_sayfasi():
                    .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
     html = r'''<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>İsteğe bağlı ölçüm katkısı</title><style>
-body{max-width:860px;margin:32px auto;padding:0 16px;background:#12141a;color:#dde3f0;font:15px/1.55 "Segoe UI",sans-serif}a,button{color:#fff;background:#315fae;border:0;border-radius:6px;padding:9px 13px;cursor:pointer}input,select,pre{background:#0e1016;color:#dde3f0;border:1px solid #394158;border-radius:6px;padding:10px}pre{white-space:pre-wrap;overflow-wrap:anywhere}.muted{color:#9aa6bd}.warn{color:#efbd66}button:disabled{opacity:.45;cursor:not-allowed}
-ul.contribution-list{padding-left:22px}ul.contribution-list li{margin:10px 0}ul.contribution-list button{margin-left:8px}
-</style><h1>İsteğe bağlı ölçüm katkısı</h1><p>Bu özellik varsayılan olarak kapalıdır. Önizleme oluşturmak ağ isteği göndermez. Yalnızca onaydan sonra, gösterilen sayısal ölçümler yapılandırılmış HTTPS hedefine gönderilir. Video, kırpım, SRT/VTT metni, dosya adı/yolu ve kullanıcı adı gönderilmez. GPT/DeepSeek API’si kullanılmaz.</p>
+:root{color-scheme:dark}*{box-sizing:border-box}body{max-width:1000px;margin:0 auto;padding:0 18px;background:#12141a;color:#dde3f0;font:15px/1.55 "Segoe UI",system-ui,sans-serif}header{position:sticky;top:0;z-index:2;margin:0 -18px;padding:10px 18px;background:#151822;border-bottom:1px solid #2c3345;display:flex;align-items:center;gap:14px;flex-wrap:wrap}.brand{font-weight:700;color:#dde3f0;text-decoration:none}.app-nav{display:flex;gap:4px;flex-wrap:wrap}.app-nav a{color:#8b94ab;text-decoration:none;border-radius:6px;padding:7px 10px;font-size:13px;font-weight:650}.app-nav a:hover{background:#222a3a;color:#dde3f0}.app-nav a[aria-current="page"]{background:#243758;color:#a9c9ff}#queue-status{margin-left:auto;color:#a7b5ce;font-size:12px}#queue-status a{background:none;color:#a9c9ff;padding:0}main{padding:20px 0}a,button{color:#fff;background:#315fae;border:0;border-radius:6px;padding:9px 13px;cursor:pointer}input,select,pre{max-width:100%;background:#0e1016;color:#dde3f0;border:1px solid #394158;border-radius:6px;padding:10px}pre{white-space:pre-wrap;overflow-wrap:anywhere}.muted{color:#9aa6bd}.warn{color:#efbd66}button:disabled{opacity:.45;cursor:not-allowed}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #85b1ff;outline-offset:2px}
+ul.contribution-list{padding-left:22px}ul.contribution-list li{margin:10px 0;overflow-wrap:anywhere}ul.contribution-list button{margin:6px 6px 0 0}@media(max-width:600px){body{padding:0 12px}header{margin:0 -12px;padding:10px 12px;gap:8px}.app-nav{flex-basis:100%;overflow-x:auto;flex-wrap:nowrap}.app-nav a{white-space:nowrap}#queue-status{margin-left:auto}main{padding:14px 0}}
+</style><header><a class="brand" href="/">Hardsub2srt</a><nav class="app-nav" aria-label="Ana gezinme"><a href="/">Üretim</a><a href="/ocr-inceleme">İnceleme</a><a href="/?view=kalite">Kalite ve öğrenme</a><a href="/katki" aria-current="page">İsteğe bağlı katkı</a></nav><span id="queue-status" role="status" aria-live="polite"><a href="/#kuyruk">Kuyruk durumu yükleniyor…</a></span></header><main><h1>İsteğe bağlı ölçüm katkısı</h1><p>Bu özellik varsayılan olarak kapalıdır. Önizleme oluşturmak ağ isteği göndermez. Yalnızca onaydan sonra, gösterilen sayısal ölçümler yapılandırılmış HTTPS hedefine gönderilir. Video, kırpım, SRT/VTT metni, dosya adı/yolu ve kullanıcı adı gönderilmez. GPT/DeepSeek API’si kullanılmaz.</p>
 <p id="config" class="warn"></p><label for="job">Tamamlanan yerel OCR işi</label><select id="job"></select> <button id="preview">Önizlemeyi oluştur</button>
 <h2>Gönderilecek alanların önizlemesi</h2><pre id="payload">Henüz önizleme yok.</pre><p class="muted">Sunucu, katkı satırında bearer token'ın özetini tutar; aynı token ile yapılan gönderimler bu özet üzerinden ilişkilendirilebilir. Özet token başına hız sınırı ve aynı token sahibinin silme yetkisi için kullanılır. Katkı kayıtları token'a göre değil alım yaşına göre, yukarıda belirtilen süre sonunda silinir. Ham token saklanmaz. Son 100 gönderimin silme kimliği bu tarayıcıda yerel olarak tutulur; payload ve token localStorage'a yazılmaz.</p>
 <label><input type="checkbox" id="consent"> Önizlemedeki sayısal ölçümlerin yukarıdaki HTTPS hedefine, belirtilen en fazla __RETENTION__ süreyle gönderilmesini ve aynı token ile yapılan gönderimlerin ilişkilendirilebilir olmasını bu gönderim için onaylıyorum.</label><p><button id="send" disabled>Onayla ve gönder</button> <a href="/">Arayüze dön</a></p><p id="status" role="status"></p>
-<h2>Gönderimlerim ve silme</h2><p class="muted">Silme için aynı HTTPS hedefi ve token yapılandırılmış olmalı. Sunucu 404 verirse kayıt silinmez: bu, saklama süresinin dolması veya token uyuşmazlığı anlamına gelebilir. Eski bir kimliği yalnız tarayıcı listesinden kaldırmak için ayrı düğmeyi kullanın. Saklama süresi dolunca sunucu kaydı otomatik temizlenir.</p><ul id="retractions" class="contribution-list"></ul>
+<h2>Gönderimlerim ve silme</h2><p class="muted">Silme için aynı HTTPS hedefi ve token yapılandırılmış olmalı. Sunucu 404 verirse kayıt silinmez: bu, saklama süresinin dolması veya token uyuşmazlığı anlamına gelebilir. Eski bir kimliği yalnız tarayıcı listesinden kaldırmak için ayrı düğmeyi kullanın. Saklama süresi dolunca sunucu kaydı otomatik temizlenir.</p><ul id="retractions" class="contribution-list"></ul></main>
 <script>const configured=__ENABLED__,destinationHost=__DESTINATION__;const STORE_KEY='hardsub2srt.contribution.retractions.v1',MAX_LOCAL_RECORDS=100;const job=document.querySelector('#job'),pre=document.querySelector('#payload'),send=document.querySelector('#send'),consent=document.querySelector('#consent'),status=document.querySelector('#status'),retractions=document.querySelector('#retractions');let current=null;
 document.querySelector('#config').textContent=configured?'HTTPS hedefi: https://'+destinationHost+'. Token hazır. Sunucunun saklama süresi: '+__RETENTION__+'. Gönderim yalnız bu sayfadaki açık onaydan sonra yapılır.':'Gönderim kapalı: HTTPS URL, token ve H2S_CONTRIB_RETENTION_DAYS birlikte ayarlanmalı.';
+async function updateQueueStatus(){const el=document.querySelector('#queue-status');try{const r=await fetch('/api/durum'),j=await r.json();if(!r.ok)throw Error();el.innerHTML='<a href="/#kuyruk">Kuyruk: '+(j.aktif?1:0)+' çalışıyor · '+j.isler_bekleyen+' bekliyor</a>'}catch(_){el.innerHTML='<a href="/#kuyruk">Kuyruk durumu alınamadı · Üretime dön</a>'}}updateQueueStatus();setInterval(updateQueueStatus,2500);
 async function api(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(!r.ok)throw Error(j.hata||j.error||('HTTP '+r.status));return j}
 function readRetractions(){try{const value=JSON.parse(localStorage.getItem(STORE_KEY)||'[]');if(!Array.isArray(value))return[];return value.filter(x=>x&&typeof x==='object'&&typeof x.submission_id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(x.submission_id)&&typeof x.destination_host==='string'&&typeof x.created_at==='string'&&['pending','submitted'].includes(x.state)).slice(-MAX_LOCAL_RECORDS)}catch(_){return[]}}
 function writeRetractions(records){try{localStorage.setItem(STORE_KEY,JSON.stringify(records.slice(-MAX_LOCAL_RECORDS)));return true}catch(_){return false}}
