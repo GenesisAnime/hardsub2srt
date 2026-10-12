@@ -90,6 +90,20 @@ class BrowserTestPolicyTests(unittest.TestCase):
         self.assertFalse(_same_origin("http://127.0.0.1.evil:8765/review", expected))
         self.assertFalse(_same_origin("https://127.0.0.1:8765/review", expected))
 
+    def test_flask_memory_guard_rejects_hostile_origins(self):
+        with patch.object(ui_server, "PORT", 8765):
+            client = ui_server.app.test_client()
+            for hostile_origin in (
+                    "http://127.0.0.1:8765.evil",
+                    "http://127.0.0.1.evil:8765"):
+                response = client.post(
+                    "/api/ceviri-bellegi/terim",
+                    base_url="http://127.0.0.1:8765",
+                    headers={"Origin": hostile_origin},
+                    json={"project_key": "synthetic", "source_language": "ja",
+                          "target_language": "tr", "source_term": "x", "target_term": "y"})
+                self.assertEqual(response.status_code, 403, hostile_origin)
+
     def test_strict_mode_fails_instead_of_skipping_when_browser_is_missing(self):
         with patch.dict(os.environ, {"HARDSUB2SRT_REQUIRE_BROWSER_TESTS": "1"}):
             with self.assertRaisesRegex(RuntimeError, "Playwright/Chromium missing"):
@@ -104,6 +118,7 @@ class TranslationMemoryBrowserAcceptance(unittest.TestCase):
         self.memory_root.mkdir()
         self.memory_patch = patch.object(translation_memory, "_root", return_value=self.memory_root)
         self.memory_patch.start()
+        self._pack_registry_snapshot = ocr_review._PACKS.copy()
 
         self.srt = self.root / "synthetic-review.srt"
         texts = ["synthetic source line", "synthetic source line"]
@@ -163,6 +178,13 @@ class TranslationMemoryBrowserAcceptance(unittest.TestCase):
             self.server_thread.join(timeout=5)
         if hasattr(self, "port_patch"):
             self.port_patch.stop()
+        if hasattr(self, "_pack_registry_snapshot"):
+            ocr_review._PACKS.clear()
+            ocr_review._PACKS.update(self._pack_registry_snapshot)
+            self.assertEqual(list(ocr_review._PACKS.items()),
+                             list(self._pack_registry_snapshot.items()))
+            if hasattr(self, "review_id"):
+                self.assertNotIn(self.review_id, self._pack_registry_snapshot)
         self.memory_patch.stop()
         self.temp.cleanup()
 
@@ -187,14 +209,20 @@ class TranslationMemoryBrowserAcceptance(unittest.TestCase):
                     if _same_origin(route.request.url, self.base_url):
                         route.continue_()
                     else:
+                        blocked_requests.append(route.request.url)
                         route.abort()
 
+                blocked_requests = []
                 context.route("**/*", restrict_to_exact_local_origin)
                 page = context.new_page()
-                # The hostile prefix must be rejected by the same origin predicate
-                # used by the browser request gate, before any request can continue.
-                self.assertFalse(_same_origin(self.base_url + ".evil/blocked", self.base_url))
                 page.goto(f"{self.base_url}/ocr-inceleme", wait_until="domcontentloaded")
+                hostile_url = f"http://127.0.0.1.evil.invalid:{self.server.server_port}/blocked"
+                result = page.evaluate("""async url => {
+                    try { await fetch(url); return 'unexpected-success'; }
+                    catch (_) { return 'intercepted'; }
+                }""", hostile_url)
+                self.assertEqual(result, "intercepted")
+                self.assertIn(hostile_url, blocked_requests)
                 page.locator("#path").fill(str(self.pack))
                 page.locator("#open").click()
                 page.locator("#workspace:not(.hidden)").wait_for()
