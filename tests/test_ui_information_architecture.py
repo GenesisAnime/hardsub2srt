@@ -40,6 +40,16 @@ class UiInformationArchitectureTests(unittest.TestCase):
         self.assertIn('href="/" id="nav-uretim"', html)
         self.assertIn('id="nav-kalite"', html)
 
+    def test_queue_status_links_target_the_existing_queue_section(self):
+        queue_id = "kuyruk-kart"
+        home = self.client.get("/").get_data(as_text=True)
+        self.assertIn(f'id="{queue_id}"', home)
+        for path in ("/ocr-inceleme", "/katki"):
+            with self.subTest(path=path):
+                html = self.client.get(path).get_data(as_text=True)
+                self.assertGreaterEqual(html.count(f'href="/#{queue_id}"'), 2)
+                self.assertNotIn('href="/#kuyruk"', html)
+
     def test_review_page_guides_existing_steps_without_removing_safety_controls(self):
         response = self.client.get("/ocr-inceleme")
         html = response.get_data(as_text=True)
