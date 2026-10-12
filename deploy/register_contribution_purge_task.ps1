@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory=$true)][string]$WinSWXml,
     [Parameter(Mandatory=$true)][string]$DatabasePath,
     [Parameter(Mandatory=$true)][ValidateRange(1,3650)][int]$RetentionDays,
+    [Parameter(Mandatory=$true)][ValidateRange(1,30)][int]$TokenTtlDays,
     [Parameter(Mandatory=$true)][string]$ServiceAccount
 )
 
@@ -19,14 +20,15 @@ foreach ($item in $config.service.env) { $envMap[$item.name] = $item.value }
 $expectedDb = [System.IO.Path]::GetFullPath($DatabasePath)
 if ($envMap['H2S_CONTRIB_DB'] -ne $expectedDb -or
     $envMap['H2S_CONTRIB_RETENTION_DAYS'] -ne [string]$RetentionDays -or
+    $envMap['H2S_CONTRIB_TOKEN_TTL_DAYS'] -ne [string]$TokenTtlDays -or
     $envMap['H2S_CONTRIB_SERVICE_ACCOUNT'] -ne $ServiceAccount -or
     $envMap['H2S_CONTRIB_PURGE_ACCOUNT'] -ne $PurgeAccount) {
     throw 'Scheduled purge DB, retention veya hesap ayarları WinSW API yapılandırmasıyla aynı olmalı.'
 }
 $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $script = Join-Path $AppRoot 'deploy\purge_contributions.ps1'
-$taskArguments = '-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{0}" -PythonExe "{1}" -AppRoot "{2}" -DatabasePath "{3}" -RetentionDays {4} -ServiceAccount "{5}" -PurgeAccount "{6}"' -f `
-    $script, $PythonExe, $AppRoot, $expectedDb, $RetentionDays, $ServiceAccount, $PurgeAccount
+$taskArguments = '-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{0}" -PythonExe "{1}" -AppRoot "{2}" -DatabasePath "{3}" -RetentionDays {4} -TokenTtlDays {5} -ServiceAccount "{6}" -PurgeAccount "{7}"' -f `
+    $script, $PythonExe, $AppRoot, $expectedDb, $RetentionDays, $TokenTtlDays, $ServiceAccount, $PurgeAccount
 $action = New-ScheduledTaskAction -Execute $exe -Argument $taskArguments
 $trigger = New-ScheduledTaskTrigger -Daily -At '3:15AM'
 $principal = New-ScheduledTaskPrincipal -UserId $PurgeAccount -LogonType S4U -RunLevel Limited

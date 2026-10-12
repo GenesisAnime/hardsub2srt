@@ -210,7 +210,7 @@ function Assert-ContributionServiceXml([xml]$Document) {
     }
     $scalarNames = @('id','name','description','startmode','executable','arguments','workingdirectory')
     $expectedEnvNames = @('PYTHONPATH','PYTHONDONTWRITEBYTECODE','H2S_CONTRIB_DB',
-        'H2S_CONTRIB_RETENTION_DAYS','H2S_CONTRIB_SERVICE_ACCOUNT',
+        'H2S_CONTRIB_RETENTION_DAYS','H2S_CONTRIB_TOKEN_TTL_DAYS','H2S_CONTRIB_SERVICE_ACCOUNT',
         'H2S_CONTRIB_PURGE_ACCOUNT','H2S_CONTRIB_LOG_DIR')
     $seen = @{}
     $envMap = @{}

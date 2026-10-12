@@ -12,6 +12,7 @@ function New-SyntheticServiceXml([string]$extraInside = '', [string]$startMode =
         '<env name="PYTHONDONTWRITEBYTECODE" value="1" />',
         '<env name="H2S_CONTRIB_DB" value="DATA_DB" />',
         '<env name="H2S_CONTRIB_RETENTION_DAYS" value="30" />',
+        '<env name="H2S_CONTRIB_TOKEN_TTL_DAYS" value="7" />',
         '<env name="H2S_CONTRIB_SERVICE_ACCOUNT" value="NT SERVICE\hardsub-contribution-api" />',
         '<env name="H2S_CONTRIB_PURGE_ACCOUNT" value="host\purge" />',
         '<env name="H2S_CONTRIB_LOG_DIR" value="LOG_DIR" />'
@@ -102,7 +103,7 @@ try {
     Assert-Throws { Assert-ContributionServicePathName ('"' + $outsideExe + '"') $waitress } 'different existing service executable'
     Assert-Throws { Assert-ContributionServicePathName ('"' + $waitress + '" --service') $waitress } 'extra existing service args'
     $validXml = Assert-ContributionServiceXml (New-SyntheticServiceXml)
-    if ($validXml.startmode -cne 'Manual' -or $validXml.env.Count -ne 7) { throw 'Valid allowlisted WinSW XML was not preserved.' }
+    if ($validXml.startmode -cne 'Manual' -or $validXml.env.Count -ne 8) { throw 'Valid allowlisted WinSW XML was not preserved.' }
     Assert-Throws { Read-ContributionServiceXml '<!DOCTYPE service [<!ENTITY x SYSTEM "file:///never-read">]><service />' } 'DTD/entity XML'
     Assert-Throws { Assert-ContributionServiceXml (New-SyntheticServiceXml '<onfailure action="restart" />') } 'WinSW lifecycle hook'
     Assert-Throws { Assert-ContributionServiceXml (New-SyntheticServiceXml '<startarguments>--service</startarguments>') } 'extra start arguments'
@@ -146,6 +147,17 @@ try {
                                'Assert-ContributionDirectoryTarget',
                                'Assert-ContributionPathAcl -Path $databaseFile')) {
         if (-not $deploySource.Contains($requiredCall)) { throw "Deployment guard is not wired: $requiredCall" }
+    }
+    if (-not $deploySource.Contains('[ValidateRange(1,30)][int]$TokenTtlDays = 7') -or
+        -not $deploySource.Contains("`$envMap['H2S_CONTRIB_TOKEN_TTL_DAYS'] -ne [string]`$TokenTtlDays")) {
+        throw 'Deployment must enforce the bounded 1..30 day token TTL and match the WinSW value.'
+    }
+    $purgeRegistration = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\deploy\register_contribution_purge_task.ps1') -Raw
+    $purgeWrapper = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\deploy\purge_contributions.ps1') -Raw
+    if (-not $purgeRegistration.Contains('H2S_CONTRIB_TOKEN_TTL_DAYS') -or
+        -not $purgeRegistration.Contains('-TokenTtlDays {5}') -or
+        -not $purgeWrapper.Contains('$env:H2S_CONTRIB_TOKEN_TTL_DAYS = [string]$TokenTtlDays')) {
+        throw 'Scheduled purge must use the same bounded token TTL as the API service.'
     }
     $servicePathCheck = $deploySource.IndexOf('Assert-ContributionServicePathName ([string]$service.PathName) $winswPath')
     $disableStart = $deploySource.IndexOf('& sc.exe config $serviceName start= disabled')
