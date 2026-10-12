@@ -287,12 +287,17 @@ class FullVideoAdapterTests(unittest.TestCase):
                     patch.object(video_eval, "_load_references",
                                  return_value=(refs, hashes["ref"], "en")), \
                     patch.object(video_eval, "_load_predictions",
-                                 return_value=(preds, profiles, hashes["pred"])):
+                                 return_value=(preds, profiles, hashes["pred"], {
+                                     "kind": "user_supplied_not_independently_verified",
+                                     "receipt_sha256": None, "run_id": None})):
                 video_eval.run(dataset, metadata_path, experiment,
                                reference_manifest, prediction_manifest, out)
             report = json.loads(out.read_text(encoding="utf-8"))
             self.assertEqual(report["predeclared_comparison"]["comparison_gate"]["status"], "PASS")
             self.assertEqual(report["status"], "MEASURED_ADAPTER_ONLY_NOT_RELEASE_PASS")
+            self.assertEqual(report["predictions"]["execution_provenance"],
+                             "user_supplied_not_independently_verified")
+            self.assertIsNone(report["predictions"]["execution_receipt_sha256"])
             self.assertFalse(report["phase6_eligible"])
             self.assertFalse(report["dataset"]["rights_verified"])
             self.assertFalse(report["references"]["authorized_use_verified"])

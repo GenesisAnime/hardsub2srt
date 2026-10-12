@@ -26,9 +26,12 @@ MAX_CUES = 100_000
 MAX_TEXT_CHARS = 4096
 MAX_INTERVAL_CANDIDATES = 2_000_000
 MAX_INTERVAL_PAIR_OPERATIONS = 2_000_000
+MAX_EXECUTION_RECEIPT_BYTES = 32 * 1024 * 1024
+FIXED_PRODUCT_ARGS = ["--ocr", "paddle", "--qa", "0"]
 MIN_OVERLAP_REFERENCE_RATIO = 0.5  # frozen; overlap / reference cue duration
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ENGINE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 TIMESTAMP_RE = re.compile(r"^(\d{2,}):(\d{2}):(\d{2}),(\d{3})$")
 
 
@@ -38,6 +41,12 @@ class VideoEvalError(ValueError):
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _canonical_sha256(value: object) -> str:
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True,
+                     separators=(",", ":")).encode("utf-8")
+    return _sha256(raw)
 
 
 def _json(path: Path):
@@ -61,7 +70,7 @@ def _json(path: Path):
 
 
 def _relative_file(root: Path, raw: object, label: str) -> Path:
-    if type(raw) is not str or not raw or "\\" in raw:
+    if type(raw) is not str or not raw or "\\" in raw or any(ord(char) < 32 for char in raw):
         raise VideoEvalError(f"{label}: göreli POSIX dosya yolu gerekli")
     rel = Path(raw)
     if rel.is_absolute() or ".." in rel.parts or re.match(r"^[A-Za-z]:", raw):
@@ -415,12 +424,249 @@ def _load_references(path: Path, groups: dict):
     return found, _sha256(raw), next(iter(languages))
 
 
-def _load_predictions(path: Path, groups: dict, references: dict, experiment: dict):
+def _receipt_object(value: object, keys: set[str], label: str) -> dict:
+    if type(value) is not dict or set(value) != keys:
+        raise VideoEvalError(f"Execution receipt {label} schema fields are invalid")
+    return value
+
+
+def _receipt_hash(value: object, label: str) -> str:
+    if type(value) is not str or not SHA256_RE.fullmatch(value):
+        raise VideoEvalError(f"Execution receipt {label} must be a lowercase SHA-256")
+    return value
+
+
+def _validate_execution_receipt(manifest_root: Path, receipt: object,
+                                receipt_raw: bytes, binding: dict,
+                                records: list[dict], groups: dict,
+                                references: dict,
+                                expected_inputs: dict | None) -> dict:
+    required = {"schema_version", "status", "run_id", "created_at", "duration_seconds",
+                "application", "runtime", "execution", "inputs", "profiles", "predictions", "limits"}
+    receipt = _receipt_object(receipt, required, "root")
+    if (type(receipt["schema_version"]) is not int or receipt["schema_version"] != 2
+            or receipt["status"] != "COMPLETED_LOCAL_EXECUTION_NOT_PHASE6_PASS"
+            or type(receipt["run_id"]) is not str or not RUN_ID_RE.fullmatch(receipt["run_id"])
+            or type(receipt["duration_seconds"]) not in (int, float)
+            or (type(receipt["duration_seconds"]) is float
+                and not math.isfinite(receipt["duration_seconds"]))
+            or receipt["duration_seconds"] < 0
+            or type(receipt["limits"]) is not list or not receipt["limits"]
+            or any(type(item) is not str or not item for item in receipt["limits"])):
+        raise VideoEvalError("Execution receipt version/status/run/limit fields are invalid")
+    if receipt["run_id"] != binding["run_id"]:
+        raise VideoEvalError("Execution receipt run ID differs from prediction manifest (possible replay)")
+    try:
+        timestamp = datetime.fromisoformat(receipt["created_at"].replace("Z", "+00:00"))
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError()
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise VideoEvalError("Execution receipt created_at must have a timezone") from exc
+
+    application = _receipt_object(receipt["application"],
+                                   {"commit", "source_bundle_sha256", "source_sha256s"}, "application")
+    if (application["commit"] is not None and
+            (type(application["commit"]) is not str or
+             not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", application["commit"]))):
+        raise VideoEvalError("Execution receipt application commit is invalid")
+    _receipt_hash(application["source_bundle_sha256"], "source bundle hash")
+    if (type(application["source_sha256s"]) is not dict or not application["source_sha256s"]
+            or any(type(key) is not str or not key for key in application["source_sha256s"])):
+        raise VideoEvalError("Execution receipt source hash inventory is invalid")
+    for value in application["source_sha256s"].values():
+        _receipt_hash(value, "source hash")
+    source_bundle = _sha256(json.dumps(
+        application["source_sha256s"], ensure_ascii=False, sort_keys=True,
+        separators=(",", ":")).encode("utf-8"))
+    if application["source_bundle_sha256"] != source_bundle:
+        raise VideoEvalError("Execution receipt source bundle hash does not match its source inventory")
+
+    runtime = _receipt_object(receipt["runtime"],
+                              {"python", "distributions", "media_tools", "environment"}, "runtime")
+    python = _receipt_object(runtime["python"],
+                             {"version", "executable_sha256", "startup_mode", "package_roots"}, "runtime.python")
+    if (type(python["version"]) is not str or not python["version"]
+            or type(python["startup_mode"]) is not str or not python["startup_mode"]
+            or type(python["package_roots"]) is not list
+            or any(type(item) is not str for item in python["package_roots"])):
+        raise VideoEvalError("Execution receipt Python runtime fields are invalid")
+    _receipt_hash(python["executable_sha256"], "Python executable hash")
+    distributions = runtime["distributions"]
+    if type(distributions) is not list:
+        raise VideoEvalError("Execution receipt distribution inventory must be an array")
+    for row in distributions:
+        row = _receipt_object(row, {"name", "normalized_name", "version", "location",
+                                    "metadata_sha256", "record_sha256"}, "distribution")
+        if any(type(row[key]) is not str or not row[key] for key in ("name", "normalized_name", "version", "location")):
+            raise VideoEvalError("Execution receipt distribution metadata is invalid")
+        for key in ("metadata_sha256", "record_sha256"):
+            if row[key] is not None:
+                _receipt_hash(row[key], f"distribution {key}")
+    media_tools = runtime["media_tools"]
+    if type(media_tools) is not dict:
+        raise VideoEvalError("Execution receipt media_tools must be an object")
+    for value in media_tools.values():
+        if value is not None:
+            value = _receipt_object(value, {"path", "sha256"}, "media tool")
+            if type(value["path"]) is not str or not value["path"]:
+                raise VideoEvalError("Execution receipt media tool path is invalid")
+            _receipt_hash(value["sha256"], "media tool hash")
+    environment = _receipt_object(runtime["environment"],
+                                  {"sha256s", "removed_proxy_variables", "fixed_offline_flags",
+                                   "python_override_variables_removed"}, "runtime.environment")
+    if (type(environment["sha256s"]) is not dict
+            or type(environment["removed_proxy_variables"]) is not list
+            or any(type(item) is not str for item in environment["removed_proxy_variables"])
+            or type(environment["fixed_offline_flags"]) is not dict
+            or any(type(key) is not str or type(value) is not str
+                   for key, value in environment["fixed_offline_flags"].items())
+            or type(environment["python_override_variables_removed"]) is not list
+            or any(type(item) is not str for item in environment["python_override_variables_removed"])):
+        raise VideoEvalError("Execution receipt runtime environment is invalid")
+    for value in environment["sha256s"].values():
+        _receipt_hash(value, "environment value hash")
+
+    execution = _receipt_object(receipt["execution"],
+                                {"mode", "network_policy", "phase6_eligible", "rights_verified",
+                                 "fixed_args"}, "execution")
+    if (execution["mode"] != "product_cli_allowlisted_offline_profile"
+            or execution["network_policy"] != (
+                "python_socket_apis_blocked; managed OCR loaders pinned/local/download-disabled; "
+                "OS network isolation not certified")
+            or execution["phase6_eligible"] is not False
+            or execution["rights_verified"] is not False
+            or execution["fixed_args"] != FIXED_PRODUCT_ARGS):
+        raise VideoEvalError("Execution receipt mode or non-release flags are invalid")
+
+    inputs = _receipt_object(receipt["inputs"],
+        {"dataset_manifest_sha256", "dataset_metadata_sha256", "split_manifest_sha256",
+         "evaluation_plan_sha256", "experiment_report_sha256", "reference_manifest_sha256",
+         "media_sha256s", "profile_sha256s", "execution_plan_sha256",
+         "rights_receipt_sha256", "trust_registry_sha256"}, "inputs")
+    for key in ("dataset_manifest_sha256", "dataset_metadata_sha256", "split_manifest_sha256",
+                "evaluation_plan_sha256", "experiment_report_sha256", "reference_manifest_sha256",
+                "execution_plan_sha256", "rights_receipt_sha256", "trust_registry_sha256"):
+        _receipt_hash(inputs[key], f"inputs.{key}")
+    if expected_inputs is None or any(inputs.get(key) != value for key, value in expected_inputs.items()):
+        raise VideoEvalError("Execution receipt dataset/split/reference bindings differ from evaluated inputs")
+    if type(inputs["media_sha256s"]) is not dict or type(inputs["profile_sha256s"]) is not dict:
+        raise VideoEvalError("Execution receipt media/profile hash maps are invalid")
+    for value in list(inputs["media_sha256s"].values()) + list(inputs["profile_sha256s"].values()):
+        _receipt_hash(value, "media/profile input hash")
+
+    profiles = receipt["profiles"]
+    if type(profiles) is not dict or len(profiles) != 2:
+        raise VideoEvalError("Execution receipt must bind exactly the two frozen profiles")
+    expected_engines = {row["engine_id"] for row in records}
+    if set(profiles) != expected_engines:
+        raise VideoEvalError("Execution receipt profile engine IDs differ from predictions")
+    profile_hashes = {}
+    for engine, row in profiles.items():
+        row = _receipt_object(row, {"profile_id", "profile_sha256", "model_sha256", "device_preference"},
+                              "profile")
+        if (type(row["profile_id"]) is not str or not row["profile_id"]
+                or type(row["device_preference"]) is not str
+                or row["device_preference"] not in {"gpu_default", "cpu"}):
+            raise VideoEvalError("Execution receipt profile metadata is invalid")
+        _receipt_hash(row["profile_sha256"], "profile hash")
+        _receipt_hash(row["model_sha256"], "model hash")
+        profile_hashes[engine] = row["profile_sha256"]
+    if inputs["profile_sha256s"] != dict(sorted(profile_hashes.items())):
+        raise VideoEvalError("Execution receipt profile hashes differ from its profile inventory")
+
+    prediction_data = _receipt_object(receipt["predictions"],
+        {"manifest", "manifest_records_sha256", "records"}, "predictions")
+    if (prediction_data["manifest"] != "prediction-manifest-v1.json"
+            or type(prediction_data["records"]) is not list
+            or prediction_data["records"] != records
+            or _canonical_sha256(prediction_data["records"]) !=
+               _receipt_hash(prediction_data["manifest_records_sha256"], "manifest records hash")):
+        raise VideoEvalError("Execution receipt prediction records do not match the bound manifest")
+    if len(records) != 2 * len(groups):
+        raise VideoEvalError("Execution receipt prediction record count differs from frozen groups")
+
+    seen = set()
+    expected_media = {}
+    for group_key, reference in references.items():
+        group_digest = _sha256(group_key.encode("utf-8"))
+        expected_media[group_digest] = reference["media_sha256"]
+    if inputs["media_sha256s"] != dict(sorted(expected_media.items())):
+        raise VideoEvalError("Execution receipt media hashes differ from timed references")
+
+    for row in records:
+        row = _receipt_object(row, {"engine_id", "source_id", "episode_id", "split", "media_sha256",
+                                    "prediction_srt_path", "prediction_srt_sha256", "profile_sha256",
+                                    "model_sha256", "config_sha256", "configured_device",
+                                    "session_configured_backend", "stats_sha256", "stats_path", "cue_count"},
+                              "prediction record")
+        group_key = prep._group_key(row)
+        key = (row["engine_id"], group_key)
+        if key in seen or row["engine_id"] not in expected_engines or group_key not in groups:
+            raise VideoEvalError("Execution receipt prediction record is duplicate or outside frozen groups")
+        seen.add(key)
+        ref = references[group_key]
+        profile = profiles[row["engine_id"]]
+        expected_stats_path = Path(row["prediction_srt_path"]).with_suffix(".stats.json").as_posix()
+        if (row["split"] != groups[group_key] or row["media_sha256"] != ref["media_sha256"]
+                or row["profile_sha256"] != profile["profile_sha256"]
+                or row["model_sha256"] != profile["model_sha256"]
+                or row["stats_path"] != expected_stats_path
+                or row["configured_device"] not in {"gpu", "cpu"}
+                or (profile["device_preference"] == "cpu" and row["configured_device"] != "cpu")
+                or type(row["config_sha256"]) is not str or not SHA256_RE.fullmatch(row["config_sha256"])
+                or type(row["session_configured_backend"]) is not str
+                or not row["session_configured_backend"].strip()
+                or type(row["cue_count"]) is not int or row["cue_count"] < 0):
+            raise VideoEvalError("Execution receipt media/profile/model/config/device fields do not match")
+        expected_config_sha256 = _sha256(json.dumps({
+            "profile_sha256": row["profile_sha256"],
+            "source_hashes": application["source_sha256s"],
+            "source_bundle_sha256": application["source_bundle_sha256"],
+            "runtime": runtime,
+            "fixed_args": execution["fixed_args"],
+        }, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        if row["config_sha256"] != expected_config_sha256:
+            raise VideoEvalError("Execution receipt config hash does not match its profile/runtime/source identity")
+        for field in ("media_sha256", "prediction_srt_sha256", "profile_sha256",
+                      "model_sha256", "config_sha256", "stats_sha256"):
+            _receipt_hash(row[field], f"prediction {field}")
+        try:
+            srt_path = _relative_file(manifest_root, row["prediction_srt_path"], "Receipt prediction SRT")
+            stats_path = _relative_file(manifest_root, row["stats_path"], "Receipt stats")
+        except OSError as exc:
+            raise VideoEvalError("Execution receipt SRT/stats file is missing") from exc
+        if (_sha256(srt_path.read_bytes()) != row["prediction_srt_sha256"]
+                or _sha256(stats_path.read_bytes()) != row["stats_sha256"]):
+            raise VideoEvalError("Execution receipt SRT/stats hashes do not match local outputs")
+    expected_keys = {(engine, group) for engine in expected_engines for group in groups}
+    if seen != expected_keys:
+        raise VideoEvalError("Execution receipt lacks a frozen engine/group prediction")
+    return {"receipt_sha256": _sha256(receipt_raw), "run_id": receipt["run_id"]}
+
+
+def _stats_backend(offline: dict) -> str:
+    secondary = offline.get("secondary_engine")
+    probe = offline.get("secondary_probe_session_configured_providers", [])
+    ocr = offline.get("secondary_ocr_session_configured_providers", [])
+    if (type(secondary) is not str or not secondary
+            or type(probe) is not list or any(type(x) is not str for x in probe)
+            or type(ocr) is not list or any(type(x) is not str for x in ocr)):
+        raise VideoEvalError("Execution stats provider configuration is invalid")
+    return (f"easyocr;secondary={secondary};"
+            f"onnx_probe_session_configured={','.join(probe) or 'not-observed'};"
+            f"onnx_ocr_session_configured={','.join(ocr) or 'not-invoked'}")
+
+
+def _load_predictions(path: Path, groups: dict, references: dict, experiment: dict,
+                      expected_execution_inputs: dict | None = None):
     path = path.resolve(strict=True)
     doc, raw = _json(path)
-    if (type(doc) is not dict or set(doc) != {"schema_version", "records"}
+    legacy_root = {"schema_version", "records"}
+    runner_root = {"schema_version", "records", "execution_receipt"}
+    if (type(doc) is not dict or set(doc) not in (legacy_root, runner_root)
             or type(doc["schema_version"]) is not int or doc["schema_version"] != 1):
         raise VideoEvalError("prediction-manifest-v1 şeması gerekli")
+    runner_bound = set(doc) == runner_root
     records = doc["records"]
     baseline = experiment["experiment"]["baseline_id"]
     candidate = experiment["experiment"]["candidate_id"]
@@ -432,14 +678,16 @@ def _load_predictions(path: Path, groups: dict, references: dict, experiment: di
     engines = {baseline, candidate}
     if type(records) is not list or len(records) != len(groups) * 2:
         raise VideoEvalError("Baseline ve aday için her source/episode grubunda bir SRT gerekli")
-    found, profiles = {}, {}
+    found, profiles, parsed_srt = {}, {}, {}
     required_common = {"engine_id", "source_id", "episode_id", "split", "media_sha256",
                        "prediction_srt_path", "prediction_srt_sha256", "model_sha256",
                        "config_sha256"}
     legacy_fields = required_common | {"device", "backend"}
     configured_fields = required_common | {"configured_device", "session_configured_backend"}
+    runner_fields = configured_fields | {"profile_sha256", "stats_path", "stats_sha256", "cue_count"}
     for record in records:
-        if type(record) is not dict or set(record) not in (legacy_fields, configured_fields):
+        valid_fields = (runner_fields,) if runner_bound else (legacy_fields, configured_fields)
+        if type(record) is not dict or set(record) not in valid_fields:
             raise VideoEvalError("Prediction kaydı alanları tam eşleşmeli")
         if (type(record["engine_id"]) is not str or type(record["source_id"]) is not str
                 or type(record["episode_id"]) is not str or type(record["split"]) is not str):
@@ -468,11 +716,71 @@ def _load_predictions(path: Path, groups: dict, references: dict, experiment: di
         pred_bytes = pred_file.read_bytes()
         if _sha256(pred_bytes) != record["prediction_srt_sha256"]:
             raise VideoEvalError("Prediction SRT hash'i eşleşmiyor")
-        found[(engine, key)] = _parse_srt_bytes(pred_bytes, f"{engine} {key} prediction")
+        parsed = _parse_srt_bytes(pred_bytes, f"{engine} {key} prediction")
+        found[(engine, key)] = parsed
+        parsed_srt[(engine, key)] = parsed
     expected = {(engine, key) for engine in engines for key in groups}
     if set(found) != expected:
         raise VideoEvalError("Prediction grupları baseline/aday için frozen split'i tam karşılamıyor")
-    return found, profiles, _sha256(raw)
+
+    execution_info = {"kind": "user_supplied_not_independently_verified",
+                      "receipt_sha256": None, "run_id": None}
+    if runner_bound:
+        binding = doc["execution_receipt"]
+        if (type(binding) is not dict or set(binding) != {"path", "sha256", "run_id"}
+                or type(binding["run_id"]) is not str or not RUN_ID_RE.fullmatch(binding["run_id"])):
+            raise VideoEvalError("Prediction execution_receipt binding schema is invalid")
+        _receipt_hash(binding["sha256"], "binding hash")
+        try:
+            receipt_path = _relative_file(path.parent, binding["path"], "Execution receipt")
+        except OSError as exc:
+            raise VideoEvalError("Bound execution receipt is missing") from exc
+        try:
+            prep._reject_reparse_components(path.parent / binding["path"])
+        except prep.InputError as exc:
+            raise VideoEvalError("Execution receipt path contains a symlink/junction") from exc
+        if receipt_path == path or receipt_path.stat().st_size > MAX_EXECUTION_RECEIPT_BYTES:
+            raise VideoEvalError("Execution receipt path/size is invalid")
+        receipt, receipt_raw = _json(receipt_path)
+        if _sha256(receipt_raw) != binding["sha256"]:
+            raise VideoEvalError("Execution receipt SHA-256 does not match prediction manifest")
+        if (type(receipt) is not dict or type(receipt.get("predictions")) is not dict
+                or receipt["predictions"].get("records") != records):
+            raise VideoEvalError("Execution receipt record set does not match prediction manifest")
+        expected_inputs = expected_execution_inputs
+        execution_info.update(_validate_execution_receipt(
+            path.parent, receipt, receipt_raw, binding, records, groups, references,
+            expected_inputs))
+        for row in records:
+            engine, key = row["engine_id"], prep._group_key(row)
+            receipt_profile = receipt["profiles"][engine]
+            if row["profile_sha256"] != receipt_profile["profile_sha256"]:
+                raise VideoEvalError("Prediction profile hash differs from execution receipt")
+            stats_path = _relative_file(path.parent, row["stats_path"], "Execution stats")
+            try:
+                prep._reject_reparse_components(path.parent / row["stats_path"])
+            except prep.InputError as exc:
+                raise VideoEvalError("Execution stats path contains a symlink/junction") from exc
+            stats, _stats_raw = _json(stats_path)
+            offline = stats.get("offline_experiment") if type(stats) is dict else None
+            if (type(offline) is not dict
+                    or offline.get("profile_sha256") != row["profile_sha256"]
+                    or offline.get("profile_id") != receipt_profile["profile_id"]
+                    or offline.get("phase6_eligible") is not False
+                    or offline.get("rights_verified") is not False
+                    or stats.get("main_srt_sha256") != row["prediction_srt_sha256"]
+                    or _stats_backend(offline) != row["session_configured_backend"]):
+                raise VideoEvalError("Execution stats/profile/SRT/backend does not match bound prediction")
+            configured = offline.get("primary_reader_configured_device")
+            configured = configured.strip().lower() if type(configured) is str else ""
+            configured_device = ("gpu" if configured.startswith(("cuda", "gpu"))
+                                 else "cpu" if configured.startswith("cpu") else "")
+            if configured_device != row["configured_device"]:
+                raise VideoEvalError("Execution stats configured device differs from prediction")
+            if len(parsed_srt[(engine, key)]) != row["cue_count"]:
+                raise VideoEvalError("Execution stats cue count differs from parsed SRT")
+        execution_info["kind"] = "runner_recorded_not_independently_verified"
+    return found, profiles, _sha256(raw), execution_info
 
 
 def _aggregate(engine_id: str, split: str, group_records: list[dict], tolerance: int):
@@ -603,8 +911,16 @@ def run(dataset: Path, metadata: Path, experiment: Path, references_path: Path,
     groups, experiment_doc, manifest_hash, metadata_hash, split_hash = _validated_split(
         experiment, split_path, dataset, metadata)
     references, ref_manifest_hash, source_language = _load_references(references_path, groups)
-    predictions, profiles, prediction_manifest_hash = _load_predictions(
-        predictions_path, groups, references, experiment_doc)
+    expected_execution_inputs = {
+        "dataset_manifest_sha256": manifest_hash,
+        "dataset_metadata_sha256": metadata_hash,
+        "split_manifest_sha256": split_hash,
+        "evaluation_plan_sha256": experiment_doc["evaluation_plan_sha256"],
+        "experiment_report_sha256": _sha256(experiment.resolve(strict=True).read_bytes()),
+        "reference_manifest_sha256": ref_manifest_hash,
+    }
+    predictions, profiles, prediction_manifest_hash, execution_info = _load_predictions(
+        predictions_path, groups, references, experiment_doc, expected_execution_inputs)
     out_path = out_path.resolve()
     if out_path.exists():
         raise VideoEvalError("Çıktı raporu zaten var; üzerine yazılmayacak")
@@ -671,7 +987,9 @@ def run(dataset: Path, metadata: Path, experiment: Path, references_path: Path,
                        "alignment_review_status": "human_attested_not_independently_verified",
                        "authorized_use_verified": False},
         "predictions": {"manifest_sha256": prediction_manifest_hash,
-                        "execution_provenance": "user_supplied_not_independently_verified",
+                        "execution_provenance": execution_info["kind"],
+                        "execution_receipt_sha256": execution_info["receipt_sha256"],
+                        "execution_run_id": execution_info["run_id"],
                         "engine_profiles": {key: {"model_sha256": value[0],
                                                    "config_sha256": value[1],
                                                    "configured_device": value[2],

@@ -60,6 +60,12 @@ def _sha_bytes(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _canonical_sha256(value: object) -> str:
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True,
+                     separators=(",", ":")).encode("utf-8")
+    return _sha_bytes(raw)
+
+
 def _sha_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -474,8 +480,8 @@ def _check_outputs(media: dict, srt_path: Path, stats_path: Path,
             and not offline.get("secondary_ocr_session_configured_providers")):
         raise ExecutionError("Used PP-OCRv5 session did not expose configured ONNX providers")
     srt_sha = _sha_file(srt_path)
-    if stats.get("main_srt_sha256") not in (None, srt_sha):
-        raise ExecutionError("Stats SRT hash does not match output bytes")
+    if stats.get("main_srt_sha256") != srt_sha:
+        raise ExecutionError("Stats SRT hash is missing or does not match output bytes")
     if type(srt_cues) is not list:
         raise ExecutionError("SRT parser returned an invalid cue collection")
     return srt_cues, stats
@@ -775,6 +781,7 @@ def _run(plan_path: Path, executor=None) -> Path:
                     "media_sha256": media["sha256"],
                     "prediction_srt_path": f"{engine_dir.name}/{srt_path.name}",
                     "prediction_srt_sha256": _sha_file(srt_path),
+                    "profile_sha256": profile["sha256"],
                     "model_sha256": profile["model_sha256"],
                     "config_sha256": hashlib.sha256(json.dumps({
                         "profile_sha256": profile["sha256"], "source_hashes": source_hashes,
@@ -787,20 +794,14 @@ def _run(plan_path: Path, executor=None) -> Path:
                     "stats_path": f"{engine_dir.name}/{stats_path.name}",
                     "cue_count": len(srt_cues),
                 })
-        prediction_doc = {"schema_version": 1, "records": [
-            {key: value for key, value in row.items() if key in {
-                "engine_id", "source_id", "episode_id", "split", "media_sha256",
-                "prediction_srt_path", "prediction_srt_sha256", "model_sha256",
-                "config_sha256", "configured_device", "session_configured_backend"}}
-            for row in predictions
-        ]}
-        _atomic_json_new(staging / "prediction-manifest-v1.json", prediction_doc)
-        video_eval._load_predictions(
-            staging / "prediction-manifest-v1.json", ctx["groups"],
-            ctx["reference_rows"], ctx["experiment_doc"])
-        prediction_sha = _sha_file(staging / "prediction-manifest-v1.json")
+        manifest_records = [{key: row[key] for key in (
+            "engine_id", "source_id", "episode_id", "split", "media_sha256",
+            "prediction_srt_path", "prediction_srt_sha256", "profile_sha256",
+            "model_sha256", "config_sha256", "configured_device",
+            "session_configured_backend", "stats_sha256", "stats_path", "cue_count")}
+            for row in predictions]
         receipt = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "COMPLETED_LOCAL_EXECUTION_NOT_PHASE6_PASS",
             "run_id": ctx["run_id"], "created_at": datetime.now(timezone.utc).isoformat(),
             "duration_seconds": round(time.monotonic() - start, 3),
@@ -810,23 +811,41 @@ def _run(plan_path: Path, executor=None) -> Path:
             "runtime": runtime,
             "execution": {"mode": "product_cli_allowlisted_offline_profile",
                           "network_policy": "python_socket_apis_blocked; managed OCR loaders pinned/local/download-disabled; OS network isolation not certified",
-                          "phase6_eligible": False, "rights_verified": False},
+                          "phase6_eligible": False, "rights_verified": False,
+                          "fixed_args": FIXED_PRODUCT_ARGS},
             "inputs": ctx["bindings"] | {"execution_plan_sha256": ctx["plan_sha256"],
                                          "rights_receipt_sha256": ctx["rights_receipt_sha256"],
                                          "trust_registry_sha256": ctx["trust_registry_sha256"]},
-            "profiles": {engine: {"profile_sha256": profile["sha256"],
+            "profiles": {engine: {"profile_id": profile["runtime"]["profile_id"],
+                                   "profile_sha256": profile["sha256"],
                                    "model_sha256": profile["model_sha256"],
                                    "device_preference": profile["runtime"]["device_preference"]}
                          for engine, profile in ctx["profiles"].items()},
             "predictions": {"manifest": "prediction-manifest-v1.json",
-                            "manifest_sha256": prediction_sha,
-                            "records": predictions},
+                            "manifest_records_sha256": _canonical_sha256(manifest_records),
+                            "records": manifest_records},
             "limits": ["Human receipt and trust pin are attestations; code does not establish legal rights or reviewer identity.",
                        "This execution receipt is not a rights/trust receipt and cannot create Phase 6 PASS.",
                        "Video timestamps use the product's current FPS/frame timing and retain its VFR limitations."],
         }
-        receipt_path = staging / "phase5-execution-receipt-v1.json"
+        receipt_path = staging / "phase5-execution-receipt-v2.json"
         _atomic_json_new(receipt_path, receipt)
+        receipt_sha256 = _sha_file(receipt_path)
+        prediction_doc = {
+            "schema_version": 1,
+            "execution_receipt": {"path": receipt_path.name,
+                                  "sha256": receipt_sha256,
+                                  "run_id": ctx["run_id"]},
+            "records": manifest_records,
+        }
+        _atomic_json_new(staging / "prediction-manifest-v1.json", prediction_doc)
+        _, _, _, execution_binding = video_eval._load_predictions(
+            staging / "prediction-manifest-v1.json", ctx["groups"],
+            ctx["reference_rows"], ctx["experiment_doc"], ctx["bindings"])
+        if (execution_binding["receipt_sha256"] != receipt_sha256
+                or execution_binding["run_id"] != ctx["run_id"]):
+            raise ExecutionError("Prediction manifest did not bind the newly written execution receipt")
+        prediction_sha = _sha_file(staging / "prediction-manifest-v1.json")
         _revalidate(ctx)
         if _source_hashes() != source_hashes or _git_commit() != commit:
             raise ExecutionError("Application source/commit changed during the run")
