@@ -2040,9 +2040,23 @@ def api_ai_ocr_gorsel_yanit():
         return jsonify({"hata": "Manuel AI OCR inceleme modülü kullanılamıyor"}), 503
     if not request.is_json:
         return jsonify({"hata": "JSON isteği gerekli"}), 415
-    if request.content_length and request.content_length > ai_ocr_review.MAX_RESPONSE_BYTES:
+    limit = ai_ocr_review.MAX_RESPONSE_BYTES
+    if request.content_length is not None and request.content_length > limit:
         return jsonify({"hata": "AI OCR yanıtı 4 MiB sınırını aşıyor"}), 413
-    value = request.get_json(silent=True) or {}
+    raw = bytearray()
+    while len(raw) <= limit:
+        chunk = request.stream.read(min(64 * 1024, limit + 1 - len(raw)))
+        if not chunk:
+            break
+        raw.extend(chunk)
+    if len(raw) > limit:
+        return jsonify({"hata": "AI OCR yanıtı 4 MiB sınırını aşıyor"}), 413
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return jsonify({"hata": "AI OCR yanıtı geçerli JSON değil"}), 400
+    if not isinstance(value, dict):
+        return jsonify({"hata": "JSON nesnesi gerekli"}), 400
     try:
         return jsonify(ai_ocr_review.import_response(value.get("review_id", ""), value.get("response")))
     except Exception as exc:
