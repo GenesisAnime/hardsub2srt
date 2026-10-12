@@ -19,12 +19,25 @@ def _deny_network(*_args, **_kwargs):
     raise RuntimeError("Network access is disabled in offline Phase 5 execution")
 
 
-def main() -> int:
-    if len(sys.argv) < 2:
-        raise SystemExit("offline bootstrap requires the fixed product script path")
+def _block_socket_network():
     socket.create_connection = _deny_network
     socket.socket.connect = _deny_network
     socket.socket.connect_ex = _deny_network
+    for name in ("send", "sendall", "sendto", "sendmsg", "sendfile",
+                 "bind", "listen", "accept", "accept_into"):
+        if hasattr(socket.socket, name):
+            setattr(socket.socket, name, _deny_network)
+    for name in ("send_fds",):
+        if hasattr(socket, name):
+            setattr(socket, name, _deny_network)
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        raise SystemExit("offline bootstrap requires the fixed product script path")
+    if not sys.flags.no_site:
+        raise SystemExit("offline bootstrap must be started with Python -S")
+    _block_socket_network()
 
     package_paths = sysconfig.get_paths()
     for name in ("purelib", "platlib"):
@@ -37,6 +50,7 @@ def main() -> int:
         if os.fspath(path) not in sys.path:
             sys.path.append(os.fspath(path))
 
+    os.environ["HARDSUB2SRT_OFFLINE_BOOTSTRAPPED"] = "1"
     script = Path(sys.argv[1]).resolve(strict=True)
     if not script.is_file():
         raise SystemExit("offline bootstrap product script is unavailable")

@@ -26,7 +26,8 @@ after the SRTs parse, stats identify the expected media/profile, and inputs and
 model assets still match their original hashes.
 
 ```powershell
-py -3 hardsub2srt.py phase5-run --plan "D:\local-only\phase5-execution-plan.json"
+py -3 -S phase5_offline_bootstrap.py hardsub2srt.py phase5-run `
+  --plan "D:\local-only\phase5-execution-plan.json"
 ```
 
 Paths in the plan, profile, and rights receipt must be absolute local fixed-drive
@@ -109,8 +110,14 @@ video measurement adapter, plus SRT/stats pairs and a local execution receipt.
 The execution receipt records an optional Git commit, a deterministic digest of
 all product Python sources (including untracked files) and behavior dictionaries,
 Python/package/tool hashes and versions, and hashes of the effective child
-environment. Git metadata is optional, so the same bundle digest works in the
-Desktop copy without `.git`. Proxy variables and Python path/startup overrides
+environment. The receipt inventories every installed distribution visible
+under the isolated interpreter's global `purelib`/`platlib` roots (user-site is
+disabled) with name, version, installation location, and exact
+`METADATA`/`RECORD` hashes where those files exist. The inventory hashes these
+small distribution metadata files, not every package payload file; package
+payload byte integrity is not claimed. Git metadata is
+optional, so the same bundle digest works in the Desktop copy without `.git`.
+Proxy variables and Python path/startup overrides
 are removed from the child environment; only an allowlisted set of runtime
 variables is passed and their values are recorded as SHA-256 digests. Python
 starts with `-S`; the bootstrap blocks sockets before adding only the
@@ -122,6 +129,11 @@ device, session-configured provider metadata, and elapsed time. It
 does not contain subtitle text or
 reference text beyond what the normal local SRT/stats artifacts themselves
 contain. Keep the output local and outside synchronized/shared folders.
+
+The execution receipt includes local interpreter, package, and FFmpeg paths.
+Keep it local and do not share it. The downstream video measurement report
+does not copy that inventory or any absolute paths; it keeps relative prediction
+paths and aggregate metric results under its existing redaction contract.
 
 The device/provider fields describe reader and session configuration; they do
 not profile individual inference nodes or prove hardware executed them. A

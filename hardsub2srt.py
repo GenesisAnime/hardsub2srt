@@ -631,6 +631,12 @@ def _block_network_for_offline_experiment():
     socket.create_connection = denied
     socket.socket.connect = denied
     socket.socket.connect_ex = denied
+    for name in ("send", "sendall", "sendto", "sendmsg", "sendfile",
+                 "bind", "listen", "accept", "accept_into"):
+        if hasattr(socket.socket, name):
+            setattr(socket.socket, name, denied)
+    if hasattr(socket, "send_fds"):
+        socket.send_fds = denied
 
 
 def _verify_offline_profile_current():
@@ -3641,6 +3647,8 @@ def _sha256_file(path):
 def main(argv=None):
     cli_args = list(sys.argv[1:] if argv is None else argv)
     if cli_args[:1] == ["phase5-run"]:
+        if os.environ.get("HARDSUB2SRT_OFFLINE_BOOTSTRAPPED") != "1":
+            raise SystemExit("Phase 5 runner requires: python -S phase5_offline_bootstrap.py hardsub2srt.py phase5-run ...")
         from phase5_execution import main as phase5_main
         raise SystemExit(phase5_main(cli_args[1:]))
     run_started = time.monotonic()
@@ -3775,6 +3783,8 @@ def main(argv=None):
                     help="sadece tarama istatistiği")
     args = ap.parse_args(cli_args)
     if args.offline_profile is not None:
+        if os.environ.get("HARDSUB2SRT_OFFLINE_BOOTSTRAPPED") != "1":
+            ap.error("offline profile yalnız -S offline bootstrap üzerinden kullanılabilir")
         from offline_ocr_profile import load_profile
         try:
             _OFFLINE_EXPERIMENT_PROFILE = load_profile(args.offline_profile)

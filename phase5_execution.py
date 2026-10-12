@@ -53,10 +53,7 @@ OFFLINE_ENV = {
     "PIP_NO_INDEX": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1",
     "PYTHONNOUSERSITE": "1",
 }
-RUNTIME_DISTRIBUTIONS = (
-    "opencv-python", "opencv-python-headless", "numpy", "easyocr", "torch",
-    "rapidocr", "rapidocr-onnxruntime", "onnxruntime", "onnxruntime-gpu",
-)
+REQUIRED_OCR_DISTRIBUTIONS = {"numpy", "easyocr", "torch"}
 
 
 def _sha_bytes(raw: bytes) -> str:
@@ -536,42 +533,97 @@ def _child_environment() -> tuple[dict[str, str], dict]:
     }
 
 
+def _distribution_file_digest(distribution, filename: str) -> str | None:
+    """Hash exact METADATA/RECORD bytes when a distribution exposes the file."""
+    root = getattr(distribution, "_path", None)
+    if root is not None:
+        direct = Path(root) / filename
+        if direct.is_file():
+            path = _abs_path(os.fspath(direct),
+                             f"Installed distribution {filename}", directory=False)
+            return _sha_file(path)
+    files = distribution.files
+    candidates = [item for item in files if item.name == filename] if files else []
+    for item in candidates:
+        path = Path(distribution.locate_file(item)).expanduser()
+        if not path.is_file():
+            continue
+        try:
+            path = _abs_path(os.fspath(path), f"Installed distribution {filename}", directory=False)
+        except ExecutionError:
+            raise
+        return _sha_file(path)
+    try:
+        raw = distribution.read_text(filename)
+    except (OSError, UnicodeError):
+        raw = None
+    return _sha_bytes(raw.encode("utf-8")) if raw is not None else None
+
+
+def _distribution_inventory(package_roots: list[Path]) -> list[dict]:
+    """Inventory every distribution visible in the isolated global site roots."""
+    found = {}
+    root_strings = [os.fspath(path) for path in package_roots]
+    try:
+        distributions = package_metadata.distributions(path=root_strings)
+        for distribution in distributions:
+            metadata = distribution.metadata
+            name = str(metadata.get("Name") or "").strip()
+            version = str(distribution.version or "").strip()
+            if not name or not version:
+                raise ExecutionError("An installed runtime distribution lacks a name/version")
+            normalized_name = re.sub(r"[-_.]+", "-", name).casefold()
+            location_raw = getattr(distribution, "_path", None)
+            if location_raw is None:
+                location_raw = distribution.locate_file("")
+            location = _abs_path(os.fspath(location_raw),
+                                 f"Installed distribution location: {name}", directory=True)
+            item = {
+                "name": name, "normalized_name": normalized_name, "version": version,
+                "location": os.fspath(location),
+                "metadata_sha256": (_distribution_file_digest(distribution, "METADATA")
+                                    or _distribution_file_digest(distribution, "PKG-INFO")),
+                "record_sha256": _distribution_file_digest(distribution, "RECORD"),
+            }
+            key = (normalized_name, version, os.path.normcase(os.fspath(location)))
+            found[key] = item
+    except OSError as exc:
+        raise ExecutionError("Could not inventory interpreter runtime distributions") from exc
+    return [found[key] for key in sorted(found)]
+
+
 def _runtime_provenance(child_env: dict[str, str], environment: dict,
                         profiles: dict, *, require_available: bool) -> dict:
     python_path = _abs_path(sys.executable, "Python executable", directory=False)
     sys_paths = sysconfig.get_paths()
-    package_roots = [Path(sys_paths[name]).resolve(strict=True)
-                     for name in ("purelib", "platlib") if sys_paths.get(name)]
-    distributions = {}
-    package_locations = {}
-    for name in RUNTIME_DISTRIBUTIONS:
-        try:
-            distribution = package_metadata.distribution(name)
-            distributions[name] = distribution.version
-            package_locations[name] = os.fspath(Path(distribution.locate_file("")).resolve(strict=True))
-        except package_metadata.PackageNotFoundError:
-            distributions[name] = None
-            package_locations[name] = None
-    required = {"numpy", "easyocr", "torch"}
+    package_roots = []
+    for name in ("purelib", "platlib"):
+        if not sys_paths.get(name):
+            continue
+        resolved = Path(sys_paths[name]).resolve(strict=True)
+        if resolved not in package_roots:
+            package_roots.append(resolved)
+    inventory = _distribution_inventory(package_roots)
+    installed = {entry["normalized_name"] for entry in inventory}
+    required = set(REQUIRED_OCR_DISTRIBUTIONS)
     if any(value["runtime"]["secondary_engine"] == "ppocrv5"
            for value in profiles.values()):
         required.add("rapidocr")
-        onnx_distribution = ("onnxruntime-gpu" if distributions["onnxruntime-gpu"]
-                             else "onnxruntime" if distributions["onnxruntime"] else None)
+        onnx_distribution = ("onnxruntime-gpu" if "onnxruntime-gpu" in installed
+                             else "onnxruntime" if "onnxruntime" in installed else None)
         if onnx_distribution is None:
             raise ExecutionError("PP-OCRv5 needs an installed ONNX Runtime distribution")
         required.add(onnx_distribution)
     if require_available:
-        opencv_names = ("opencv-python", "opencv-python-headless")
-        if not any(distributions[name] for name in opencv_names):
+        if not {"opencv-python", "opencv-python-headless"} & installed:
             raise ExecutionError("An OpenCV runtime distribution is required")
-        missing = sorted(name for name in required if not distributions.get(name))
+        missing = sorted(required - installed)
         if missing:
-            raise ExecutionError("Required OCR runtime package metadata is missing: " + ", ".join(missing))
-        for name in required | {name for name in opencv_names if distributions[name]}:
-            location = package_locations.get(name)
-            if location is None or not any(Path(location).is_relative_to(root) for root in package_roots):
-                raise ExecutionError(f"Required runtime package is outside isolated global site-packages: {name}")
+            raise ExecutionError("Required OCR runtime distribution metadata is missing: " + ", ".join(missing))
+        for entry in inventory:
+            if entry["normalized_name"] in required | {"opencv-python", "opencv-python-headless"}:
+                if not any(Path(entry["location"]).is_relative_to(root) for root in package_roots):
+                    raise ExecutionError(f"Required runtime distribution is outside isolated global site-packages: {entry['name']}")
     tools = {}
     if require_available and not child_env.get("PATH"):
         raise ExecutionError("An explicit child PATH is required to resolve local FFmpeg tools")
@@ -588,8 +640,7 @@ def _runtime_provenance(child_env: dict[str, str], environment: dict,
         "python": {"version": sys.version.split()[0], "executable_sha256": _sha_file(python_path),
                    "startup_mode": "-S isolated bootstrap; .pth/sitecustomize and user site disabled",
                    "package_roots": [os.fspath(path) for path in package_roots]},
-        "packages": distributions,
-        "package_locations": package_locations,
+        "distributions": inventory,
         "media_tools": tools,
         "environment": environment,
     }

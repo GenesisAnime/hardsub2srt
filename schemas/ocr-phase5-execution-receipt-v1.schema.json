@@ -25,11 +25,10 @@
     },
     "runtime": {
       "type": "object", "additionalProperties": false,
-      "required": ["python", "packages", "package_locations", "media_tools", "environment"],
+      "required": ["python", "distributions", "media_tools", "environment"],
       "properties": {
         "python": {"type": "object", "additionalProperties": false, "required": ["version", "executable_sha256", "startup_mode", "package_roots"], "properties": {"version": {"type": "string", "minLength": 1}, "executable_sha256": {"$ref": "#/$defs/sha256"}, "startup_mode": {"type": "string", "minLength": 1}, "package_roots": {"type": "array", "items": {"type": "string"}}}},
-        "packages": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
-        "package_locations": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+        "distributions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["name", "normalized_name", "version", "location", "metadata_sha256", "record_sha256"], "properties": {"name": {"type": "string", "minLength": 1}, "normalized_name": {"type": "string", "minLength": 1}, "version": {"type": "string", "minLength": 1}, "location": {"type": "string", "minLength": 1}, "metadata_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}, "record_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}}}},
         "media_tools": {"type": "object", "additionalProperties": {"type": ["object", "null"], "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"}}}},
         "environment": {"type": "object", "additionalProperties": false, "required": ["sha256s", "removed_proxy_variables", "fixed_offline_flags", "python_override_variables_removed"], "properties": {"sha256s": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}}, "removed_proxy_variables": {"type": "array", "items": {"type": "string"}}, "fixed_offline_flags": {"type": "object", "additionalProperties": {"type": "string"}}, "python_override_variables_removed": {"type": "array", "items": {"type": "string"}}}}
       }

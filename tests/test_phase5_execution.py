@@ -225,6 +225,40 @@ class OfflineProfileTests(unittest.TestCase):
         self.assertNotIn("tests/injected.py", values)
         self.assertNotIn(".git/hook.py", values)
 
+    def test_runtime_inventory_includes_every_distribution_and_metadata_record_hashes(self):
+        root = self.root / "site-packages"
+        entries = []
+        fixtures = [("unused-transitive-dependency", "1.2", "first"),
+                    ("direct-ocr-runtime", "3.4", "second")]
+        for name, version, folder in fixtures:
+            info = root / f"{folder}.dist-info"
+            info.mkdir(parents=True)
+            metadata = f"Name: {name}\nVersion: {version}\n".encode()
+            record = f"{folder}.dist-info/METADATA,,\n".encode()
+            (info / "METADATA").write_bytes(metadata)
+            (info / "RECORD").write_bytes(record)
+
+            class FakeDistribution:
+                def __init__(self, dist_name, dist_version, dist_info):
+                    self.metadata = {"Name": dist_name}
+                    self.version = dist_version
+                    self._path = dist_info
+                    self.files = [Path(f"{dist_info.name}/METADATA"),
+                                  Path(f"{dist_info.name}/RECORD")]
+
+                def locate_file(self, item):
+                    item_path = Path(item)
+                    return item_path if item_path.is_absolute() else root / item_path
+
+            entries.append(FakeDistribution(name, version, info))
+        with patch.object(execution.package_metadata, "distributions", return_value=entries):
+            inventory = execution._distribution_inventory([root])
+        self.assertEqual([item["normalized_name"] for item in inventory],
+                         ["direct-ocr-runtime", "unused-transitive-dependency"])
+        self.assertEqual(len(inventory), 2)
+        self.assertTrue(all(item["metadata_sha256"] and item["record_sha256"]
+                            for item in inventory))
+
     def test_child_environment_removes_proxy_and_python_path_overrides(self):
         with patch.dict(os.environ, {"HTTP_PROXY": "http://synthetic.invalid",
                                      "NO_PROXY": "synthetic.invalid",
@@ -247,12 +281,20 @@ class OfflineProfileTests(unittest.TestCase):
         script = self.root / "bootstrap-probe.py"
         script.write_text(
             "import socket\n"
-            "try:\n"
-            "    socket.create_connection(('127.0.0.1', 1))\n"
-            "except RuntimeError as error:\n"
-            "    print(str(error))\n"
-            "else:\n"
-            "    raise SystemExit('socket was not blocked')\n",
+            "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+            "calls = [lambda: socket.create_connection(('127.0.0.1', 1)),\n"
+            "         lambda: s.sendto(b'x', ('127.0.0.1', 1)),\n"
+            "         lambda: s.send(b'x'), lambda: s.sendall(b'x')]\n"
+            "if hasattr(s, 'sendmsg'):\n"
+            "    calls.append(lambda: s.sendmsg([b'x'], [], 0, ('127.0.0.1', 1)))\n"
+            "for call in calls:\n"
+            "    try:\n"
+            "        call()\n"
+            "    except RuntimeError as error:\n"
+            "        assert 'Network access is disabled' in str(error)\n"
+            "    else:\n"
+            "        raise SystemExit('raw socket send path was not blocked')\n"
+            "print(f'blocked={len(calls)}')\n",
             encoding="utf-8")
         result = subprocess.run(
             [sys.executable, "-S", str(Path(execution.ROOT) / "phase5_offline_bootstrap.py"),
@@ -260,7 +302,7 @@ class OfflineProfileTests(unittest.TestCase):
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=20, check=False, text=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Network access is disabled", result.stdout)
+        self.assertIn("blocked=", result.stdout)
 
     def test_disabled_second_engine_does_not_enter_any_fallback_chain(self):
         profile = {"secondary_engine": "none"}
@@ -278,10 +320,17 @@ class OfflineProfileTests(unittest.TestCase):
         calls = []
         fake_runner = SimpleNamespace(main=lambda argv: calls.append(argv) or 0)
         with patch.dict("sys.modules", {"phase5_execution": fake_runner}), \
+                patch.dict(os.environ, {"HARDSUB2SRT_OFFLINE_BOOTSTRAPPED": "1"}), \
                 self.assertRaises(SystemExit) as raised:
             hs.main(["phase5-run", "--plan", "C:\\synthetic\\plan.json"])
         self.assertEqual(raised.exception.code, 0)
         self.assertEqual(calls, [["--plan", "C:\\synthetic\\plan.json"]])
+
+    def test_phase5_cli_refuses_non_bootstrapped_entry(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HARDSUB2SRT_OFFLINE_BOOTSTRAPPED", None)
+            with self.assertRaisesRegex(SystemExit, "requires: python -S"):
+                hs.main(["phase5-run", "--plan", "C:\\synthetic\\plan.json"])
 
     def test_ffmpeg_protocol_allowlist_is_local_only_and_ordinary_mode_is_unchanged(self):
         with patch.object(hs, "_OFFLINE_EXPERIMENT_PROFILE", None):
@@ -370,9 +419,22 @@ class Phase5ExecutionTests(unittest.TestCase):
         self.harness = Phase5ExecutionHarness(self.root, self.output_parent)
         self.registry_patch = patch.object(execution, "TRUST_REGISTRY", self.harness.trust_path)
         self.registry_patch.start()
+        self.runtime_patch = patch.object(
+            execution, "_runtime_provenance",
+            return_value={
+                "python": {"version": "synthetic", "executable_sha256": "a" * 64,
+                           "startup_mode": "synthetic -S", "package_roots": []},
+                "distributions": [],
+                "media_tools": {"ffmpeg": None, "ffprobe": None},
+                "environment": {"sha256s": {}, "removed_proxy_variables": [],
+                                "fixed_offline_flags": {},
+                                "python_override_variables_removed": []},
+            })
+        self.runtime_patch.start()
 
     def tearDown(self):
         self.registry_patch.stop()
+        self.runtime_patch.stop()
         for pack in self.harness.inputs.packs:
             with ocr_review._LOCK:
                 for review_id, info in list(ocr_review._PACKS.items()):
