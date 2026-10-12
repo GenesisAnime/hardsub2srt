@@ -298,6 +298,50 @@ class Phase6ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(phase6_release.GateError, "raporunun SHA-256"):
             phase6_release.validate(self.manifest_path, self.report_path, self.trust_path)
 
+    def test_phase5_v1_prepared_report_returns_explicit_blocker_without_release(self):
+        import contextlib
+        import io
+
+        report_raw = _write_json(self.report_path, {
+            "schema_version": 1, "status": "PREPARED_NOT_RUN",
+            "experiment_id": "synthetic-prepared-only",
+        })
+        report_hash = _sha(report_raw)
+        self.manifest["evaluation"]["report_sha256"] = report_hash
+        self._write_manifest()
+
+        rights = json.loads(self.rights_path.read_text(encoding="utf-8"))
+        rights["phase5_report_sha256"] = report_hash
+        rights_raw = _write_json(self.rights_path, rights)
+        rights_hash = _sha(rights_raw)
+        self.manifest["rights_review"]["receipt_sha256"] = rights_hash
+        self._write_manifest()
+
+        trust = json.loads(self.trust_path.read_text(encoding="utf-8"))
+        trust["trusted_phase5_reports"] = [report_hash]
+        trust["trusted_rights_receipts"] = [rights_hash]
+        for item in trust["trusted_compatibility_evidence"]:
+            item["phase5_report_sha256"] = report_hash
+        self._write_trust(trust)
+
+        blockers = phase6_release.validate(self.manifest_path, self.report_path, self.trust_path)
+        self.assertTrue(any("Phase 5 v1" in blocker and "her koşulda reddedilir" in blocker
+                            for blocker in blockers), blockers)
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = phase6_release.main([str(self.manifest_path), "--phase5-report",
+                                       str(self.report_path), "--json"])
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(code, 2)
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertTrue(any("Phase 5 v1" in blocker and "her koşulda reddedilir" in blocker
+                            for blocker in result["blockers"]), result)
+        self.assertFalse(result["release_permitted"])
+        self.assertFalse(result["packaging_performed"])
+        self.assertFalse(result["publishing_performed"])
+        self.assertFalse((self.root / "package").exists())
+
     def test_duplicate_candidate_manifest_key_is_rejected(self):
         self.manifest_path.write_text('{"schema_version":1,"schema_version":1}', encoding="utf-8")
         with self.assertRaisesRegex(phase6_release.GateError, "yinelenen alan"):
