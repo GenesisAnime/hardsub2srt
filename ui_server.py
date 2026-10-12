@@ -131,6 +131,14 @@ except Exception as _translation_memory_hatasi:
           f"{_translation_memory_hatasi!r}")
 
 try:
+    import translation_evaluation_service
+    import translation_evaluation as translation_evaluation_backend
+except Exception as _translation_evaluation_error:
+    translation_evaluation_service = None
+    translation_evaluation_backend = None
+    print(f"[ui] UYARI: çeviri kalite pilotu yüklenemedi: {_translation_evaluation_error!r}")
+
+try:
     import contribution_client
 except Exception as _contrib_hatasi:
     contribution_client = None
@@ -225,6 +233,13 @@ def _guard_local_translation_memory():
                 return jsonify({"hata": "İş geçmişi için aynı localhost kaynağı gerekli"}), 403
     if request.path.startswith("/api/ceviri-bellegi/"):
         return _memory_request_error()
+    if request.path.startswith("/api/ceviri-kalitesi/"):
+        error = _memory_request_error()
+        if error:
+            return error
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not (
+                request.headers.get("Origin") or request.headers.get("Referer")):
+            return jsonify({"hata": "Kalite kaydı için aynı localhost kaynağı gerekli"}), 403
     if request.path.startswith("/api/katki/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         host = request.environ.get("HTTP_HOST", "").lower()
         if host not in {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}:
@@ -1988,6 +2003,15 @@ def _translation_error(exc):
     return jsonify({"hata": "AI inceleme işlemi tamamlanamadı; günlükte ayrıntı var"}), 500
 
 
+def _translation_evaluation_error(exc):
+    if translation_evaluation_backend is not None and isinstance(exc, translation_evaluation_backend.EvaluationError):
+        return jsonify({"hata": str(exc)}), 409
+    if ocr_review is not None and isinstance(exc, ocr_review.ReviewError):
+        return jsonify({"hata": str(exc)}), exc.status
+    app.logger.exception("Local translation evaluation request failed")
+    return jsonify({"hata": "Yerel çeviri kalite işlemi tamamlanamadı"}), 500
+
+
 def _ai_ocr_error(exc):
     if ai_ocr_review is not None and isinstance(exc, ocr_review.ReviewError):
         return jsonify({"hata": str(exc)}), exc.status
@@ -2049,6 +2073,128 @@ def api_ai_ceviri_istek():
         return jsonify(result)
     except Exception as exc:
         return _translation_error(exc)
+
+
+@app.get("/api/ceviri-kalitesi/hazirlik")
+def api_ceviri_kalitesi_hazirlik():
+    """Read only server-derived readiness; never accepts split/rights claims."""
+    if translation_evaluation_service is None or translation_review is None or ocr_review is None:
+        return jsonify({"hata": "Yerel çeviri kalite değerlendirmesi kullanılamıyor"}), 503
+    try:
+        return jsonify(translation_evaluation_service.readiness(request.args.get("review_id", "")))
+    except Exception as exc:
+        return _translation_evaluation_error(exc)
+
+
+@app.post("/api/ceviri-kalitesi/sentetik")
+def api_ceviri_kalitesi_sentetik():
+    """Create a fixed fake rubric demo; the browser supplies no dataset fields."""
+    if translation_evaluation_service is None or translation_evaluation_backend is None:
+        return jsonify({"hata": "Yerel sentetik rubrik demosu kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "Boş JSON gövdesi gerekli"}), 415
+    value = request.get_json(silent=True)
+    if not isinstance(value, dict) or value:
+        return jsonify({"hata": "Sentetik demo gövdesi boş olmalı; split/veri/hak alanı kabul edilmez"}), 400
+    try:
+        return jsonify(translation_evaluation_service.create_synthetic_demo())
+    except Exception as exc:
+        return _translation_evaluation_error(exc)
+
+
+@app.get("/api/ceviri-kalitesi/sentetik/durum")
+def api_ceviri_kalitesi_sentetik_durum():
+    if translation_evaluation_service is None:
+        return jsonify({"hata": "Yerel sentetik rubrik demosu kullanılamıyor"}), 503
+    try:
+        return jsonify(translation_evaluation_service.status(request.args.get("evaluation_id", "")))
+    except Exception as exc:
+        return _translation_evaluation_error(exc)
+
+
+@app.post("/api/ceviri-kalitesi/sentetik/puan")
+def api_ceviri_kalitesi_sentetik_puan():
+    if translation_evaluation_service is None:
+        return jsonify({"hata": "Yerel sentetik rubrik demosu kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    if request.content_length and request.content_length > 32 * 1024:
+        return jsonify({"hata": "Sentetik puan isteği 32 KiB sınırını aşıyor"}), 413
+    value = request.get_json(silent=True)
+    required = {"evaluation_id", "blind_candidate_id", "status", "dimensions", "issues",
+                "rubric_outcome", "exclusion_reason", "supersedes_event_id"}
+    if not isinstance(value, dict) or set(value) != required:
+        return jsonify({"hata": "Yalnız sentetik değerlendirme kimliği, kör aday kimliği ve rubrik alanları kabul edilir"}), 400
+    try:
+        return jsonify(translation_evaluation_service.record_synthetic_rating(
+            value["evaluation_id"], value["blind_candidate_id"], value["status"],
+            value["dimensions"], value["issues"], value["rubric_outcome"],
+            value["exclusion_reason"], value["supersedes_event_id"],
+        ))
+    except Exception as exc:
+        return _translation_evaluation_error(exc)
+
+
+@app.post("/api/ceviri-kalitesi/gercek")
+def api_ceviri_kalitesi_gercek():
+    """Create a real cohort only from the private, server-registered evidence manifest."""
+    if translation_evaluation_service is None or translation_evaluation_backend is None:
+        return jsonify({"hata": "Yerel çeviri kalite değerlendirmesi kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "Boş JSON gövdesi gerekli"}), 415
+    value = request.get_json(silent=True)
+    if not isinstance(value, dict) or value:
+        return jsonify({"hata": "Gövde boş olmalı; kaynak, split, hak veya aday eşlemesi tarayıcıdan alınmaz"}), 400
+    try:
+        return jsonify(translation_evaluation_service.create_real_evaluation(
+            request.args.get("review_id", "")))
+    except Exception as exc:
+        return _translation_evaluation_error(exc)
+
+
+@app.get("/api/ceviri-kalitesi/gercek/durum")
+def api_ceviri_kalitesi_gercek_durum():
+    if translation_evaluation_service is None:
+        return jsonify({"hata": "Yerel çeviri kalite değerlendirmesi kullanılamıyor"}), 503
+    try:
+        return jsonify(translation_evaluation_service.real_status(
+            request.args.get("evaluation_id", "")))
+    except Exception as exc:
+        return _translation_evaluation_error(exc)
+
+
+@app.get("/api/ceviri-kalitesi/gercek/kosul-eslemesi")
+def api_ceviri_kalitesi_gercek_kosul_eslemesi():
+    if translation_evaluation_service is None:
+        return jsonify({"hata": "Yerel çeviri kalite değerlendirmesi kullanılamıyor"}), 503
+    try:
+        return jsonify(translation_evaluation_service.reveal_condition_mapping(
+            request.args.get("evaluation_id", "")))
+    except Exception as exc:
+        return _translation_evaluation_error(exc)
+
+
+@app.post("/api/ceviri-kalitesi/gercek/puan")
+def api_ceviri_kalitesi_gercek_puan():
+    if translation_evaluation_service is None:
+        return jsonify({"hata": "Yerel çeviri kalite değerlendirmesi kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    if request.content_length and request.content_length > 32 * 1024:
+        return jsonify({"hata": "İnsan puanlama isteği 32 KiB sınırını aşıyor"}), 413
+    value = request.get_json(silent=True)
+    required = {"evaluation_id", "blind_candidate_id", "status", "dimensions", "issues",
+                "rubric_outcome", "exclusion_reason", "supersedes_event_id"}
+    if not isinstance(value, dict) or set(value) != required:
+        return jsonify({"hata": "Yalnız cohort, kör aday ve rubrik alanları kabul edilir"}), 400
+    try:
+        return jsonify(translation_evaluation_service.record_real_rating(
+            value["evaluation_id"], value["blind_candidate_id"], value["status"],
+            value["dimensions"], value["issues"], value["rubric_outcome"],
+            value["exclusion_reason"], value["supersedes_event_id"],
+        ))
+    except Exception as exc:
+        return _translation_evaluation_error(exc)
 
 
 @app.post("/api/ai-ceviri/sohbet-paketi")

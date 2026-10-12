@@ -76,7 +76,8 @@ def _manifest(*, dataset_kind="synthetic", split_leak=False, alias_leak=False,
         "rubric_sha256": evaluation.RUBRIC_SHA256,
         "primary_metric_version": evaluation.PRIMARY_METRIC_VERSION,
         "split_policy": "source_episode_group_v1",
-        "group_identity_basis": "caller_verified_source_episode_ids_v1",
+        "group_identity_basis": ("synthetic_fixture_ids_v1" if dataset_kind == "synthetic"
+                                  else "caller_verified_source_episode_ids_v1"),
         "coverage_floor": {"minimum_rated_fraction_per_held_out_group": coverage_floor},
         "groups": groups,
         "cases": cases,
@@ -251,6 +252,26 @@ class TranslationEvaluationTests(unittest.TestCase):
         self.assertIn(first["event_id"], log)
         self.assertIn(corrected["event_id"], log)
         self.assertEqual(log.count("\n"), 3)  # seal + original rating + correction
+
+    def test_condition_mapping_reveal_is_terminal_for_later_corrections(self):
+        mapping_sha = _sha("private condition mapping bytes")
+        with self.assertRaisesRegex(evaluation.EvaluationError, "only after all blind ratings"):
+            evaluation.reveal_condition_mapping(self.root, "reviewer-a", self.condition_a, mapping_sha)
+        for case in self.manifest["cases"]:
+            for candidate in case["candidates"]:
+                self.record(candidate=candidate)
+        active = evaluation._active_ratings(evaluation._load(self.root)[3])
+        reveal = evaluation.reveal_condition_mapping(
+            self.root, "reviewer-a", self.condition_a, mapping_sha)
+        self.assertEqual(reveal["event_type"], "condition_mapping_revealed")
+        events = evaluation._load(self.root)[3]
+        self.assertEqual(events[-1]["event_id"], reveal["event_id"])
+        self.assertNotIn("private_label", events[-1])
+        prior = active[(self.candidate["blind_candidate_id"], "reviewer-a")]
+        with self.assertRaisesRegex(evaluation.EvaluationError, "terminally closed"):
+            self.record(candidate=self.candidate, supersedes=prior["event_id"])
+        self.assertEqual(len(evaluation._load(self.root)[3]), len(events))
+        self.assertFalse(evaluation.aggregate_report(self.root, self.resolver)["phase6_eligible"])
 
     def test_hash_chain_tamper_fails_closed(self):
         self.record()

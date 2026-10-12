@@ -47,7 +47,7 @@ The separate fixed-frame comparison in `regresyon/regresyon.py` uses `regresyon/
 
 Source references: `vtt-qa.py` function `analyze`; `regresyon/gt_gate.py` function `analyze_case`; `regresyon/gt_cases.json`; `regresyon/README-kisa.md` sections “VTT referanslı kapı”, “Sabit kare baseline kıyası”, and “Şu an kapsanmayan vakalar”; `docs/LEARNING-SYSTEM-PLAN.md` sections “OCR loop metrics” and “Translation loop metrics”.
 
-## Translation evaluation contract (not yet measured)
+## Translation evaluation contract (synthetic mechanics only; real quality not measured)
 
 Evaluate only cues whose source text has a valid human OCR review. A bilingual human rubric should separately rate:
 
@@ -56,7 +56,7 @@ Evaluate only cues whose source text has a valid human OCR review. A bilingual h
 - terminology consistency;
 - requested style and register.
 
-Record human accept, edit, and reject outcomes and issue categories. Keep OCR measurements and translation measurements on separately defined populations, so an OCR change cannot appear to improve translation merely by changing which cues are evaluated. Do not report an aggregate score until the rubric, scale, adjudication rules, language pair, corpus, and denominator have been fixed. No translation score is available from this repository's current test/reference data.
+Record human accept, edit, and reject outcomes and issue categories. Keep OCR measurements and translation measurements on separately defined populations, so an OCR change cannot appear to improve translation merely by changing which cues are evaluated. Do not report an aggregate score until the rubric, scale, adjudication rules, language pair, corpus, and denominator have been fixed. The local Phase 3 evaluator implements an append-only bilingual rubric and evidence-derived readiness check; only synthetic mechanics are currently available, so no translation quality rate is reported. See [TRANSLATION-EVALUATION.md](TRANSLATION-EVALUATION.md).
 
 ## What is needed for reliable broader claims
 
