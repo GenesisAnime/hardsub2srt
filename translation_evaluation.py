@@ -227,8 +227,10 @@ def _validate_manifest(manifest: object) -> dict:
         raise EvaluationError("primary metric rule must be frozen before ratings")
     if manifest["split_policy"] != "source_episode_group_v1":
         raise EvaluationError("split_policy must freeze complete source+episode groups")
-    if manifest["group_identity_basis"] != "caller_verified_source_episode_ids_v1":
-        raise EvaluationError("source/episode group identity must be attested from reviewed metadata")
+    expected_group_basis = ("synthetic_fixture_ids_v1" if manifest["dataset_kind"] == "synthetic"
+                            else "caller_verified_source_episode_ids_v1")
+    if manifest["group_identity_basis"] != expected_group_basis:
+        raise EvaluationError("source/episode group identity basis is invalid for this dataset kind")
     floor = manifest["coverage_floor"]
     if (not isinstance(floor, dict) or set(floor) != {"minimum_rated_fraction_per_held_out_group"} or
             type(floor["minimum_rated_fraction_per_held_out_group"]) not in (int, float) or
@@ -874,7 +876,9 @@ def aggregate_report(root: str | os.PathLike[str], source_resolver) -> dict:
         "rubric_sha256": manifest["rubric_sha256"],
         "primary_metric_version": manifest["primary_metric_version"],
         "split_policy": manifest["split_policy"],
-        "group_identity_validation": "CALLER_ATTESTED_NOT_INDEPENDENTLY_RESOLVED",
+        "group_identity_validation": (
+            "SYNTHETIC_FIXTURE_ONLY" if manifest["dataset_kind"] == "synthetic"
+            else "CALLER_ATTESTED_NOT_INDEPENDENTLY_RESOLVED"),
         "coverage_floor": manifest["coverage_floor"]["minimum_rated_fraction_per_held_out_group"],
         "group_count": len(manifest["groups"]),
         "held_out_group_count": sum(group["split"] == "held_out" for group in manifest["groups"]),
