@@ -2871,6 +2871,14 @@ def srt_zaman_norm(s):
     return f"{int(h):02d}:{int(mi):02d}:{int(se):02d},{(ms + '000')[:3]}"
 
 
+def _srt_zaman_ms(normalized):
+    """Convert a normalized SRT timestamp to milliseconds for numeric ordering."""
+    hours, minutes, seconds_ms = normalized.split(":")
+    seconds, millis = seconds_ms.split(",")
+    return (((int(hours) * 60 + int(minutes)) * 60 + int(seconds)) * 1000
+            + int(millis))
+
+
 def srt_parse(metin):
     """SRT metni → [{'index','start','end','metin'}]; index dosya sırası (0 tabanlı)."""
     bloklar = []
@@ -3005,6 +3013,8 @@ def api_blokkaydet():
         en = srt_zaman_norm(b.get("end"))
         if st is None or en is None:
             return jsonify({"hata": f"blok {b.get('index')}: zaman biçimi geçersiz"}), 400
+        if _srt_zaman_ms(st) >= _srt_zaman_ms(en):
+            return jsonify({"hata": f"blok {b.get('index')}: bitiş başlangıçtan sonra olmalı"}), 400
         mtn = str(b.get("metin") or "").replace("\r\n", "\n").replace("\r", "\n")
         mtn = "\n".join(ln.strip() for ln in mtn.split("\n")).strip()
         if mtn:
