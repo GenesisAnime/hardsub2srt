@@ -13,7 +13,7 @@
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "record": {
       "type": "object", "additionalProperties": false,
-      "required": ["engine_id", "source_id", "episode_id", "split", "media_sha256", "prediction_srt_path", "prediction_srt_sha256", "model_sha256", "config_sha256", "device", "backend"],
+      "required": ["engine_id", "source_id", "episode_id", "split", "media_sha256", "prediction_srt_path", "prediction_srt_sha256", "model_sha256", "config_sha256", "configured_device", "session_configured_backend"],
       "properties": {
         "engine_id": {"type": "string", "minLength": 1},
         "source_id": {"type": "string", "minLength": 1},
@@ -24,8 +24,8 @@
         "prediction_srt_sha256": {"$ref": "#/$defs/sha256"},
         "model_sha256": {"$ref": "#/$defs/sha256"},
         "config_sha256": {"$ref": "#/$defs/sha256"},
-        "device": {"enum": ["gpu", "cpu"]},
-        "backend": {"type": "string", "minLength": 1}
+        "configured_device": {"enum": ["gpu", "cpu"]},
+        "session_configured_backend": {"type": "string", "minLength": 1, "description": "Configured engine/session metadata; not node-level proof that hardware executed inference."}
       }
     }
   }

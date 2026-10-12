@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata as package_metadata
 import json
 import os
 import re
@@ -16,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import time
 import uuid
 from datetime import datetime, timezone
@@ -40,6 +42,21 @@ MAX_RIGHTS_BYTES = 1024 * 1024
 PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60
 RECEIPT_DECISION = "APPROVED_FOR_LOCAL_PHASE5_EXECUTION"
 FIXED_PRODUCT_ARGS = ["--ocr", "paddle", "--qa", "0"]
+SOURCE_SKIP_DIRS = {".git", "__pycache__", "tests", ".venv", "venv", "site-packages"}
+CHILD_ENV_KEYS = (
+    "PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "HOME",
+    "APPDATA", "LOCALAPPDATA", "CUDA_PATH", "CUDA_HOME", "CUDA_VISIBLE_DEVICES",
+    "CUDA_DEVICE_ORDER", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "LANG", "LC_ALL", "TZ",
+)
+OFFLINE_ENV = {
+    "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+    "PIP_NO_INDEX": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    "PYTHONNOUSERSITE": "1",
+}
+RUNTIME_DISTRIBUTIONS = (
+    "opencv-python", "opencv-python-headless", "numpy", "easyocr", "torch",
+    "rapidocr", "rapidocr-onnxruntime", "onnxruntime", "onnxruntime-gpu",
+)
 
 
 def _sha_bytes(raw: bytes) -> str:
@@ -307,26 +324,102 @@ def _input_bindings(plan_path: Path, doc: dict) -> dict:
     }
 
 
-def _product_executor(media_path: Path, srt_path: Path, profile: dict) -> None:
+def _product_executor(media_path: Path, srt_path: Path, profile: dict,
+                      child_env: dict[str, str], runtime: dict) -> None:
     """Invoke only the fixed product CLI command; no shell or plan-supplied argv."""
-    args = [sys.executable, os.fspath(ROOT / "hardsub2srt.py"), os.fspath(media_path),
+    args = [sys.executable, "-S", os.fspath(ROOT / "phase5_offline_bootstrap.py"),
+            os.fspath(ROOT / "hardsub2srt.py"), os.fspath(media_path),
             "--out", os.fspath(srt_path), "--offline-profile", profile["path"],
             *FIXED_PRODUCT_ARGS, "--lang", ",".join(profile["runtime"]["languages"])]
     if profile["runtime"]["device_preference"] == "cpu":
         args.append("--cpu")
-    env = os.environ.copy()
-    env.update({"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
-                "PIP_NO_INDEX": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
+    env = dict(child_env)
+    for name in ("ffmpeg", "ffprobe"):
+        recorded = runtime["media_tools"].get(name)
+        current = shutil.which(name, path=env.get("PATH", ""))
+        if not recorded or current != recorded["path"]:
+            raise ExecutionError(f"Effective child PATH no longer resolves to the recorded {name}")
     try:
-        result = subprocess.run(args, cwd=ROOT, env=env, shell=False,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, timeout=PROCESS_TIMEOUT_SECONDS,
-                                check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ExecutionError(f"Product CLI could not complete ({type(exc).__name__})") from None
-    if result.returncode != 0:
+        _run_product_command(args, env, timeout=PROCESS_TIMEOUT_SECONDS)
+    except OSError as exc:
+        raise ExecutionError(f"Product CLI could not start ({type(exc).__name__})") from None
+
+
+class ProcessTreeUnstopped(ExecutionError):
+    """A timed-out child tree may still be alive; staging must be preserved."""
+
+
+def _terminate_process_tree(process) -> bool:
+    """Terminate and wait for the complete product process tree on timeout."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = ctypes.windll.kernel32.GetSystemDirectoryW(buffer, len(buffer))
+            taskkill = Path(buffer.value) / "taskkill.exe" if length else None
+        except (AttributeError, OSError):
+            taskkill = None
+        if taskkill is None or not taskkill.is_file():
+            return False
+        try:
+            killed = subprocess.run([os.fspath(taskkill), "/PID", str(process.pid), "/T", "/F"],
+                                    shell=False, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=20, check=False)
+            if killed.returncode != 0:
+                return False
+            process.wait(timeout=30)
+            return process.poll() is not None
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    try:
+        import signal
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return True
+        return False
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _run_product_command(args: list[str], env: dict[str, str], *, timeout: int,
+                         process_factory=None, tree_terminator=None) -> None:
+    """Run fixed argv and confirm process-tree shutdown before timeout failure returns."""
+    process_factory = subprocess.Popen if process_factory is None else process_factory
+    tree_terminator = _terminate_process_tree if tree_terminator is None else tree_terminator
+    kwargs = {"cwd": ROOT, "env": env, "shell": False,
+              "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+              "stderr": subprocess.DEVNULL}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    process = process_factory(args, **kwargs)
+    try:
+        return_code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        if not tree_terminator(process):
+            raise ProcessTreeUnstopped(
+                "Timed-out product process tree could not be confirmed stopped; staging is retained") from exc
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired as stop_exc:
+            raise ProcessTreeUnstopped(
+                "Timed-out product parent did not exit after tree termination; staging is retained") from stop_exc
+        if process.poll() is None:
+            raise ProcessTreeUnstopped(
+                "Timed-out product parent still appears alive; staging is retained")
+        raise ExecutionError("Product CLI exceeded the execution timeout; process tree stopped") from None
+    if return_code != 0:
         # Do not echo subprocess logs; OCR output and local paths may be sensitive.
-        raise ExecutionError(f"Product CLI failed with exit code {result.returncode}")
+        raise ExecutionError(f"Product CLI failed with exit code {return_code}")
 
 
 def _media_identity(path: Path) -> dict:
@@ -336,6 +429,18 @@ def _media_identity(path: Path) -> dict:
     digest = hashlib.sha1(prefix).hexdigest()
     return {"ad": path.name, "boyut": stat.st_size,
             "sha1_ilk_1MB": digest}
+
+
+def _configured_device(value: object) -> str:
+    if type(value) is not str:
+        raise ExecutionError("Stats do not report EasyOCR configured device")
+    normalized = value.strip().lower()
+    if normalized.startswith(("cuda", "gpu")):
+        return "gpu"
+    if normalized.startswith("cpu"):
+        return "cpu"
+    # MPS/Metal is an accelerator, not CPU. Unsupported devices fail closed.
+    raise ExecutionError("EasyOCR configured device is unknown or unsupported; refusing to label it CPU/GPU")
 
 
 def _check_outputs(media: dict, srt_path: Path, stats_path: Path,
@@ -365,20 +470,12 @@ def _check_outputs(media: dict, srt_path: Path, stats_path: Path,
             or offline.get("phase6_eligible") is not False
             or offline.get("rights_verified") is not False):
         raise ExecutionError("Stats lack the pinned offline execution profile receipt")
-    runtime_device = offline.get("primary_runtime_device")
-    if type(runtime_device) is not str:
-        raise ExecutionError("Stats do not report EasyOCR runtime device")
-    normalized_device = runtime_device.strip().lower()
-    if normalized_device.startswith(("cuda", "gpu")):
-        offline["_verified_device"] = "gpu"
-    elif normalized_device.startswith(("cpu", "mps")):
-        offline["_verified_device"] = "cpu"
-    else:
-        raise ExecutionError("EasyOCR runtime device is unknown; refusing to attest device")
+    offline["_configured_device"] = _configured_device(
+        offline.get("primary_reader_configured_device"))
     if (profile["runtime"]["secondary_engine"] == "ppocrv5"
             and offline.get("secondary_engine_used") == "pp-ocrv5-offline"
-            and not offline.get("secondary_actual_session_providers")):
-        raise ExecutionError("Used PP-OCRv5 session did not expose actual ONNX providers")
+            and not offline.get("secondary_ocr_session_configured_providers")):
+        raise ExecutionError("Used PP-OCRv5 session did not expose configured ONNX providers")
     srt_sha = _sha_file(srt_path)
     if stats.get("main_srt_sha256") not in (None, srt_sha):
         raise ExecutionError("Stats SRT hash does not match output bytes")
@@ -388,21 +485,114 @@ def _check_outputs(media: dict, srt_path: Path, stats_path: Path,
 
 
 def _source_hashes() -> dict[str, str]:
-    paths = ["hardsub2srt.py", "phase5_execution.py", "offline_ocr_profile.py",
-             "ocr_crop_eval.py", "ocr_experiment.py", "ocr_video_eval.py",
-             "srt_format.py", "turkce-sozluk.txt", "kullanici-sozlugu.txt"]
+    """Hash the complete local Python source bundle plus behavior dictionaries.
+
+    This works in a Desktop copy without .git and includes untracked Python
+    files, so a commit ID alone is never treated as the executed source.
+    """
     result = {}
-    for name in paths:
+    for path in sorted(ROOT.rglob("*.py")):
+        relative = path.relative_to(ROOT)
+        if SOURCE_SKIP_DIRS.intersection(part.lower() for part in relative.parts):
+            continue
+        try:
+            templates._reject_reparse_components(path)
+        except templates.TemplateError as exc:
+            raise ExecutionError("Application source path uses a symlink/junction/reparse point") from exc
+        if not path.resolve(strict=True).is_relative_to(ROOT):
+            raise ExecutionError("Application source resolves outside the product root")
+        result[relative.as_posix()] = _sha_file(path)
+    for name in ("kullanici-sozlugu.txt", "turkce-sozluk.txt", "requirements.txt"):
         path = ROOT / name
         if path.is_file():
             try:
                 templates._reject_reparse_components(path)
             except templates.TemplateError as exc:
                 raise ExecutionError("Application/config source path uses a reparse point") from exc
-            if not path.resolve(strict=True).is_relative_to(ROOT):
-                raise ExecutionError("Application/config source resolves outside the repository")
             result[name] = _sha_file(path)
-    return result
+        elif name == "turkce-sozluk.txt":
+            result[f"{name}:absent"] = _sha_bytes(b"optional-local-file-absent")
+        elif name == "requirements.txt":
+            raise ExecutionError("requirements.txt is missing from the source bundle")
+    if not result:
+        raise ExecutionError("No executable Python source was found for the source bundle")
+    return dict(sorted(result.items()))
+
+
+def _child_environment() -> tuple[dict[str, str], dict]:
+    """Create an allowlisted child environment with proxy/Python overrides removed."""
+    child = {key: os.environ[key] for key in CHILD_ENV_KEYS if key in os.environ}
+    child.update(OFFLINE_ENV)
+    removed_proxy_keys = sorted(
+        key for key in os.environ
+        if key.casefold() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+    )
+    return child, {
+        "sha256s": {key: _sha_bytes(value.encode("utf-8", errors="surrogatepass"))
+                    for key, value in sorted(child.items())},
+        "removed_proxy_variables": removed_proxy_keys,
+        "fixed_offline_flags": OFFLINE_ENV,
+        "python_override_variables_removed": ["PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"],
+    }
+
+
+def _runtime_provenance(child_env: dict[str, str], environment: dict,
+                        profiles: dict, *, require_available: bool) -> dict:
+    python_path = _abs_path(sys.executable, "Python executable", directory=False)
+    sys_paths = sysconfig.get_paths()
+    package_roots = [Path(sys_paths[name]).resolve(strict=True)
+                     for name in ("purelib", "platlib") if sys_paths.get(name)]
+    distributions = {}
+    package_locations = {}
+    for name in RUNTIME_DISTRIBUTIONS:
+        try:
+            distribution = package_metadata.distribution(name)
+            distributions[name] = distribution.version
+            package_locations[name] = os.fspath(Path(distribution.locate_file("")).resolve(strict=True))
+        except package_metadata.PackageNotFoundError:
+            distributions[name] = None
+            package_locations[name] = None
+    required = {"numpy", "easyocr", "torch"}
+    if any(value["runtime"]["secondary_engine"] == "ppocrv5"
+           for value in profiles.values()):
+        required.add("rapidocr")
+        onnx_distribution = ("onnxruntime-gpu" if distributions["onnxruntime-gpu"]
+                             else "onnxruntime" if distributions["onnxruntime"] else None)
+        if onnx_distribution is None:
+            raise ExecutionError("PP-OCRv5 needs an installed ONNX Runtime distribution")
+        required.add(onnx_distribution)
+    if require_available:
+        opencv_names = ("opencv-python", "opencv-python-headless")
+        if not any(distributions[name] for name in opencv_names):
+            raise ExecutionError("An OpenCV runtime distribution is required")
+        missing = sorted(name for name in required if not distributions.get(name))
+        if missing:
+            raise ExecutionError("Required OCR runtime package metadata is missing: " + ", ".join(missing))
+        for name in required | {name for name in opencv_names if distributions[name]}:
+            location = package_locations.get(name)
+            if location is None or not any(Path(location).is_relative_to(root) for root in package_roots):
+                raise ExecutionError(f"Required runtime package is outside isolated global site-packages: {name}")
+    tools = {}
+    if require_available and not child_env.get("PATH"):
+        raise ExecutionError("An explicit child PATH is required to resolve local FFmpeg tools")
+    for name in ("ffmpeg", "ffprobe"):
+        found = shutil.which(name, path=child_env.get("PATH", ""))
+        if not found:
+            if require_available:
+                raise ExecutionError(f"Required local media tool is unavailable: {name}")
+            tools[name] = None
+            continue
+        path = _abs_path(found, f"{name} executable", directory=False)
+        tools[name] = {"path": os.fspath(path), "sha256": _sha_file(path)}
+    return {
+        "python": {"version": sys.version.split()[0], "executable_sha256": _sha_file(python_path),
+                   "startup_mode": "-S isolated bootstrap; .pth/sitecustomize and user site disabled",
+                   "package_roots": [os.fspath(path) for path in package_roots]},
+        "packages": distributions,
+        "package_locations": package_locations,
+        "media_tools": tools,
+        "environment": environment,
+    }
 
 
 def _git_commit() -> str | None:
@@ -494,9 +684,13 @@ def _run(plan_path: Path, executor=None) -> Path:
         raise ExecutionError("Pinned rights receipt disappeared before execution")
     ctx["trust_registry_sha256"] = trust_hash
     source_hashes = _source_hashes()
+    source_bundle_hash = _sha_bytes(json.dumps(source_hashes, ensure_ascii=False,
+                                                sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    child_env, environment = _child_environment()
+    use_product_cli = executor is None
+    runtime = _runtime_provenance(child_env, environment, ctx["profiles"],
+                                  require_available=use_product_cli)
     commit = _git_commit()
-    if commit is None:
-        raise ExecutionError("A verified local Git commit is required for execution provenance")
     run_uuid = uuid.uuid4().hex
     staging = ctx["output_parent"] / f".phase5-{ctx['run_id']}-{run_uuid}.tmp"
     final = ctx["output_parent"] / f"phase5-{ctx['run_id']}-{run_uuid}"
@@ -504,7 +698,8 @@ def _run(plan_path: Path, executor=None) -> Path:
     start = time.monotonic()
     predictions = []
     if executor is None:
-        executor = _product_executor
+        executor = lambda media, output, profile: _product_executor(
+            media, output, profile, child_env, runtime)
     try:
         for engine_id in (ctx["baseline_id"], ctx["candidate_id"]):
             profile = ctx["profiles"][engine_id]
@@ -516,13 +711,13 @@ def _run(plan_path: Path, executor=None) -> Path:
                 executor(media["path"], srt_path, profile)
                 stats_path = srt_path.with_suffix(".stats.json")
                 srt_cues, stats = _check_outputs(media, srt_path, stats_path, profile)
-                device = stats["offline_experiment"]["_verified_device"]
-                if profile["runtime"]["device_preference"] == "cpu" and device != "cpu":
-                    raise ExecutionError("CPU-only profile reports a non-CPU runtime device")
+                configured_device = stats["offline_experiment"]["_configured_device"]
+                if profile["runtime"]["device_preference"] == "cpu" and configured_device != "cpu":
+                    raise ExecutionError("CPU-only profile reports a non-CPU configured device")
                 offline = stats["offline_experiment"]
-                backend = (f"easyocr;secondary={offline['secondary_engine']};"
-                           f"onnx_probe={','.join(offline.get('secondary_probe_providers', [])) or 'not-observed'};"
-                           f"onnx_runtime={','.join(offline.get('secondary_actual_session_providers', [])) or 'not-invoked'}")
+                configured_backend = (f"easyocr;secondary={offline['secondary_engine']};"
+                                      f"onnx_probe_session_configured={','.join(offline.get('secondary_probe_session_configured_providers', [])) or 'not-observed'};"
+                                      f"onnx_ocr_session_configured={','.join(offline.get('secondary_ocr_session_configured_providers', [])) or 'not-invoked'}")
                 predictions.append({
                     "engine_id": engine_id, "source_id": media["source_id"],
                     "episode_id": media["episode_id"], "split": media["split"],
@@ -532,9 +727,11 @@ def _run(plan_path: Path, executor=None) -> Path:
                     "model_sha256": profile["model_sha256"],
                     "config_sha256": hashlib.sha256(json.dumps({
                         "profile_sha256": profile["sha256"], "source_hashes": source_hashes,
-                        "fixed_args": FIXED_PRODUCT_ARGS,
+                        "source_bundle_sha256": source_bundle_hash,
+                        "runtime": runtime, "fixed_args": FIXED_PRODUCT_ARGS,
                     }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
-                    "device": device, "backend": backend,
+                    "configured_device": configured_device,
+                    "session_configured_backend": configured_backend,
                     "stats_sha256": _sha_file(stats_path),
                     "stats_path": f"{engine_dir.name}/{stats_path.name}",
                     "cue_count": len(srt_cues),
@@ -543,7 +740,7 @@ def _run(plan_path: Path, executor=None) -> Path:
             {key: value for key, value in row.items() if key in {
                 "engine_id", "source_id", "episode_id", "split", "media_sha256",
                 "prediction_srt_path", "prediction_srt_sha256", "model_sha256",
-                "config_sha256", "device", "backend"}}
+                "config_sha256", "configured_device", "session_configured_backend"}}
             for row in predictions
         ]}
         _atomic_json_new(staging / "prediction-manifest-v1.json", prediction_doc)
@@ -556,7 +753,10 @@ def _run(plan_path: Path, executor=None) -> Path:
             "status": "COMPLETED_LOCAL_EXECUTION_NOT_PHASE6_PASS",
             "run_id": ctx["run_id"], "created_at": datetime.now(timezone.utc).isoformat(),
             "duration_seconds": round(time.monotonic() - start, 3),
-            "application": {"commit": commit, "source_sha256s": source_hashes},
+            "application": {"commit": commit,
+                            "source_bundle_sha256": source_bundle_hash,
+                            "source_sha256s": source_hashes},
+            "runtime": runtime,
             "execution": {"mode": "product_cli_allowlisted_offline_profile",
                           "network_policy": "python_socket_apis_blocked; managed OCR loaders pinned/local/download-disabled; OS network isolation not certified",
                           "phase6_eligible": False, "rights_verified": False},
@@ -579,6 +779,11 @@ def _run(plan_path: Path, executor=None) -> Path:
         _revalidate(ctx)
         if _source_hashes() != source_hashes or _git_commit() != commit:
             raise ExecutionError("Application source/commit changed during the run")
+        current_env, current_environment = _child_environment()
+        current_runtime = _runtime_provenance(current_env, current_environment,
+                                              ctx["profiles"], require_available=use_product_cli)
+        if current_runtime != runtime:
+            raise ExecutionError("Runtime packages, executable/tool hashes, or effective environment drifted")
         if _sha_file(staging / "prediction-manifest-v1.json") != prediction_sha:
             raise ExecutionError("Prediction manifest changed before publication")
         for row in predictions:
@@ -601,6 +806,10 @@ def _run(plan_path: Path, executor=None) -> Path:
                 raise ExecutionError("Generated artifact escaped the private output directory")
         staging.rename(final)
         return final
+    except ProcessTreeUnstopped:
+        # The child tree may still be writing; never delete its staging directory.
+        # It remains unpublished and needs manual cleanup after confirming the tree is gone.
+        raise
     except Exception:
         # This path was created exclusively above and is never user-supplied.
         # Verify it still resolves as a normal child before removing our partial outputs.

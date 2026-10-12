@@ -49,8 +49,10 @@ EasyOCR is constructed with `download_enabled=False` and the explicit model
 directory. RapidOCR receives explicit local model paths. GPU remains the
 default preference; a CPU profile must say `device_preference: "cpu"` and the
 runner passes `--cpu`. The recorded device comes from the product stats; the
-profile records requested preference separately. The offline-only stats block
-is additive; ordinary stats retain their prior shape.
+profile records requested preference separately. The field describes the
+primary reader's configured device. ONNX values are session-configured provider
+lists, not per-node execution measurements. The offline-only stats block is
+additive; ordinary stats retain their prior shape.
 
 At the application layer, the offline child process blocks Python socket APIs,
 sets common model/package offline environment flags, and all managed model
@@ -104,13 +106,29 @@ newline), matching the frozen Phase 5 split implementation.
 
 The output contains a `prediction-manifest-v1.json` accepted by the existing
 video measurement adapter, plus SRT/stats pairs and a local execution receipt.
-The execution receipt records the application commit/source hashes, profile and
-model hashes, input hashes, output SRT/stats hashes, actual reported device,
-backend/provider status, and elapsed time. It does not contain subtitle text or
+The execution receipt records an optional Git commit, a deterministic digest of
+all product Python sources (including untracked files) and behavior dictionaries,
+Python/package/tool hashes and versions, and hashes of the effective child
+environment. Git metadata is optional, so the same bundle digest works in the
+Desktop copy without `.git`. Proxy variables and Python path/startup overrides
+are removed from the child environment; only an allowlisted set of runtime
+variables is passed and their values are recorded as SHA-256 digests. Python
+starts with `-S`; the bootstrap blocks sockets before adding only the
+interpreter's global package directories, without executing `.pth`,
+`sitecustomize`, or user-site startup code. Runtime packages must be installed
+in those global directories. The
+receipt also binds profile/model/input/output hashes, the reader's configured
+device, session-configured provider metadata, and elapsed time. It
+does not contain subtitle text or
 reference text beyond what the normal local SRT/stats artifacts themselves
 contain. Keep the output local and outside synchronized/shared folders.
 
-The execution record does not independently verify execution at the OS/hardware
+The device/provider fields describe reader and session configuration; they do
+not profile individual inference nodes or prove hardware executed them. A
+timeout terminates the complete child process tree before staging cleanup; if
+the runner cannot confirm termination, it preserves the unpublished staging
+folder instead of deleting files a process might still be writing. The
+execution record does not independently verify execution at the OS/hardware
 boundary, identity of the reviewer, legal use rights, or correctness of the
 time-aligned references. Video timestamps retain the product's existing
 frame-index/reported-FPS basis and its VFR limitation. Existing `ocr_video_eval`

@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": [
     "schema_version", "status", "run_id", "created_at", "duration_seconds",
-    "application", "execution", "inputs", "profiles", "predictions", "limits"
+    "application", "runtime", "execution", "inputs", "profiles", "predictions", "limits"
   ],
   "properties": {
     "schema_version": {"const": 1},
@@ -16,13 +16,22 @@
     "duration_seconds": {"type": "number", "minimum": 0},
     "application": {
       "type": "object", "additionalProperties": false,
-      "required": ["commit", "source_sha256s"],
+      "required": ["commit", "source_bundle_sha256", "source_sha256s"],
       "properties": {
-        "commit": {"oneOf": [
-          {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
-          {"type": "null"}
-        ]},
+        "commit": {"type": ["string", "null"], "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+        "source_bundle_sha256": {"$ref": "#/$defs/sha256"},
         "source_sha256s": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}}
+      }
+    },
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["python", "packages", "package_locations", "media_tools", "environment"],
+      "properties": {
+        "python": {"type": "object", "additionalProperties": false, "required": ["version", "executable_sha256", "startup_mode", "package_roots"], "properties": {"version": {"type": "string", "minLength": 1}, "executable_sha256": {"$ref": "#/$defs/sha256"}, "startup_mode": {"type": "string", "minLength": 1}, "package_roots": {"type": "array", "items": {"type": "string"}}}},
+        "packages": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+        "package_locations": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+        "media_tools": {"type": "object", "additionalProperties": {"type": ["object", "null"], "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"}}}},
+        "environment": {"type": "object", "additionalProperties": false, "required": ["sha256s", "removed_proxy_variables", "fixed_offline_flags", "python_override_variables_removed"], "properties": {"sha256s": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}}, "removed_proxy_variables": {"type": "array", "items": {"type": "string"}}, "fixed_offline_flags": {"type": "object", "additionalProperties": {"type": "string"}}, "python_override_variables_removed": {"type": "array", "items": {"type": "string"}}}}
       }
     },
     "execution": {
@@ -82,7 +91,7 @@
             "required": [
               "engine_id", "source_id", "episode_id", "split", "media_sha256",
               "prediction_srt_path", "prediction_srt_sha256", "model_sha256",
-              "config_sha256", "device", "backend", "stats_sha256", "stats_path",
+              "config_sha256", "configured_device", "session_configured_backend", "stats_sha256", "stats_path",
               "cue_count"
             ],
             "properties": {
@@ -95,8 +104,8 @@
               "prediction_srt_sha256": {"$ref": "#/$defs/sha256"},
               "model_sha256": {"$ref": "#/$defs/sha256"},
               "config_sha256": {"$ref": "#/$defs/sha256"},
-              "device": {"enum": ["gpu", "cpu"]},
-              "backend": {"type": "string", "minLength": 1},
+              "configured_device": {"enum": ["gpu", "cpu"]},
+              "session_configured_backend": {"type": "string", "minLength": 1},
               "stats_sha256": {"$ref": "#/$defs/sha256"},
               "stats_path": {"type": "string", "minLength": 1},
               "cue_count": {"type": "integer", "minimum": 0}

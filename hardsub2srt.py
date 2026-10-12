@@ -717,7 +717,7 @@ def _ort_cuda_probe(gpu_flag):
         all_providers = [str(value) for value in s.get_providers()]
         used = [p for p in all_providers if p != "CPUExecutionProvider"]
         if _OFFLINE_EXPERIMENT_PROFILE is not None:
-            _OFFLINE_RUNTIME["secondary_probe_providers"] = sorted(all_providers)
+            _OFFLINE_RUNTIME["secondary_probe_session_configured_providers"] = sorted(all_providers)
     except Exception as e:                          # noqa: BLE001
         _ORT.update(cuda=False,
                     durum=f"CUDA oturumu acilamadi ({type(e).__name__})")
@@ -3320,7 +3320,7 @@ def _rapidocr_selftest(engine):
 
 
 def _onnx_session_providers(engine):
-    """Read providers from created OCR sessions; never infer from a request flag."""
+    """Read providers configured on OCR sessions (not per-node execution)."""
     queue, seen, providers = [engine], set(), set()
     while queue and len(seen) < 300:
         item = queue.pop()
@@ -3396,7 +3396,7 @@ def _ppocrv5_init():
             providers = _onnx_session_providers(engine)
             if not providers:
                 raise RuntimeError("Offline PP-OCRv5 session providers are not inspectable")
-            _OFFLINE_RUNTIME["secondary_actual_session_providers"] = providers
+            _OFFLINE_RUNTIME["secondary_ocr_session_configured_providers"] = providers
         canvas = np.zeros((64, 320, 3), np.uint8)
         cv2.putText(canvas, "MERHABA 123", (8, 46), cv2.FONT_HERSHEY_SIMPLEX,
                     1.1, (255, 255, 255), 2, cv2.LINE_AA)
@@ -5306,17 +5306,25 @@ def main(argv=None):
     if _OFFLINE_EXPERIMENT_PROFILE is not None:
         # Only opt-in experiment runs add this provenance block. Ordinary CLI
         # stats remain byte-compatible with their existing shape.
+        stats.pop("device", None)
+        stats.pop("second_engine_cuda", None)
+        probe_status = _ORT["durum"]
+        if probe_status.startswith("KULLANILDI"):
+            probe_status = "CUDAExecutionProvider listed by a local probe session; node execution was not profiled"
         stats["offline_experiment"] = {
             "profile_id": _OFFLINE_EXPERIMENT_PROFILE["profile_id"],
             "profile_sha256": _OFFLINE_PROFILE_SHA256,
-            "primary_runtime_device": _OFFLINE_RUNTIME.get("primary_device", "unknown"),
+            "device_preference": _OFFLINE_EXPERIMENT_PROFILE["device_preference"],
+            "primary_reader_configured_device": _OFFLINE_RUNTIME.get("primary_device", "unknown"),
             "secondary_engine_configured": _OFFLINE_EXPERIMENT_PROFILE["secondary_engine"],
             "secondary_engine_used": second_used,
             "secondary_engine": second_used or "not_invoked",
-            "secondary_probe_providers": _OFFLINE_RUNTIME.get("secondary_probe_providers", []),
-            "secondary_actual_session_providers": _OFFLINE_RUNTIME.get(
-                "secondary_actual_session_providers", []),
-            "onnxruntime_provider_status": _ORT["durum"],
+            "secondary_probe_session_configured_providers": _OFFLINE_RUNTIME.get(
+                "secondary_probe_session_configured_providers", []),
+            "secondary_ocr_session_configured_providers": _OFFLINE_RUNTIME.get(
+                "secondary_ocr_session_configured_providers", []),
+            "onnxruntime_probe_status": probe_status,
+            "node_level_hardware_execution_profiled": False,
             "phase6_eligible": False,
             "rights_verified": False,
         }

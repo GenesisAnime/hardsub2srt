@@ -1,5 +1,8 @@
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -146,13 +149,15 @@ class Phase5ExecutionHarness:
             "offline_experiment": {
                 "profile_id": profile["runtime"]["profile_id"],
                 "profile_sha256": profile["runtime"]["profile_sha256"],
-                "primary_runtime_device": "cpu",
+                "device_preference": "cpu",
+                "primary_reader_configured_device": "cpu",
                 "secondary_engine_configured": "none",
                 "secondary_engine_used": None,
                 "secondary_engine": "not_invoked",
-                "secondary_probe_providers": [],
-                "secondary_actual_session_providers": [],
-                "onnxruntime_provider_status": "offline profile: second engine disabled",
+                "secondary_probe_session_configured_providers": [],
+                "secondary_ocr_session_configured_providers": [],
+                "onnxruntime_probe_status": "offline profile: second engine disabled",
+                "node_level_hardware_execution_profiled": False,
                 "phase6_eligible": False, "rights_verified": False,
             },
         })
@@ -204,6 +209,58 @@ class OfflineProfileTests(unittest.TestCase):
         write_json(path, profile)
         with self.assertRaisesRegex(OfflineProfileError, "profile_id does not match"):
             load_profile(path)
+
+    def test_source_bundle_hashes_untracked_python_and_excludes_tests_and_git(self):
+        root = self.root / "desktop-copy"
+        (root / "tests").mkdir(parents=True)
+        (root / ".git").mkdir()
+        (root / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (root / "tests" / "injected.py").write_text("TEST_ONLY = 1\n", encoding="utf-8")
+        (root / ".git" / "hook.py").write_text("GIT_INTERNAL = 1\n", encoding="utf-8")
+        (root / "requirements.txt").write_text("synthetic-requirements\n", encoding="utf-8")
+        with patch.object(execution, "ROOT", root):
+            values = execution._source_hashes()
+        self.assertIn("module.py", values)
+        self.assertIn("requirements.txt", values)
+        self.assertNotIn("tests/injected.py", values)
+        self.assertNotIn(".git/hook.py", values)
+
+    def test_child_environment_removes_proxy_and_python_path_overrides(self):
+        with patch.dict(os.environ, {"HTTP_PROXY": "http://synthetic.invalid",
+                                     "NO_PROXY": "synthetic.invalid",
+                                     "PYTHONPATH": "C:\\untrusted\\modules"}, clear=False):
+            child, snapshot = execution._child_environment()
+        normalized = {key.casefold() for key in child}
+        self.assertNotIn("http_proxy", normalized)
+        self.assertNotIn("no_proxy", normalized)
+        self.assertNotIn("pythonpath", normalized)
+        self.assertIn("HTTP_PROXY", snapshot["removed_proxy_variables"])
+        self.assertIn("PYTHONPATH", snapshot["python_override_variables_removed"])
+
+    def test_mps_accelerator_is_not_misclassified_as_cpu(self):
+        self.assertEqual(execution._configured_device("cuda:0"), "gpu")
+        self.assertEqual(execution._configured_device("cpu"), "cpu")
+        with self.assertRaisesRegex(execution.ExecutionError, "unknown or unsupported"):
+            execution._configured_device("mps")
+
+    def test_offline_bootstrap_blocks_socket_before_running_synthetic_script(self):
+        script = self.root / "bootstrap-probe.py"
+        script.write_text(
+            "import socket\n"
+            "try:\n"
+            "    socket.create_connection(('127.0.0.1', 1))\n"
+            "except RuntimeError as error:\n"
+            "    print(str(error))\n"
+            "else:\n"
+            "    raise SystemExit('socket was not blocked')\n",
+            encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, "-S", str(Path(execution.ROOT) / "phase5_offline_bootstrap.py"),
+             str(script)], cwd=execution.ROOT, shell=False,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=20, check=False, text=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Network access is disabled", result.stdout)
 
     def test_disabled_second_engine_does_not_enter_any_fallback_chain(self):
         profile = {"secondary_engine": "none"}
@@ -394,6 +451,61 @@ class Phase5ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(execution.ExecutionError, "Unsafe output parent"):
             execution._run(self.harness.plan_path, self.harness.fake_executor)
         self.assertEqual(list(protected_output.iterdir()), [])
+
+    def test_timeout_terminates_and_waits_for_child_tree(self):
+        class TimedOutProcess:
+            pid = 12345
+
+            def __init__(self):
+                self.returncode = None
+                self.wait_calls = 0
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                self.wait_calls += 1
+                if self.wait_calls == 1:
+                    raise execution.subprocess.TimeoutExpired("fixed-cli", timeout)
+                return self.returncode
+
+        process = TimedOutProcess()
+        calls = []
+
+        def terminate(proc):
+            calls.append(proc.pid)
+            proc.returncode = -9
+            return True
+
+        with self.assertRaisesRegex(execution.ExecutionError, "process tree stopped"):
+            execution._run_product_command(
+                ["fixed-cli"], {}, timeout=1,
+                process_factory=lambda _args, **_kwargs: process,
+                tree_terminator=terminate)
+        self.assertEqual(calls, [12345])
+        self.assertEqual(process.wait_calls, 2)
+
+    def test_unconfirmed_timeout_preserves_unpublished_staging(self):
+        class TimedOutProcess:
+            pid = 23456
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                raise execution.subprocess.TimeoutExpired("fixed-cli", timeout)
+
+        def executor(_media, _output, _profile):
+            execution._run_product_command(
+                ["fixed-cli"], {}, timeout=1,
+                process_factory=lambda _args, **_kwargs: TimedOutProcess(),
+                tree_terminator=lambda _process: False)
+
+        with self.assertRaises(execution.ProcessTreeUnstopped):
+            execution._run(self.harness.plan_path, executor)
+        staged = list(self.output_parent.glob(".phase5-*.tmp"))
+        self.assertEqual(len(staged), 1)
+        self.assertFalse(list(self.output_parent.glob("phase5-*")))
 
     def test_unknown_plan_command_and_profile_engine_are_rejected(self):
         changed = dict(self.harness.plan_doc)
