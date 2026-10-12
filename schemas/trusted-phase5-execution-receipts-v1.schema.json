@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/trusted-phase5-execution-receipts-v1.schema.json",
+  "title": "Pinned Phase 5 local execution rights receipts v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "purpose", "trusted_receipt_sha256s"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "purpose": {"type": "string", "minLength": 1},
+    "trusted_receipt_sha256s": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+  }
+}

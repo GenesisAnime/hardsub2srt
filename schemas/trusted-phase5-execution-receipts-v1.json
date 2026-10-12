@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "purpose": "Explicit project-maintainer pins for human-attested local Phase 5 execution scopes. Empty by default; entries do not prove legal rights or reviewer identity.",
+  "trusted_receipt_sha256s": []
+}

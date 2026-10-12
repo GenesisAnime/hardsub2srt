@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-offline-profile-v1.schema.json",
+  "title": "Offline local OCR model profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profile_id", "device_preference", "languages", "easyocr_model_dir", "easyocr_assets", "secondary_engine", "secondary_assets"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "profile_id": {"enum": ["hardsub2srt-easyocr-primary-v1", "hardsub2srt-easyocr-ppocrv5-v1"]},
+    "device_preference": {"enum": ["gpu_default", "cpu"]},
+    "languages": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z]{2,3}(?:_[a-z]{2,3})?$"}},
+    "easyocr_model_dir": {"type": "string", "minLength": 1},
+    "easyocr_assets": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/asset"}},
+    "secondary_engine": {"enum": ["none", "ppocrv5"]},
+    "secondary_assets": {
+      "oneOf": [
+        {"type": "array", "maxItems": 0},
+        {"type": "object", "additionalProperties": false, "required": ["det", "rec", "dictionary"], "properties": {"det": {"$ref": "#/$defs/asset"}, "rec": {"$ref": "#/$defs/asset"}, "dictionary": {"$ref": "#/$defs/asset"}}}
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "asset": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"}}}
+  },
+  "allOf": [
+    {"if": {"properties": {"secondary_engine": {"const": "none"}}}, "then": {"properties": {"profile_id": {"const": "hardsub2srt-easyocr-primary-v1"}, "secondary_assets": {"type": "array", "maxItems": 0}}}},
+    {"if": {"properties": {"secondary_engine": {"const": "ppocrv5"}}}, "then": {"properties": {"profile_id": {"const": "hardsub2srt-easyocr-ppocrv5-v1"}, "secondary_assets": {"type": "object"}}}}
+  ]
+}

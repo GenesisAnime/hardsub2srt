@@ -611,6 +611,46 @@ _SECOND = {"state": "untried", "name": None, "fn": None}
 #   YALAN SOYLER; tek guvenilir olcu get_providers() listesidir.
 _ORT = {"cuda": False, "durum": "belirlenmedi", "surum": None, "yol": None,
         "dll_yolu": None}
+_OFFLINE_EXPERIMENT_PROFILE = None
+_OFFLINE_PROFILE_SHA256 = None
+_OFFLINE_RUNTIME = {}
+
+
+def _block_network_for_offline_experiment():
+    """Block Python socket APIs for the opt-in local Phase 5 child process.
+
+    Offline profiles also disable EasyOCR downloads and pass explicit RapidOCR
+    asset paths. This is application-level defense; it is not an OS network
+    sandbox against native libraries or child processes.
+    """
+    import socket
+
+    def denied(*_args, **_kwargs):
+        raise RuntimeError("Network access is disabled in offline Phase 5 execution")
+
+    socket.create_connection = denied
+    socket.socket.connect = denied
+    socket.socket.connect_ex = denied
+
+
+def _verify_offline_profile_current():
+    """Re-hash assets immediately before each loader opens model weights."""
+    profile = _OFFLINE_EXPERIMENT_PROFILE
+    if profile is None:
+        return
+    from offline_ocr_profile import load_profile
+
+    current = load_profile(Path(profile["profile_path"]))
+    if current["profile_sha256"] != _OFFLINE_PROFILE_SHA256:
+        raise RuntimeError("Offline OCR profile changed after preflight")
+
+
+def _offline_media_protocol_args(pipe_output=False):
+    """Limit offline media decoding to local files and its local stdout pipe."""
+    if _OFFLINE_EXPERIMENT_PROFILE is None:
+        return []
+    allowed = "file,pipe" if pipe_output else "file"
+    return ["-protocol_whitelist", allowed]
 
 
 def _ort_cuda_probe(gpu_flag):
@@ -621,6 +661,10 @@ def _ort_cuda_probe(gpu_flag):
     bu durumda CUDA istenir ama "doğrulanamadı" diye kaydedilir (yalan
     yok, ama garanti de yok)."""
     import os                                   # yalnız burada gerekli
+    if (_OFFLINE_EXPERIMENT_PROFILE is not None
+            and _OFFLINE_EXPERIMENT_PROFILE["secondary_engine"] == "none"):
+        _ORT.update(cuda=False, durum="offline profile: second engine disabled")
+        return False
     if not gpu_flag:
         _ORT.update(cuda=False, durum="--cpu ile zorlandi")
         return False
@@ -649,12 +693,15 @@ def _ort_cuda_probe(gpu_flag):
     model = None
     try:
         import rapidocr
-        mdir = Path(rapidocr.__file__).parent / "models"
-        for name in ("PP-OCRv6_det_small.onnx", "ch_PP-OCRv5_det_mobile.onnx"):
-            cand = mdir / name
-            if cand.exists():
-                model = str(cand)
-                break
+        if _OFFLINE_EXPERIMENT_PROFILE is not None:
+            model = _OFFLINE_EXPERIMENT_PROFILE["secondary_assets"]["det"]
+        else:
+            mdir = Path(rapidocr.__file__).parent / "models"
+            for name in ("PP-OCRv6_det_small.onnx", "ch_PP-OCRv5_det_mobile.onnx"):
+                cand = mdir / name
+                if cand.exists():
+                    model = str(cand)
+                    break
     except Exception:                               # noqa: BLE001
         model = None
     if model is None:
@@ -667,7 +714,10 @@ def _ort_cuda_probe(gpu_flag):
         s = ort.InferenceSession(model, so,
                                  providers=["CUDAExecutionProvider",
                                             "CPUExecutionProvider"])
-        used = [p for p in s.get_providers() if p != "CPUExecutionProvider"]
+        all_providers = [str(value) for value in s.get_providers()]
+        used = [p for p in all_providers if p != "CPUExecutionProvider"]
+        if _OFFLINE_EXPERIMENT_PROFILE is not None:
+            _OFFLINE_RUNTIME["secondary_probe_providers"] = sorted(all_providers)
     except Exception as e:                          # noqa: BLE001
         _ORT.update(cuda=False,
                     durum=f"CUDA oturumu acilamadi ({type(e).__name__})")
@@ -701,9 +751,10 @@ def note(msg):
 
 def run_ffprobe(path):
     """Video akış bilgisi: fps, süre, frame sayısı, altyazı streamleri."""
+    args = [FFPROBE, "-v", "error", *_offline_media_protocol_args(),
+            "-print_format", "json", "-show_streams", "-show_format", str(path)]
     proc = subprocess.run(
-        [FFPROBE, "-v", "error", "-print_format", "json",
-         "-show_streams", "-show_format", str(path)],
+        args,
         capture_output=True, text=True, check=True)
     data = json.loads(proc.stdout)
     v = next(s for s in data["streams"] if s["codec_type"] == "video")
@@ -719,7 +770,7 @@ def run_ffprobe(path):
 
 def extract_softsub(path, out_srt, sub_index):
     """Softsub streamini kaynaktan birebir SRT'ye çevir."""
-    subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(path),
+    subprocess.run([FFMPEG, "-v", "error", *_offline_media_protocol_args(), "-y", "-i", str(path),
                     "-map", f"0:s:{sub_index}", "-c:s", "srt", str(out_srt)],
                    check=True)
 
@@ -730,7 +781,8 @@ def grab_gray(path, t_sec, w, h):
     NVDEC açıkken decode donanımda denenir; hata halinde kalıcı olarak CPU
     decode'a düşer, CPU'da da başarısızsa None döner (eski davranış)."""
     global HWACCEL
-    base = [FFMPEG, "-v", "error", "-ss", f"{t_sec:.6f}", "-i", str(path),
+    base = [FFMPEG, "-v", "error", *_offline_media_protocol_args(pipe_output=True),
+            "-ss", f"{t_sec:.6f}", "-i", str(path),
             "-frames:v", "1", "-vf", "format=gray", "-f", "rawvideo",
             "-pix_fmt", "gray", "-"]
     attempts = [HWACCEL] if HWACCEL else []
@@ -1164,7 +1216,7 @@ def _static_drop_map(path, band_y, band_h, width, max_seconds,
     frame_bytes = ds_w * ds_h
 
     def _once(use_hw):
-        pre = [FFMPEG, "-v", "error"]
+        pre = [FFMPEG, "-v", "error", *_offline_media_protocol_args(pipe_output=True)]
         if max_seconds:
             pre += ["-t", str(max_seconds)]
         proc = subprocess.Popen(pre + list(use_hw) + ["-i", str(path), "-vf", vf,
@@ -1451,7 +1503,7 @@ def scan_band(path, band_y, band_h, width, white_thr, diff_thr, max_seconds,
     frame_bytes = ds_w * ds_h
 
     def _once(use_hw):
-        pre = [FFMPEG, "-v", "error"]
+        pre = [FFMPEG, "-v", "error", *_offline_media_protocol_args(pipe_output=True)]
         if max_seconds:
             pre += ["-t", str(max_seconds)]
         pop_args = pre + list(use_hw) + ["-i", str(path), "-vf", vf,
@@ -1548,7 +1600,8 @@ def grab_band(path, t_sec, band_y, band_h):
     NVDEC açıkken decode donanımda denenir; hata halinde kalıcı olarak CPU
     decode'a düşer, CPU'da da başarısızsa hata yükseltir (eski: check=True)."""
     global HWACCEL
-    base = [FFMPEG, "-v", "error", "-ss", f"{t_sec:.6f}", "-i", str(path),
+    base = [FFMPEG, "-v", "error", *_offline_media_protocol_args(pipe_output=True),
+            "-ss", f"{t_sec:.6f}", "-i", str(path),
             "-frames:v", "1", "-vf", f"crop=iw:{band_h}:0:{band_y}",
             "-f", "image2pipe", "-vcodec", "bmp", "-"]
     attempts = [HWACCEL] if HWACCEL else []
@@ -3266,6 +3319,34 @@ def _rapidocr_selftest(engine):
     return bool(res)
 
 
+def _onnx_session_providers(engine):
+    """Read providers from created OCR sessions; never infer from a request flag."""
+    queue, seen, providers = [engine], set(), set()
+    while queue and len(seen) < 300:
+        item = queue.pop()
+        ident = id(item)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        getter = getattr(item, "get_providers", None)
+        if callable(getter):
+            try:
+                providers.update(str(value) for value in getter())
+            except Exception:
+                pass
+        values = getattr(item, "__dict__", None)
+        if isinstance(values, dict):
+            for value in values.values():
+                if isinstance(value, (list, tuple)):
+                    queue.extend(child for child in value
+                                 if hasattr(child, "__dict__")
+                                 or callable(getattr(child, "get_providers", None)))
+                elif (hasattr(value, "__dict__")
+                      or callable(getattr(value, "get_providers", None))):
+                    queue.append(value)
+    return sorted(providers)
+
+
 def _rapidocr_read(engine, img):
     """RapidOCR çıktısını EasyOCR satır formatına çevirip grupla."""
     try:
@@ -3289,16 +3370,33 @@ def _ppocrv5_init():
         return _PP5["engine"]
     _PP5["state"] = "failed"
     try:
+        if _OFFLINE_EXPERIMENT_PROFILE is not None:
+            _verify_offline_profile_current()
         from rapidocr import RapidOCR, OCRVersion, ModelType
+        offline = _OFFLINE_EXPERIMENT_PROFILE
         params = {
             "Det.ocr_version": OCRVersion.PPOCRV5, "Det.lang_type": "ch",
             "Det.model_type": ModelType.MOBILE,
             "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.lang_type": "latin",
             "Rec.model_type": ModelType.MOBILE,
             "Cls.use_cls": False}
+        if offline is not None:
+            assets = offline["secondary_assets"]
+            if offline["secondary_engine"] != "ppocrv5":
+                return None
+            params.update({
+                "Det.model_path": assets["det"],
+                "Rec.model_path": assets["rec"],
+                "Rec.rec_keys_path": assets["dictionary"],
+            })
         if _ORT["cuda"]:
             params["EngineConfig.onnxruntime.use_cuda"] = True
         engine = RapidOCR(params=params)
+        if offline is not None:
+            providers = _onnx_session_providers(engine)
+            if not providers:
+                raise RuntimeError("Offline PP-OCRv5 session providers are not inspectable")
+            _OFFLINE_RUNTIME["secondary_actual_session_providers"] = providers
         canvas = np.zeros((64, 320, 3), np.uint8)
         cv2.putText(canvas, "MERHABA 123", (8, 46), cv2.FONT_HERSHEY_SIMPLEX,
                     1.1, (255, 255, 255), 2, cv2.LINE_AA)
@@ -3327,6 +3425,8 @@ def _ppocrv6_init():
     if _PP6["state"] != "untried":
         return _PP6["engine"]
     _PP6["state"] = "failed"
+    if _OFFLINE_EXPERIMENT_PROFILE is not None:
+        return None
     try:
         from rapidocr import RapidOCR, OCRVersion, ModelType
         params = {
@@ -3394,6 +3494,27 @@ def get_second_engine(lang_list, gpu_flag, ocr_mode="auto",
     """
     if _SECOND["state"] != "untried":
         return _SECOND
+
+
+    if _OFFLINE_EXPERIMENT_PROFILE is not None:
+        profile = _OFFLINE_EXPERIMENT_PROFILE
+        if profile["secondary_engine"] == "none":
+            _SECOND["state"] = "failed"
+            note("[i] offline experiment profile: second engine disabled")
+            return _SECOND
+        if profile["secondary_engine"] != "ppocrv5":
+            _SECOND["state"] = "failed"
+            raise RuntimeError("Offline experiment profile has unsupported second engine")
+        engine5 = _ppocrv5_init()
+        if engine5 is None:
+            # No default resolver/fallback is permitted in offline mode.
+            _SECOND["state"] = "failed"
+            note("[i] offline PP-OCRv5 could not load pinned local assets; run stopped")
+            raise RuntimeError("Offline PP-OCRv5 could not load/verify pinned local assets")
+        _SECOND.update(state="ok", name="pp-ocrv5-offline",
+                       fn=lambda img: _ppocr_read(engine5, img))
+        note(f"[i] offline second engine: PP-OCRv5 local assets (conf<{conf_thr} segments)")
+        return _SECOND
     if ocr_mode == "auto":
         engine6 = _ppocrv6_init()
         if engine6 is not None:
@@ -3450,6 +3571,21 @@ def get_second_engine(lang_list, gpu_flag, ocr_mode="auto",
         return _SECOND
 
 
+def _create_primary_reader(easyocr_module, lang_list, gpu_flag):
+    """Build the primary reader with legacy behavior or the strict local profile."""
+    if _OFFLINE_EXPERIMENT_PROFILE is None:
+        return easyocr_module.Reader(lang_list, gpu=gpu_flag, verbose=False)
+    _verify_offline_profile_current()
+    reader = easyocr_module.Reader(
+        lang_list, gpu=gpu_flag,
+        model_storage_directory=_OFFLINE_EXPERIMENT_PROFILE["easyocr_model_dir"],
+        download_enabled=False, verbose=False)
+    _OFFLINE_RUNTIME.update(
+        primary_device=str(getattr(reader, "device", "unknown")),
+        profile_sha256=_OFFLINE_PROFILE_SHA256)
+    return reader
+
+
 def _run_timing_snapshot(run_started, stage_durations, stage_status, now=None):
     """Build additive, JSON-safe profiling fields from monotonic timestamps.
 
@@ -3502,9 +3638,16 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def main():
+def main(argv=None):
+    cli_args = list(sys.argv[1:] if argv is None else argv)
+    if cli_args[:1] == ["phase5-run"]:
+        from phase5_execution import main as phase5_main
+        raise SystemExit(phase5_main(cli_args[1:]))
     run_started = time.monotonic()
-    global HWACCEL
+    global HWACCEL, _OFFLINE_EXPERIMENT_PROFILE, _OFFLINE_PROFILE_SHA256
+    _OFFLINE_EXPERIMENT_PROFILE = None
+    _OFFLINE_PROFILE_SHA256 = None
+    _OFFLINE_RUNTIME.clear()
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("-o", "--out", required=True)
@@ -3583,6 +3726,8 @@ def main():
     ap.add_argument("--cpu", action="store_true",
                     help="OCR'i CPU'da zorla calistir (varsayilan: CUDA "
                          "varsa GPU)")
+    ap.add_argument("--offline-profile", type=Path, default=None,
+                    help=argparse.SUPPRESS)
     ap.add_argument("--batch", type=int, default=16,
                     help="GPU OCR batch buyuklugu: segmentler bu gruplarla "
                          "toplanir, tanima tek cagrida yapilir (1 = eski "
@@ -3628,7 +3773,25 @@ def main():
                          "raporlanir")
     ap.add_argument("--no-ocr", action="store_true",
                     help="sadece tarama istatistiği")
-    args = ap.parse_args()
+    args = ap.parse_args(cli_args)
+    if args.offline_profile is not None:
+        from offline_ocr_profile import load_profile
+        try:
+            _OFFLINE_EXPERIMENT_PROFILE = load_profile(args.offline_profile)
+        except (OSError, ValueError) as exc:
+            ap.error(f"offline OCR profile reddedildi: {exc}")
+        if args.ocr != "paddle":
+            ap.error("offline profile yalnız sabit, allowlist'li --ocr paddle zincirini destekler")
+        if args.lang.split(",") != _OFFLINE_EXPERIMENT_PROFILE["languages"]:
+            ap.error("--lang offline profile dilleriyle eşleşmeli")
+        if _OFFLINE_EXPERIMENT_PROFILE["device_preference"] == "cpu" and not args.cpu:
+            ap.error("CPU profile için --cpu zorunlu")
+        if _OFFLINE_EXPERIMENT_PROFILE["device_preference"] == "gpu_default" and args.cpu:
+            ap.error("GPU-default profile --cpu ile değiştirilemez; yeni profile hazırlayın")
+        _block_network_for_offline_experiment()
+        # A Phase 5 offline profile never imports the default EasyOCR resolver.
+        # The runner validates the profile again and pins the exact bytes.
+        _OFFLINE_PROFILE_SHA256 = _OFFLINE_EXPERIMENT_PROFILE["profile_sha256"]
     if args.qa is None:
         args.qa = 0 if args.limit_seconds > 0 else 6
     args.batch = max(1, args.batch)
@@ -3654,6 +3817,8 @@ def main():
     print(f"[i] {video.name}: {info['width']}x{info['height']}, "
           f"fps={fps:.5f}, sure={info['duration']:.1f}s, "
           f"altyazi_stream={info['subtitles'] or 'yok'}")
+    if _OFFLINE_EXPERIMENT_PROFILE is not None and info["subtitles"]:
+        raise RuntimeError("Offline Phase 5 OCR requires hard-sub video; embedded subtitles bypass OCR")
 
     # --- Mod 1: softsub ---
     if info["subtitles"]:
@@ -3787,7 +3952,7 @@ def main():
     print(f"[2/3] OCR (EasyOCR {','.join(lang_list)}, {device}, "
           f"3-varyant konsensus, batch={args.batch})...")
     import easyocr
-    reader = easyocr.Reader(lang_list, gpu=gpu_flag, verbose=False)
+    reader = _create_primary_reader(easyocr, lang_list, gpu_flag)
 
     def frame_time(f):
         return f / fps
@@ -5138,6 +5303,23 @@ def main():
              "second_engine_takas": second_takas,
              "second_engine_cuda": _ORT["durum"],
              "onnxruntime": _ORT["surum"]}
+    if _OFFLINE_EXPERIMENT_PROFILE is not None:
+        # Only opt-in experiment runs add this provenance block. Ordinary CLI
+        # stats remain byte-compatible with their existing shape.
+        stats["offline_experiment"] = {
+            "profile_id": _OFFLINE_EXPERIMENT_PROFILE["profile_id"],
+            "profile_sha256": _OFFLINE_PROFILE_SHA256,
+            "primary_runtime_device": _OFFLINE_RUNTIME.get("primary_device", "unknown"),
+            "secondary_engine_configured": _OFFLINE_EXPERIMENT_PROFILE["secondary_engine"],
+            "secondary_engine_used": second_used,
+            "secondary_engine": second_used or "not_invoked",
+            "secondary_probe_providers": _OFFLINE_RUNTIME.get("secondary_probe_providers", []),
+            "secondary_actual_session_providers": _OFFLINE_RUNTIME.get(
+                "secondary_actual_session_providers", []),
+            "onnxruntime_provider_status": _ORT["durum"],
+            "phase6_eligible": False,
+            "rights_verified": False,
+        }
     # Bind optional raw writer-end diagnostics to the exact main SRT bytes
     # only when a review pack is requested. This hash stays local in stats.
     if args.review_pack:

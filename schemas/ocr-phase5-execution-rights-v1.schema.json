@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-phase5-execution-rights-v1.schema.json",
+  "title": "Human-attested local Phase 5 execution scope v1",
+  "description": "A separately reviewed and project-pinned local attestation. It does not prove legal rights or reviewer identity by itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "review_id", "decision", "reviewer", "reviewed_at", "scope", "dataset_manifest_sha256", "dataset_metadata_sha256", "split_manifest_sha256", "evaluation_plan_sha256", "experiment_report_sha256", "reference_manifest_sha256", "media_sha256s", "profile_sha256s"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "review_id": {"type": "string", "minLength": 1},
+    "decision": {"const": "APPROVED_FOR_LOCAL_PHASE5_EXECUTION"},
+    "reviewer": {"type": "object", "additionalProperties": false, "required": ["reviewer_id", "authority"], "properties": {"reviewer_id": {"type": "string", "minLength": 1}, "authority": {"type": "string", "minLength": 1}}},
+    "reviewed_at": {"type": "string", "format": "date-time"},
+    "scope": {"type": "string", "minLength": 1},
+    "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "dataset_metadata_sha256": {"$ref": "#/$defs/sha256"},
+    "split_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "evaluation_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "experiment_report_sha256": {"$ref": "#/$defs/sha256"},
+    "reference_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "media_sha256s": {"type": "object", "minProperties": 3, "additionalProperties": {"$ref": "#/$defs/sha256"}},
+    "profile_sha256s": {"type": "object", "minProperties": 2, "maxProperties": 2, "additionalProperties": {"$ref": "#/$defs/sha256"}}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}
