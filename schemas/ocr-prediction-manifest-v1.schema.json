@@ -2,30 +2,65 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/hardsub2srt/ocr-prediction-manifest-v1.schema.json",
   "title": "Fixed local full-episode OCR prediction manifest v1",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schema_version", "records"],
-  "properties": {
-    "schema_version": {"const": 1},
-    "records": {"type": "array", "minItems": 6, "items": {"$ref": "#/$defs/record"}}
-  },
+  "description": "Accepts legacy caller-supplied records or runner records that bind a local execution receipt. Receipt-backed status remains an application record, not independent hardware proof or Phase 6 evidence.",
+  "oneOf": [
+    {"$ref": "#/$defs/legacyManifest"},
+    {"$ref": "#/$defs/runnerManifest"}
+  ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "record": {
+    "relativeOutputPath": {"type": "string", "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\u0000-\\u001F])[^\\\\:]+$"},
+    "legacyRecord": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false,
+         "required": ["engine_id", "source_id", "episode_id", "split", "media_sha256", "prediction_srt_path", "prediction_srt_sha256", "model_sha256", "config_sha256", "device", "backend"],
+         "properties": {"engine_id": {"type": "string", "minLength": 1}, "source_id": {"type": "string", "minLength": 1}, "episode_id": {"type": "string", "minLength": 1}, "split": {"enum": ["train", "validation", "test"]}, "media_sha256": {"$ref": "#/$defs/sha256"}, "prediction_srt_path": {"$ref": "#/$defs/relativeOutputPath"}, "prediction_srt_sha256": {"$ref": "#/$defs/sha256"}, "model_sha256": {"$ref": "#/$defs/sha256"}, "config_sha256": {"$ref": "#/$defs/sha256"}, "device": {"enum": ["gpu", "cpu"]}, "backend": {"type": "string", "minLength": 1}}},
+        {"type": "object", "additionalProperties": false,
+         "required": ["engine_id", "source_id", "episode_id", "split", "media_sha256", "prediction_srt_path", "prediction_srt_sha256", "model_sha256", "config_sha256", "configured_device", "session_configured_backend"],
+         "properties": {"engine_id": {"type": "string", "minLength": 1}, "source_id": {"type": "string", "minLength": 1}, "episode_id": {"type": "string", "minLength": 1}, "split": {"enum": ["train", "validation", "test"]}, "media_sha256": {"$ref": "#/$defs/sha256"}, "prediction_srt_path": {"$ref": "#/$defs/relativeOutputPath"}, "prediction_srt_sha256": {"$ref": "#/$defs/sha256"}, "model_sha256": {"$ref": "#/$defs/sha256"}, "config_sha256": {"$ref": "#/$defs/sha256"}, "configured_device": {"enum": ["gpu", "cpu"]}, "session_configured_backend": {"type": "string", "minLength": 1}}}
+      ]
+    },
+    "runnerRecord": {
       "type": "object", "additionalProperties": false,
-      "required": ["engine_id", "source_id", "episode_id", "split", "media_sha256", "prediction_srt_path", "prediction_srt_sha256", "model_sha256", "config_sha256", "configured_device", "session_configured_backend"],
+      "required": ["engine_id", "source_id", "episode_id", "split", "media_sha256", "prediction_srt_path", "prediction_srt_sha256", "profile_sha256", "model_sha256", "config_sha256", "configured_device", "session_configured_backend", "stats_sha256", "stats_path", "cue_count"],
       "properties": {
         "engine_id": {"type": "string", "minLength": 1},
         "source_id": {"type": "string", "minLength": 1},
         "episode_id": {"type": "string", "minLength": 1},
         "split": {"enum": ["train", "validation", "test"]},
         "media_sha256": {"$ref": "#/$defs/sha256"},
-        "prediction_srt_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\:]+$"},
+        "prediction_srt_path": {"$ref": "#/$defs/relativeOutputPath"},
         "prediction_srt_sha256": {"$ref": "#/$defs/sha256"},
+        "profile_sha256": {"$ref": "#/$defs/sha256"},
         "model_sha256": {"$ref": "#/$defs/sha256"},
         "config_sha256": {"$ref": "#/$defs/sha256"},
         "configured_device": {"enum": ["gpu", "cpu"]},
-        "session_configured_backend": {"type": "string", "minLength": 1, "description": "Configured engine/session metadata; not node-level proof that hardware executed inference."}
+        "session_configured_backend": {"type": "string", "minLength": 1},
+        "stats_sha256": {"$ref": "#/$defs/sha256"},
+        "stats_path": {"$ref": "#/$defs/relativeOutputPath"},
+        "cue_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "legacyManifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "records"],
+      "properties": {"schema_version": {"const": 1}, "records": {"type": "array", "minItems": 6, "items": {"$ref": "#/$defs/legacyRecord"}}}
+    },
+    "runnerManifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "execution_receipt", "records"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "execution_receipt": {"type": "object", "additionalProperties": false,
+          "required": ["path", "sha256", "run_id"],
+          "properties": {
+            "path": {"$ref": "#/$defs/relativeOutputPath"},
+            "sha256": {"$ref": "#/$defs/sha256"},
+            "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"}
+          }
+        },
+        "records": {"type": "array", "minItems": 6, "items": {"$ref": "#/$defs/runnerRecord"}}
       }
     }
   }

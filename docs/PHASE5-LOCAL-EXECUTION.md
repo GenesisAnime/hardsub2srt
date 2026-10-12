@@ -78,8 +78,21 @@ exact receipt bytes to the separate pinned registry.
 These are application attestations. Hashes and a reviewer string cannot prove
 legal permission or independently authenticate the person. In particular, the
 runner always writes `rights_verified: false` and `phase6_eligible: false`.
-Its generated `phase5-execution-receipt-v1.json` is an execution record only;
-it is not eligible as a rights receipt, pinned trust evidence, or Phase 6 PASS.
+Older `phase5-execution-receipt-v1.json` files are execution records only;
+they are not eligible as a rights receipt, pinned trust evidence, or Phase 6 PASS.
+
+The current runner emits `phase5-execution-receipt-v2.json`. Its prediction
+manifest binds the receipt's relative path, exact file SHA-256, and run ID. The
+receipt repeats the manifest's canonical prediction-record digest and records,
+then binds those records to the frozen media/reference groups, profile/model
+hashes, runtime/configuration identity, and local SRT/stats files. The evaluator
+checks those cross-file identities and reports
+`runner_recorded_not_independently_verified`. This is a consistency check over
+local artifacts, not a signature or independent proof of execution; a person
+who can rewrite both files can create a new internally consistent claim. Legacy
+manual `prediction-manifest-v1.json` files without a receipt remain accepted
+and are reported as `user_supplied_not_independently_verified`. Both paths keep
+`rights_verified` and `phase6_eligible` false and cannot pass the Phase 6 gate.
 
 ## Plan fields
 

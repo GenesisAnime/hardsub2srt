@@ -245,12 +245,13 @@ reddedip hiç output yazmaz.
 `ocr_video_eval.py`, gelecekte izinli ve insan tarafından zaman hizası
 incelenmiş source-language referansları hazır olduğunda sabit tam bölüm SRT
 çıktılarını karşılaştıran **ölçüm adaptörüdür**. Videoyu açmaz, OCR/model
-çalıştırmaz, eğitim yapmaz ve ağ erişimi kullanmaz. Bu nedenle OCR motorunun
-gerçekten belirtilen video/model/device ile çalıştığını doğrulamaz; engine,
-config hash'i, `configured_device` ve `session_configured_backend`
-`prediction-manifest-v1` içinde kullanıcı tarafından beyan edilir. Eski
-`device`/`backend` alanları geriye dönük okunur. Hiçbiri node-level inference
-veya donanım kullanımını kanıtlamaz.
+çalıştırmaz, eğitim yapmaz ve ağ erişimi kullanmaz. Tek başına OCR motorunun
+belirtilen video/model/device ile çalıştığını doğrulamaz. Eski manuel
+`prediction-manifest-v1.json` biçiminde engine, config hash'i,
+`configured_device` ve `session_configured_backend` çağıran tarafından beyan
+edilir; eski `device`/`backend` alanları geriye dönük okunur. Runner tarafından
+üretilen manifest aynı v1 dosya adını korur ancak `execution_receipt` bağı da
+taşır. İki biçim de donanım kullanımının bağımsız kanıtı değildir.
 
 Örnek çağrı (önce `ocr_experiment.py` hazırlık dosyalarını üretmiş olmalı):
 
@@ -379,7 +380,42 @@ The explicit per-group coverage threshold is now part of a hash-bound pre-result
 plan; it is a measurement gate, not proof of quality or a release authorization.
 The prep report stays `PREPARED_NOT_RUN`; the
 crop report remains crop-only; the video adapter report remains measurement-
-only. Model training and full-video OCR execution are not implemented here.
+only. See the next section for the separate local runner; no model trainer or
+training flow exists.
+
+## Fixed-profile local OCR runner
+
+`phase5_execution.py` is the separate, opt-in local runner. It validates a
+frozen Phase 5 execution plan, Phase 2 parent lineage, per-group media hashes,
+both local offline profiles, the separately reviewed rights receipt, and its
+project trust pin before creating output. It invokes only the fixed product
+CLI with the selected hash-pinned profile and fixed OCR arguments. The runner
+records SRT and stats hashes, profile/model/config/device/backend identity and
+the run's input bindings. Its test executor is synthetic; it is not a model
+trainer and it does not update OCR weights.
+
+Runner output includes `phase5-execution-receipt-v2.json` and a
+`prediction-manifest-v1.json` whose `execution_receipt` object binds the
+receipt's relative path, raw SHA-256, and run ID. The receipt repeats the
+canonical prediction-record digest and records. Before measurement, the adapter
+checks this cross-file binding against the prepared dataset/split/reference,
+media hashes, profile/config identity, SRT and stats files, and cue counts. It
+labels the result `runner_recorded_not_independently_verified`; legacy manual
+v1 manifests remain `user_supplied_not_independently_verified`.
+
+This binding is a local consistency check, not a digital signature or
+independent execution proof. It has no cryptographic nonce: the run ID is a
+local correlation value, and a person who can rewrite the receipt and manifest
+can create a new internally consistent pair. It does not establish node-level
+GPU execution, lawful use, reviewer identity, or trusted evidence, and it never
+changes `rights_verified:false` or `phase6_eligible:false`.
+
+The runner is implemented, but a real run is currently blocked: there is no
+rights-reviewed authorized corpus or trusted time-aligned reference set, and
+the Phase 5 execution receipt registry and Phase 6 trust registries are empty.
+Synthetic fake-executor tests validate local mechanics only; no real video,
+OCR, or model experiment has run. Do not treat the measurement adapter as the
+runner or its report as a release PASS.
 
 Tam video değerlendirme için daha sonra eklenmesi gereken metriklerin tanımı:
 

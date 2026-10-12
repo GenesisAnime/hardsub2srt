@@ -443,24 +443,242 @@ class Phase5ExecutionTests(unittest.TestCase):
         self.output_tmp.cleanup()
         self.tmp.cleanup()
 
+    def _load_runner_output(self, result: Path, expected_overrides: dict | None = None):
+        experiment_path = self.harness.inputs.experiment / "experiment-report.json"
+        groups, experiment_doc, manifest_hash, metadata_hash, split_hash = video_eval._validated_split(
+            experiment_path, self.harness.inputs.split_path,
+            self.harness.inputs.dataset, self.harness.inputs.metadata_path)
+        references, reference_hash, _language = video_eval._load_references(
+            self.harness.references_path, groups)
+        expected = {
+            "dataset_manifest_sha256": manifest_hash,
+            "dataset_metadata_sha256": metadata_hash,
+            "split_manifest_sha256": split_hash,
+            "evaluation_plan_sha256": experiment_doc["evaluation_plan_sha256"],
+            "experiment_report_sha256": sha(experiment_path.read_bytes()),
+            "reference_manifest_sha256": reference_hash,
+        }
+        if expected_overrides:
+            expected.update(expected_overrides)
+        manifest = result / "prediction-manifest-v1.json"
+        return video_eval._load_predictions(manifest, groups, references,
+                                            experiment_doc, expected)
+
     def test_fake_executor_produces_valid_measurement_manifest_and_nonrelease_receipt(self):
         result = execution._run(self.harness.plan_path, self.harness.fake_executor)
-        receipt = json.loads((result / "phase5-execution-receipt-v1.json").read_text(encoding="utf-8"))
+        receipt_path = result / "phase5-execution-receipt-v2.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         manifest_path = result / "prediction-manifest-v1.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(receipt["status"], "COMPLETED_LOCAL_EXECUTION_NOT_PHASE6_PASS")
         self.assertFalse(receipt["execution"]["rights_verified"])
         self.assertFalse(receipt["execution"]["phase6_eligible"])
-        self.assertEqual(receipt["predictions"]["manifest_sha256"], sha(manifest_path.read_bytes()))
+        self.assertEqual(manifest["execution_receipt"], {
+            "path": receipt_path.name, "sha256": sha(receipt_path.read_bytes()),
+            "run_id": receipt["run_id"]})
+        self.assertEqual(receipt["predictions"]["manifest_records_sha256"],
+                         video_eval._canonical_sha256(manifest["records"]))
         self.assertEqual(len(manifest["records"]), 6)
-        groups, experiment_doc, *_ = video_eval._validated_split(
-            Path(self.harness.plan_doc["experiment"]), self.harness.inputs.split_path,
-            self.harness.inputs.dataset, self.harness.inputs.metadata_path)
-        refs, *_ = video_eval._load_references(self.harness.references_path, groups)
-        _predictions, profiles, _hash = video_eval._load_predictions(
-            manifest_path, groups, refs, experiment_doc)
+        _predictions, profiles, _hash, execution_binding = self._load_runner_output(result)
         self.assertEqual(set(profiles), {"synthetic-baseline", "synthetic-candidate"})
+        self.assertEqual(execution_binding["kind"], "runner_recorded_not_independently_verified")
+        self.assertEqual(execution_binding["run_id"], receipt["run_id"])
         self.assertFalse(list(self.output_parent.glob("*.tmp")))
+
+        report_dir = self.root / "measurement-reports"
+        report_dir.mkdir()
+        report_path = report_dir / "synthetic-measurement.json"
+        report = video_eval.run(
+            self.harness.inputs.dataset, self.harness.inputs.metadata_path,
+            self.harness.inputs.experiment / "experiment-report.json",
+            self.harness.references_path, manifest_path, report_path)
+        self.assertEqual(report["predictions"]["execution_provenance"],
+                         "runner_recorded_not_independently_verified")
+        self.assertEqual(report["predictions"]["execution_receipt_sha256"],
+                         sha(receipt_path.read_bytes()))
+        self.assertEqual(report["predictions"]["execution_run_id"], receipt["run_id"])
+        self.assertFalse(report["phase6_eligible"])
+        self.assertEqual(report["release_gate"]["status"], "BLOCKED_ADAPTER_ONLY")
+        report_text = report_path.read_text(encoding="utf-8")
+        self.assertNotIn(str(result), report_text)
+        self.assertNotIn("SYNTHETIC PREDICTION", report_text)
+        self.assertNotIn("execution_receipt_path", report_text)
+
+    def test_legacy_manual_v1_prediction_manifest_remains_supported(self):
+        result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+        manifest_path = result / "prediction-manifest-v1.json"
+        runner_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        legacy_fields = (
+            "engine_id", "source_id", "episode_id", "split", "media_sha256",
+            "prediction_srt_path", "prediction_srt_sha256", "model_sha256", "config_sha256",
+        )
+        legacy_records = []
+        for row in runner_manifest["records"]:
+            legacy_records.append({
+                **{key: row[key] for key in legacy_fields},
+                "device": row["configured_device"],
+                "backend": row["session_configured_backend"],
+            })
+        write_json(manifest_path, {"schema_version": 1, "records": legacy_records})
+
+        predictions, _profiles, _manifest_sha, execution_info = self._load_runner_output(result)
+        self.assertEqual(len(predictions), 6)
+        self.assertEqual(execution_info, {
+            "kind": "user_supplied_not_independently_verified",
+            "receipt_sha256": None, "run_id": None,
+        })
+        report_path = self.root / "legacy-manual-measurement.json"
+        report = video_eval.run(
+            self.harness.inputs.dataset, self.harness.inputs.metadata_path,
+            self.harness.inputs.experiment / "experiment-report.json",
+            self.harness.references_path, manifest_path, report_path)
+        self.assertEqual(report["predictions"]["execution_provenance"],
+                         "user_supplied_not_independently_verified")
+        self.assertIsNone(report["predictions"]["execution_receipt_sha256"])
+        self.assertIsNone(report["predictions"]["execution_run_id"])
+        self.assertFalse(report["dataset"]["rights_verified"])
+        self.assertFalse(report["phase6_eligible"])
+
+    def test_config_hash_is_bound_to_profile_runtime_and_source_inventory(self):
+        result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+        manifest_path = result / "prediction-manifest-v1.json"
+        receipt_path = result / "phase5-execution-receipt-v2.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        engine = manifest["records"][0]["engine_id"]
+        for row in manifest["records"]:
+            if row["engine_id"] == engine:
+                row["config_sha256"] = "f" * 64
+        for row in receipt["predictions"]["records"]:
+            if row["engine_id"] == engine:
+                row["config_sha256"] = "f" * 64
+        receipt["predictions"]["manifest_records_sha256"] = video_eval._canonical_sha256(
+            receipt["predictions"]["records"])
+        receipt_raw = write_json(receipt_path, receipt)
+        manifest["execution_receipt"]["sha256"] = sha(receipt_raw)
+        write_json(manifest_path, manifest)
+        with self.assertRaisesRegex(video_eval.VideoEvalError, "config hash does not match"):
+            self._load_runner_output(result)
+
+    def test_missing_or_tampered_execution_receipt_is_rejected(self):
+        result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+        receipt_path = result / "phase5-execution-receipt-v2.json"
+        receipt_raw = receipt_path.read_bytes()
+        receipt_path.unlink()
+        with self.assertRaisesRegex(video_eval.VideoEvalError, "receipt is missing"):
+            self._load_runner_output(result)
+
+        receipt_path.write_bytes(receipt_raw + b" ")
+        with self.assertRaisesRegex(video_eval.VideoEvalError, "SHA-256 does not match"):
+            self._load_runner_output(result)
+
+    def test_receipt_and_prediction_paths_reject_escape_and_control_characters(self):
+        result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+        manifest_path = result / "prediction-manifest-v1.json"
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for value in ("../outside.json", "C:/outside.json", "nested\\receipt.json", "bad\x00path"):
+            with self.subTest(value=repr(value)):
+                manifest = json.loads(json.dumps(original))
+                manifest["execution_receipt"]["path"] = value
+                write_json(manifest_path, manifest)
+                with self.assertRaises(video_eval.VideoEvalError):
+                    self._load_runner_output(result)
+        write_json(manifest_path, original)
+
+    def test_receipt_dataset_split_and_reference_identity_must_match_evaluation(self):
+        result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+        expected_fields = (
+            "dataset_manifest_sha256", "dataset_metadata_sha256", "split_manifest_sha256",
+            "evaluation_plan_sha256", "experiment_report_sha256", "reference_manifest_sha256",
+        )
+        for field in expected_fields:
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(video_eval.VideoEvalError, "bindings differ"):
+                    self._load_runner_output(result, {field: "f" * 64})
+
+    def test_receipt_run_id_replay_and_nonrelease_flags_fail_closed(self):
+        result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+        manifest_path = result / "prediction-manifest-v1.json"
+        receipt_path = result / "phase5-execution-receipt-v2.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["execution_receipt"]["run_id"] = "replayed-run-id"
+        write_json(manifest_path, manifest)
+        with self.assertRaisesRegex(video_eval.VideoEvalError, "run ID differs"):
+            self._load_runner_output(result)
+
+        for field in ("phase6_eligible", "rights_verified"):
+            with self.subTest(field=field):
+                result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+                manifest_path = result / "prediction-manifest-v1.json"
+                receipt_path = result / "phase5-execution-receipt-v2.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt["execution"][field] = True
+                receipt_raw = write_json(receipt_path, receipt)
+                manifest["execution_receipt"]["sha256"] = sha(receipt_raw)
+                write_json(manifest_path, manifest)
+                with self.assertRaisesRegex(video_eval.VideoEvalError, "non-release flags"):
+                    self._load_runner_output(result)
+
+    def test_manifest_prediction_fields_must_match_receipt_record(self):
+        result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+        manifest_path = result / "prediction-manifest-v1.json"
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+        mutations = {
+            "stats_sha256": "2" * 64,
+            "profile_sha256": "3" * 64,
+            "model_sha256": "4" * 64,
+            "config_sha256": "5" * 64,
+            "configured_device": "gpu",
+            "session_configured_backend": "tampered-backend",
+            "stats_path": "baseline/tampered.stats.json",
+        }
+        for field, value in mutations.items():
+            with self.subTest(field=field):
+                manifest = json.loads(json.dumps(original))
+                engine = manifest["records"][0]["engine_id"]
+                for row in manifest["records"]:
+                    if row["engine_id"] == engine and field in {
+                            "model_sha256", "config_sha256", "configured_device",
+                            "session_configured_backend"}:
+                        row[field] = value
+                if field not in {"model_sha256", "config_sha256", "configured_device",
+                                 "session_configured_backend"}:
+                    manifest["records"][0][field] = value
+                write_json(manifest_path, manifest)
+                with self.assertRaisesRegex(video_eval.VideoEvalError,
+                                            "record set does not match prediction manifest"):
+                    self._load_runner_output(result)
+        manifest = json.loads(json.dumps(original))
+        manifest["records"][0]["prediction_srt_sha256"] = "1" * 64
+        write_json(manifest_path, manifest)
+        with self.assertRaisesRegex(video_eval.VideoEvalError, "Prediction SRT hash"):
+            self._load_runner_output(result)
+        write_json(manifest_path, original)
+
+    def test_media_mismatch_and_stats_file_drift_are_rejected(self):
+        result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+        manifest_path = result / "prediction-manifest-v1.json"
+        receipt_path = result / "phase5-execution-receipt-v2.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        manifest["records"][0]["media_sha256"] = "a" * 64
+        receipt["predictions"]["records"][0]["media_sha256"] = "a" * 64
+        receipt["predictions"]["manifest_records_sha256"] = video_eval._canonical_sha256(
+            receipt["predictions"]["records"])
+        receipt_raw = write_json(receipt_path, receipt)
+        manifest["execution_receipt"]["sha256"] = sha(receipt_raw)
+        write_json(manifest_path, manifest)
+        with self.assertRaisesRegex(video_eval.VideoEvalError, "media"):
+            self._load_runner_output(result)
+
+        # Restore a fresh immutable runner output before testing stats bytes.
+        result = execution._run(self.harness.plan_path, self.harness.fake_executor)
+        record = json.loads((result / "prediction-manifest-v1.json").read_text(encoding="utf-8"))["records"][0]
+        with (result / record["stats_path"]).open("ab") as stream:
+            stream.write(b" ")
+        with self.assertRaisesRegex(video_eval.VideoEvalError, "SRT/stats hashes"):
+            self._load_runner_output(result)
 
     def test_receipt_must_be_pinned_before_any_output_directory_is_created(self):
         write_json(self.harness.trust_path, {
