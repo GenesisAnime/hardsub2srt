@@ -44,15 +44,50 @@
       "metrics_persisted": {"const": "aggregate only; no cue text or absolute paths"}
     }},
     "engines": {"type": "array", "minItems": 6, "items": {"$ref": "#/$defs/engineSplit"}},
-    "predeclared_comparison": {"type": "object", "required": ["baseline_id", "candidate_id", "max_candidate_corpus_cer_increase", "candidate_test_cer_minus_baseline", "candidate_cer_exceeds_predeclared_limit", "test_group_cer", "test_groups_with_candidate_cer_regression", "coverage_gate", "release_decision"], "properties": {
+    "predeclared_comparison": {"type": "object", "required": ["baseline_id", "candidate_id", "coverage_plan_sha256", "comparison_gate", "max_candidate_corpus_cer_increase", "candidate_test_cer_minus_baseline", "candidate_cer_exceeds_predeclared_limit", "test_group_cer", "test_groups_with_candidate_cer_regression", "coverage_gate", "release_decision"], "properties": {
       "baseline_id": {"type": "string"},
       "candidate_id": {"type": "string"},
+      "coverage_plan_sha256": {"$ref": "#/$defs/sha256"},
+      "comparison_gate": {"type": "object", "additionalProperties": false,
+        "required": ["status", "cer_limit_passed", "candidate_corpus_cer_increase", "maximum_candidate_corpus_cer_increase", "no_test_group_regression_required", "no_test_group_regression_passed", "test_group_cer_data_complete", "coverage_passed"],
+        "properties": {
+          "status": {"enum": ["PASS", "FAIL"]},
+          "cer_limit_passed": {"type": "boolean"},
+          "candidate_corpus_cer_increase": {"type": ["number", "null"]},
+          "maximum_candidate_corpus_cer_increase": {"type": "number", "minimum": 0},
+          "no_test_group_regression_required": {"type": "boolean"},
+          "no_test_group_regression_passed": {"type": "boolean"},
+          "test_group_cer_data_complete": {"type": "boolean"},
+          "coverage_passed": {"type": "boolean"}
+        }
+      },
       "max_candidate_corpus_cer_increase": {"type": "number", "minimum": 0},
       "candidate_test_cer_minus_baseline": {"type": ["number", "null"]},
       "candidate_cer_exceeds_predeclared_limit": {"type": ["boolean", "null"]},
       "test_group_cer": {"type": "array"},
       "test_groups_with_candidate_cer_regression": {"type": "integer", "minimum": 0},
-      "coverage_gate": {"const": "NOT_PREDECLARED_IN_PHASE5_V1"},
+      "coverage_gate": {"type": "object", "additionalProperties": false,
+        "required": ["status", "minimum_per_test_group", "definition", "applies_to", "per_engine_group"],
+        "properties": {
+          "status": {"enum": ["PASS", "FAIL"]},
+          "minimum_per_test_group": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+          "definition": {"type": "string"},
+          "applies_to": {"const": "both baseline and candidate for every frozen test group"},
+          "per_engine_group": {"type": "array", "minItems": 2,
+            "items": {"type": "object", "additionalProperties": false,
+              "required": ["engine_id", "group_key_sha256", "numerator_matched_cues", "denominator_reference_cues", "coverage", "passed"],
+              "properties": {
+                "engine_id": {"type": "string", "minLength": 1},
+                "group_key_sha256": {"$ref": "#/$defs/sha256"},
+                "numerator_matched_cues": {"type": "integer", "minimum": 0},
+                "denominator_reference_cues": {"type": "integer", "minimum": 1},
+                "coverage": {"type": "number", "minimum": 0, "maximum": 1},
+                "passed": {"type": "boolean"}
+              }
+            }
+          }
+        }
+      },
       "release_decision": {"const": "NOT_MADE_BY_THIS_ADAPTER"}
     }},
     "release_gate": {"type": "object", "required": ["status", "phase6_blocked", "reason"], "properties": {

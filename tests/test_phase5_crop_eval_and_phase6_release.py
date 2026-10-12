@@ -65,7 +65,7 @@ class SyntheticPhase5Inputs:
         self.experiment = root / "synthetic-experiment"
         prep.make_artifacts(self.dataset, self.metadata_path, self.experiment,
                             "SYNTHETIC-SEED", "synthetic-baseline", "synthetic-candidate",
-                            0.01, 500)
+                            0.01, 500, 0.95)
         self.split_path = self.experiment / "split-manifest.json"
 
     def _write_metadata(self, *, pending: bool = False) -> None:
@@ -126,6 +126,46 @@ class Phase5CropEvalTests(unittest.TestCase):
         self.assertEqual(provenance["status"], "verified_against_parent_review_pack")
         self.assertEqual(len(provenance["members"]), 3)
 
+    def test_pre_result_plan_has_explicit_threshold_and_hash_bindings(self):
+        plan = json.loads((self.inputs.experiment / "evaluation-plan-v1.json").read_text(encoding="utf-8"))
+        split = json.loads(self.inputs.split_path.read_text(encoding="utf-8"))
+        report = json.loads((self.inputs.experiment / "experiment-report.json").read_text(encoding="utf-8"))
+        self.assertEqual(plan["predeclared_gate"]["min_test_group_coverage"], 0.95)
+        self.assertEqual(split["evaluation_plan_sha256"], _sha(
+            (self.inputs.experiment / "evaluation-plan-v1.json").read_bytes()))
+        self.assertEqual(report["evaluation_plan_sha256"], split["evaluation_plan_sha256"])
+        self.assertEqual(report["split_manifest_sha256"], _sha(self.inputs.split_path.read_bytes()))
+
+    def test_missing_threshold_and_mutated_or_replayed_plan_fail_closed(self):
+        plan_path = self.inputs.experiment / "evaluation-plan-v1.json"
+        original = json.loads(plan_path.read_text(encoding="utf-8"))
+        missing = json.loads(json.dumps(original))
+        del missing["predeclared_gate"]["min_test_group_coverage"]
+        _write_json(plan_path, missing)
+        with self.assertRaisesRegex(crop_eval.EvalError, "predeclared gate alanları"):
+            crop_eval.validate_run(self.inputs.dataset, self.inputs.metadata_path,
+                                   self.inputs.split_path)
+
+        _write_json(plan_path, original)
+        with plan_path.open("ab") as stream:
+            stream.write(b" ")
+        with self.assertRaisesRegex(crop_eval.EvalError, "hash'i veya split/dataset bağları"):
+            crop_eval.validate_run(self.inputs.dataset, self.inputs.metadata_path,
+                                   self.inputs.split_path)
+
+        second = self.root / "synthetic-experiment-replay-source"
+        prep.make_artifacts(self.inputs.dataset, self.inputs.metadata_path, second,
+                            "SYNTHETIC-SEED", "synthetic-baseline", "synthetic-candidate",
+                            0.01, 500, 0.95)
+        plan_path.write_bytes((second / "evaluation-plan-v1.json").read_bytes())
+        with self.assertRaisesRegex(crop_eval.EvalError, "hash'i veya split/dataset bağları"):
+            crop_eval.validate_run(self.inputs.dataset, self.inputs.metadata_path,
+                                   self.inputs.split_path)
+        plan_path.unlink()
+        with self.assertRaisesRegex(crop_eval.EvalError, "Evaluation plan okunamadı"):
+            crop_eval.validate_run(self.inputs.dataset, self.inputs.metadata_path,
+                                   self.inputs.split_path)
+
     def test_crop_hash_mismatch_blocks_before_ocr(self):
         selected, references, *_ = crop_eval.validate_run(
             self.inputs.dataset, self.inputs.metadata_path, self.inputs.split_path)
@@ -165,7 +205,7 @@ class Phase5CropEvalTests(unittest.TestCase):
         split = json.loads(self.inputs.split_path.read_text(encoding="utf-8"))
         split["rows"][0]["split"] = "test" if split["rows"][0]["split"] != "test" else "train"
         _write_json(self.inputs.split_path, split)
-        with self.assertRaisesRegex(crop_eval.EvalError, "satırı değiştirilmiş"):
+        with self.assertRaisesRegex(crop_eval.EvalError, "Experiment report evaluation plan/hash"):
             crop_eval.validate_run(self.inputs.dataset, self.inputs.metadata_path, self.inputs.split_path)
         self.inputs.split_path.write_text('{"schema_version":1,"schema_version":1}', encoding="utf-8")
         with self.assertRaisesRegex(crop_eval.EvalError, "yineleniyor"):

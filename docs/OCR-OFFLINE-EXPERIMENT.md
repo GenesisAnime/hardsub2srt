@@ -2,7 +2,7 @@
 
 ## Bu aşamada ne var
 
-`ocr_experiment.py`, Phase 2'nin `verified-ocr-dataset-*/manifest.jsonl` dışa aktarımını ve ona karşılık gelen ayrı metadata dosyasını yerelde doğrular. Geçerli girdiler için `split-manifest.json` ve `experiment-report.json` oluşturur. Araç OCR çalıştırmaz, model eğitmez, veri kümesini değiştirmez ve ağa bağlanmaz. Metadata, split ve rapor çıktıları hassas yerel dosyalardır; paylaşılabilir paket sayılmaz.
+`ocr_experiment.py`, Phase 2'nin `verified-ocr-dataset-*/manifest.jsonl` dışa aktarımını ve ona karşılık gelen ayrı metadata dosyasını yerelde doğrular. Geçerli girdiler için sonuçlardan önce `evaluation-plan-v1.json`, ardından hash-bağlı `split-manifest.json` ve `experiment-report.json` oluşturur. Araç OCR çalıştırmaz, model eğitmez, veri kümesini değiştirmez ve ağa bağlanmaz. Metadata, plan, split ve rapor çıktıları hassas yerel dosyalardır; paylaşılabilir paket sayılmaz.
 
 Phase 2 dışa aktarımı yalnızca geçerli `accepted`/`corrected` kararlarını hedefler. Araç, export klasörünün doğrudan üst dizinindeki `.review-pack` ile `manifest.json`, SRT ve `review-events.jsonl` zincirini tekrar doğrular; event'in aktif son karar olduğunu, event/cue/hash/metin/zaman/confidence eşleşmelerini kontrol eder. Zincir doğrulanamazsa çıktıdaki provenance `self_attested` olur ve `experiment_run_blocked` true kalır. Başarılı yerel bağlantı da hesabın/kişinin kimliğini kanıtlamaz; yerel UI journal'ına bağlı olduğunu gösterir. AI önerileri export'a alınmaz.
 
@@ -89,7 +89,7 @@ Her `cue_id` için `source_id`, `episode_id` ve lisans alanı zorunludur. Lisans
 
 ## Hazırlama
 
-Önceden sabitlenecek değerler (split tohumu, baseline/aday tanımı ve CER gerileme eşiği) sonuçları incelemeden seçilmelidir. Yeni, boş bir `--out` dizini verin:
+Önceden sabitlenecek değerler (split tohumu, baseline/aday tanımı, CER gerileme eşiği, zaman toleransı ve **her test source+episode grubu için minimum coverage oranı**) sonuçları görmeden seçilmelidir. Proje varsayılanı veya evrensel yüzde yoktur; oranı kendi desteklenen kapsamınız için önceden belirleyin. `0.90` aşağıdaki komutta yalnız örnek değerdir. Yeni, boş bir `--out` dizini verin:
 
 ```powershell
 py -3 ocr_experiment.py "D:\yerel\verified-ocr-dataset-..." `
@@ -99,8 +99,32 @@ py -3 ocr_experiment.py "D:\yerel\verified-ocr-dataset-..." `
   --baseline "current-engine-config-id" `
   --candidate "candidate-engine-config-id" `
   --max-cer-regression 0.002 `
+  --min-test-group-coverage 0.90 `
   --timing-tolerance-ms 500
 ```
+
+Hazırlık, `evaluation-plan-v1.json` dosyasını sonuç ölçümünden önce yazar. Plan
+dataset manifesti, metadata, split tohumu, engine kimlikleri, eşiği ve coverage
+tanımını dondurur. Split ve `experiment-report.json` planın ham bayt SHA-256
+özetini taşır; evaluation aracı plan yoksa, plan değiştirilmişse veya başka bir
+experiment klasörünün planı kopyalanmışsa durur. Eşik değiştirmek için eski
+dosyaları düzenlemeyin; yeni experiment klasörü ve yeni plan oluşturun. Bu hash
+bağı yerel dosyalar arasındaki bütünlük kontrolüdür, dijital imza ya da dışarıdan
+doğrulanmış trust pin değildir. Plan dosyasının değiştirilmesini mevcut split ve
+rapor hash'lerine göre yakalar; plan, split ve raporun birlikte yeniden yazılıp
+hash'lerin tekrar hesaplanmasını engellemez. Güvenilir timestamp, imza veya hak
+onayı oluşturmaz.
+
+### Eski Phase 5 hazırlık dosyaları
+
+Coverage planı eklenmeden önce üretilmiş `schema_version=1` `PREPARED_NOT_RUN`
+raporlarında plan/split hash alanları ve `evaluation-plan-v1.json` bulunmaz.
+Güncel validator bu eski klasörleri bilerek reddeder. Eski dosyaları yerinde
+düzenleyerek hash veya threshold eklemeyin; `ocr_experiment.py` komutunu açıkça
+seçtiğiniz coverage oranıyla **yeni, boş bir `--out` klasöründe** yeniden
+çalıştırın. Eski rapor tarihsel kayıt olarak kalır. Bu sürümde schema id'si v1
+korunmuştur, ancak eski hazırlık artifact'ları güncel v1 validator sözleşmesine
+uyumlu değildir.
 
 Komut crop dosyalarının göreli ve kök dışına taşmayan yol olduğunu, SHA-256 değerlerinin eşleştiğini ve önce JPEG boyut marker'larının güvenli sınırlar içinde olduğunu, ardından OpenCV ile görüntünün çözülebildiğini denetler. Tek crop en çok 1280×1280 ve benzersiz crop toplamı en çok 128 MiB'dir; metadata 16 MiB, her rights evidence 16 MiB ve toplam kanıt dosyaları 64 MiB ile sınırlıdır. `cue_id` tekrarını, `ocr_confidence` alanı da dahil yanlış Phase 2 manifest şemasını, eksik/ekstra metadata satırını, boş insan doğrulanmış metni, lisans kanıtı dosyası/hash'i eksikliğini ve bozuk crop'u reddeder. `review_event_id` tek başına yeterli değildir: üst `.review-pack` ile `review-events.jsonl` içinde halen etkin karara ve aynı cue/crop/hash/SRT/zaman/metin/confidence değerlerine bağlanmalıdır. Bu zincir bulunmazsa provenance self-attested kalır ve deney bloklanır. Grup anahtarı NFC + boşluk birleştirme + casefold sonrası `source_id + episode_id` birleşimidir. Aynı gruptaki hiçbir cue farklı split'e düşmez. En az üç ayrı grup yoksa veya split boş kalacaksa çıktı üretimi durur.
 
@@ -108,7 +132,7 @@ Deterministik sıralama `SHA256(seed + NUL + canonical_group_id)` ile yapılır;
 
 ## Metrik tanımları ve rapor
 
-Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json`, `schemas/ocr-experiment-report-v1.schema.json` ve crop-only ölçüm için `schemas/ocr-crop-evaluation-report-v1.schema.json` dosyalarındadır. `experiment-report.json` hazırlıkta daima `PREPARED_NOT_RUN`, `rights_verified:false`, `experiment_run_blocked:true` ve null metriklerle yazılır. Null, sıfır başarı demek değildir; ölçülmedi demektir. Rights dosyalarının varlığı/hash'i yalnızca kanıt dosyasını öz-beyan edilen kayda bağlar; hukuki izni doğrulamaz. `ocr_crop_eval.py` yalnız still metin CER/WER/exact/coverage ölçer. `ocr_video_eval.py` sabit SRT ve zamanlı referans dosyaları için ayrı measurement-only adapter'dır; gerçek video/OCR çalıştırmaz ve release PASS üretemez. `vtt-qa.py`/`regresyon/gt_gate.py` mevcut regresyon araçları ayrı kalır.
+Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json`, yeni dondurulmuş plan için `schemas/ocr-evaluation-plan-v1.schema.json`, `schemas/ocr-experiment-report-v1.schema.json`, video raporu için `schemas/ocr-video-evaluation-report-v1.schema.json` ve crop-only rapor için `schemas/ocr-crop-evaluation-report-v1.schema.json` dosyalarındadır. `experiment-report.json` hazırlıkta daima `PREPARED_NOT_RUN`, `rights_verified:false`, `experiment_run_blocked:true` ve null metriklerle yazılır. Null, sıfır başarı demek değildir; ölçülmedi demektir. Rights dosyalarının varlığı/hash'i yalnızca kanıt dosyasını öz-beyan edilen kayda bağlar; hukuki izni doğrulamaz. `ocr_crop_eval.py` yalnız still metin CER/WER/exact/coverage ölçer. `ocr_video_eval.py` sabit SRT ve zamanlı referans dosyaları için ayrı measurement-only adapter'dır; gerçek video/OCR çalıştırmaz ve release PASS üretemez. `vtt-qa.py`/`regresyon/gt_gate.py` mevcut regresyon araçları ayrı kalır.
 
 Still-crop ölçüm adaptörü `ocr_crop_eval.py` ile eklenmiştir. Bu adapter yalnızca
 Phase 2 insan onaylı crop + kaynak metni üzerinde OCR motorunun **crop metnini**
@@ -316,15 +340,26 @@ paths (group rows use SHA-256 pseudonyms).
 
 The output schema `schemas/ocr-video-evaluation-report-v1.schema.json` is
 deliberately **not** the Phase 6 input schema. It records the candidate's
-observed test CER delta and whether it exceeds the predeclared CER limit, but
-does not convert that numerical comparison into release eligibility. Its status is always
+observed test CER delta, the plan hash, and the per-test-group coverage result
+for both baseline and candidate, but does not convert either comparison into
+release eligibility. Coverage is `matched_cues / reference_cues` within each
+frozen source+episode test group. A match is the evaluator's deterministic
+one-to-one temporal match requiring overlap / reference-cue duration >= 0.5;
+unmatched reference cues stay in the denominator and extra predictions do not
+increase it. The group must meet the explicitly predeclared threshold for both
+engines. A group exactly on the threshold passes; any group below it makes the
+coverage gate `FAIL`. The overall comparison also fails when candidate corpus
+CER exceeds the frozen limit or any test group's candidate CER regresses while
+the frozen no-group-regression rule is required. Any failed comparison returns
+exit code 1 after saving its measurement report. Missing, duplicate, zero-denominator, inconsistent, or
+unexpected test-group coverage stops evaluation without writing a report. Its status is always
 `MEASURED_ADAPTER_ONLY_NOT_RELEASE_PASS`, `phase6_eligible=false`,
 `rights_verified=false`, and release status `BLOCKED_ADAPTER_ONLY`. It reports
-predeclared CER comparison facts but makes no release decision; Phase 5 v1 has
-no predeclared coverage threshold, which is called out instead of invented
-after results. Synthetic tests exercise parsing, matching, metrics and the
-non-release report shape. A real run is still blocked because this user has no
-authorized three-group dataset or trusted timed references yet.
+predeclared CER and coverage facts but makes no release decision. Synthetic
+tests exercise threshold validation, low/high and exact-boundary outcomes,
+missing/ambiguous groups, and plan mutation/replay. A real run is still blocked
+because this user has no authorized three-group dataset or trusted timed
+references yet.
 
 ## Tam Phase 5 hâlâ neden bloklu
 
@@ -333,8 +368,10 @@ adapter can calculate metrics only after prepared rights/provenance gates and
 human-attested time-aligned references exist. It cannot independently verify
 lawful use, reference trust, or the model/device execution, and its report
 cannot unlock Phase 6. Trusted data, independent rights validation, actual
-candidate execution provenance, a predeclared coverage gate and release-grade
-evidence remain outstanding. The prep report stays `PREPARED_NOT_RUN`; the
+candidate execution provenance, and release-grade evidence remain outstanding.
+The explicit per-group coverage threshold is now part of a hash-bound pre-result
+plan; it is a measurement gate, not proof of quality or a release authorization.
+The prep report stays `PREPARED_NOT_RUN`; the
 crop report remains crop-only; the video adapter report remains measurement-
 only. Model training and full-video OCR execution are not implemented here.
 
@@ -353,7 +390,7 @@ Her gerçek ölçüm baseline ve aday için aynı reference, cue alignment, norm
 
 ## Önceden ilan edilen regresyon kapısı
 
-Rapor çalıştırılmadan önce `--max-cer-regression` sabitlenir. Aday, dondurulmuş test setinde baseline CER'ına göre bu değerden fazla kötüleşirse ve/veya tanımlı test kapsamı/coverage koşullarını karşılamazsa model yayın kapısı **fail** sayılır. Her episode/source grubunun sonucu ayrıca gösterilir; iyi bir toplam skorun kötüleşen grubu gizlemesine izin verilmez. Bu hazırlık aracı gate uygulatmıyor çünkü henüz iki motoru aynı trusted-reference test corpus'unda çalıştıran Phase 5 adapter'ı ve corpus yok. Null gate sonucu geçiş değildir.
+Rapor çalıştırılmadan önce `--max-cer-regression` ve zorunlu `--min-test-group-coverage` sabitlenir. Aday dondurulmuş test setinde baseline CER'ına göre izin verilen artışı aşarsa veya baseline/aday motorlarından herhangi biri herhangi bir test grubunda minimum coverage oranının altına düşerse coverage/CER karşılaştırması başarısızdır. Her episode/source grubu ayrı raporlanır; yüksek coverage'lı bir grup diğer gruptaki düşüklüğü örtemez. Eşik sonuca baktıktan sonra değiştirilemez; yeni bir değer yeni experiment planı gerektirir. Bu karşılaştırmalar yine Phase 6 release PASS'i değildir.
 
 ## Kesin durma koşulları
 
