@@ -69,6 +69,15 @@ class UiInformationArchitectureTests(unittest.TestCase):
         self.assertIn("/api/durum", html)
         self.assertIn('aria-label="İnceleme adımları"', html)
 
+    def test_mobile_review_pack_picker_stacks_full_width_controls(self):
+        html = self.client.get("/ocr-inceleme").get_data(as_text=True)
+        mobile_css = html.split("@media(max-width:700px){", 1)[1].split("</style>", 1)[0]
+        self.assertIn(
+            ".start-card .row{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch}",
+            mobile_css,
+        )
+        self.assertIn(".start-card .row>*{width:100%;min-width:0}", mobile_css)
+
     def test_contribution_keeps_opt_in_and_shared_navigation(self):
         response = self.client.get("/katki")
         html = response.get_data(as_text=True)
