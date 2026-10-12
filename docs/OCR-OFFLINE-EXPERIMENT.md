@@ -168,8 +168,10 @@ olmalıdır. EasyOCR yalnız mevcut model klasörünü kullanır (varsayılan
 `~/.EasyOCR/model`, değiştirilebilir `--easyocr-model-dir`) ve
 `download_enabled=False` ile kurulur. Eksik model hata verir; hiçbir model
 ağırlığı indirilmez. GPU kullanılabiliyorsa varsayılandır; `--cpu` açıkça CPU
-seçer. Raporda motor sürümü, config özeti ve gerçek cihaz/provider bilgisi
-bulunur. RapidOCR oturumundan etkin ONNX provider okunamazsa işlem durur.
+seçer. Raporda motor sürümü, config özeti, EasyOCR reader'ının configured device
+değeri ve oluşturulan ONNX oturumlarının configured provider listesi bulunur.
+Bunlar node-level inference profili değildir. RapidOCR oturumundan configured
+provider listesi okunamazsa işlem durur.
 
 Her engine aynı frozen `test` split satırlarını işler ve her engine'den hemen
 önce manifest, metadata, crop SHA/decode, split ataması ve etkin Phase 2 karar
@@ -245,8 +247,10 @@ incelenmiş source-language referansları hazır olduğunda sabit tam bölüm SR
 çıktılarını karşılaştıran **ölçüm adaptörüdür**. Videoyu açmaz, OCR/model
 çalıştırmaz, eğitim yapmaz ve ağ erişimi kullanmaz. Bu nedenle OCR motorunun
 gerçekten belirtilen video/model/device ile çalıştığını doğrulamaz; engine,
-config hash'i, device ve backend `prediction-manifest-v1` içinde kullanıcı
-tarafından beyan edilir. Rapor bunu açıkça doğrulanmamış yazar.
+config hash'i, `configured_device` ve `session_configured_backend`
+`prediction-manifest-v1` içinde kullanıcı tarafından beyan edilir. Eski
+`device`/`backend` alanları geriye dönük okunur. Hiçbiri node-level inference
+veya donanım kullanımını kanıtlamaz.
 
 Örnek çağrı (önce `ocr_experiment.py` hazırlık dosyalarını üretmiş olmalı):
 
@@ -296,10 +300,11 @@ Timed-reference record example:
 Prediction records use the same `source_id`, `episode_id`, `split` and
 `media_sha256`, plus `engine_id` (exactly the frozen baseline/candidate IDs),
 `prediction_srt_path`, `prediction_srt_sha256`, `model_sha256`,
-`config_sha256`, `device` (`gpu` or `cpu`) and `backend`. Put relative SRT files under their respective
+`config_sha256`, `configured_device` (`gpu` or `cpu`) and
+`session_configured_backend`. Put relative SRT files under their respective
 manifest directories. `prediction-manifest-v1` must contain both engine outputs
-for every split group; engine config/device/backend must stay constant across
-the groups for that engine. These fields bind the provided files and declare
+for every split group; engine config/configured-device/session-configured-backend
+must stay constant across the groups for that engine. These fields bind the provided files and declare
 how they were produced, but this fixed-output adapter cannot verify execution.
 
 Each timed reference row binds a local relative SRT path and SHA-256 to source,
@@ -308,7 +313,8 @@ reviewer, timezone timestamp and the same media hash are required. This is a
 human attestation, not independent proof that the subtitle is authorized,
 source-language, synchronized, or reviewed by a verified person. Rights remain
 `false` in every report. Each prediction row similarly binds a local SRT and
-SHA-256 to that exact media hash plus self-declared engine config/device/backend.
+SHA-256 to that exact media hash plus self-declared engine
+config/configured-device/session-configured-backend.
 All referenced paths must remain under their manifest directory; hash or group
 mismatch stops evaluation. Input SRTs are strict UTF-8, bounded in size/cue
 count, and every nonempty block must parse; malformed blocks are not silently
@@ -386,7 +392,7 @@ Tam video değerlendirme için daha sonra eklenmesi gereken metriklerin tanımı
 - **Coverage:** referans cue'larının doğrulanabilir, hizalanmış ve ölçülebilir olan kısmı; unavailable/ambiguous/missing referanslar ve nedenleri ayrıca sayılmalıdır.
 - **Aggregates:** her episode/source için ayrı sonuç; cue-weighted micro (toplam edit / toplam referans birimi), group macro (grup skorlarının basit ortalaması). Hem train, validation hem test ayrı raporlanmalı; release gate yalnız dondurulmuş test grubunu kullanır.
 
-Her gerçek ölçüm baseline ve aday için aynı reference, cue alignment, normalization, OCR engine/config, device/backend ve koşu parametrelerini kaydetmelidir. Fark varsa açıkça gösterilmelidir. Translation metrikleri bu OCR raporuna eklenmez; ayrı bilingual-human set ve ayrı schema gerekir.
+Her gerçek ölçüm baseline ve aday için aynı reference, cue alignment, normalization, OCR engine/config, configured-device/session-configured-backend ve koşu parametrelerini kaydetmelidir. Provider/device değerleri çalışma yapılandırmasıdır, node-level inference profili değildir. Fark varsa açıkça gösterilmelidir. Translation metrikleri bu OCR raporuna eklenmez; ayrı bilingual-human set ve ayrı schema gerekir.
 
 ## Önceden ilan edilen regresyon kapısı
 
@@ -400,5 +406,5 @@ Rapor çalıştırılmadan önce `--max-cer-regression` ve zorunlu `--min-test-g
 - Üçten az bağımsız grup varsa: train/validation/test kurma; değerlendirmeyi yetersiz veri olarak durdur.
 - Her kaynak review-pack birden fazla source+episode grubu olarak işaretlenmişse veya iki pack aynı grubu iddia ediyorsa metadata lineage'i reddedilir.
 - Trusted, zamanla uyumlu source-language reference yoksa: OCR accuracy, model gain veya regression pass raporlama.
-- Baseline/aday engine, config, device/backend, metrik normalization/alignment veya predeclared gate eksikse: sonuç üretimini reddet.
+- Baseline/aday engine, config, configured-device/session-configured-backend, metrik normalization/alignment veya predeclared gate eksikse: sonuç üretimini reddet.
 - Bu teslimatta model eğitimi, model ağırlığı değişimi ve kullanıcı videosu/corpus işlemi **yapılmadı**. Yeterli veri, lisans ve engine-specific reference gelene kadar bunlar bloklu kalır.

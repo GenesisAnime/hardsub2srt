@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-phase5-execution-receipt-v1.schema.json",
+  "title": "Local Phase 5 execution record v1 (never a release proof)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "status", "run_id", "created_at", "duration_seconds",
+    "application", "runtime", "execution", "inputs", "profiles", "predictions", "limits"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "COMPLETED_LOCAL_EXECUTION_NOT_PHASE6_PASS"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "duration_seconds": {"type": "number", "minimum": 0},
+    "application": {
+      "type": "object", "additionalProperties": false,
+      "required": ["commit", "source_bundle_sha256", "source_sha256s"],
+      "properties": {
+        "commit": {"type": ["string", "null"], "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+        "source_bundle_sha256": {"$ref": "#/$defs/sha256"},
+        "source_sha256s": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}}
+      }
+    },
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["python", "distributions", "media_tools", "environment"],
+      "properties": {
+        "python": {"type": "object", "additionalProperties": false, "required": ["version", "executable_sha256", "startup_mode", "package_roots"], "properties": {"version": {"type": "string", "minLength": 1}, "executable_sha256": {"$ref": "#/$defs/sha256"}, "startup_mode": {"type": "string", "minLength": 1}, "package_roots": {"type": "array", "items": {"type": "string"}}}},
+        "distributions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["name", "normalized_name", "version", "location", "metadata_sha256", "record_sha256"], "properties": {"name": {"type": "string", "minLength": 1}, "normalized_name": {"type": "string", "minLength": 1}, "version": {"type": "string", "minLength": 1}, "location": {"type": "string", "minLength": 1}, "metadata_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}, "record_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}}}},
+        "media_tools": {"type": "object", "additionalProperties": {"type": ["object", "null"], "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"}}}},
+        "environment": {"type": "object", "additionalProperties": false, "required": ["sha256s", "removed_proxy_variables", "fixed_offline_flags", "python_override_variables_removed"], "properties": {"sha256s": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}}, "removed_proxy_variables": {"type": "array", "items": {"type": "string"}}, "fixed_offline_flags": {"type": "object", "additionalProperties": {"type": "string"}}, "python_override_variables_removed": {"type": "array", "items": {"type": "string"}}}}
+      }
+    },
+    "execution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "network_policy", "phase6_eligible", "rights_verified"],
+      "properties": {
+        "mode": {"const": "product_cli_allowlisted_offline_profile"},
+        "network_policy": {"const": "python_socket_apis_blocked; managed OCR loaders pinned/local/download-disabled; OS network isolation not certified"},
+        "phase6_eligible": {"const": false},
+        "rights_verified": {"const": false}
+      }
+    },
+    "inputs": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "dataset_manifest_sha256", "dataset_metadata_sha256", "split_manifest_sha256",
+        "evaluation_plan_sha256", "experiment_report_sha256", "reference_manifest_sha256",
+        "media_sha256s", "profile_sha256s", "execution_plan_sha256",
+        "rights_receipt_sha256", "trust_registry_sha256"
+      ],
+      "properties": {
+        "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "dataset_metadata_sha256": {"$ref": "#/$defs/sha256"},
+        "split_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "evaluation_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "experiment_report_sha256": {"$ref": "#/$defs/sha256"},
+        "reference_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "rights_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "trust_registry_sha256": {"$ref": "#/$defs/sha256"},
+        "media_sha256s": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}},
+        "profile_sha256s": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}}
+      }
+    },
+    "profiles": {
+      "type": "object", "minProperties": 2, "maxProperties": 2,
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false,
+        "required": ["profile_sha256", "model_sha256", "device_preference"],
+        "properties": {
+          "profile_sha256": {"$ref": "#/$defs/sha256"},
+          "model_sha256": {"$ref": "#/$defs/sha256"},
+          "device_preference": {"enum": ["gpu_default", "cpu"]}
+        }
+      }
+    },
+    "predictions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["manifest", "manifest_sha256", "records"],
+      "properties": {
+        "manifest": {"const": "prediction-manifest-v1.json"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "records": {
+          "type": "array", "minItems": 6,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": [
+              "engine_id", "source_id", "episode_id", "split", "media_sha256",
+              "prediction_srt_path", "prediction_srt_sha256", "model_sha256",
+              "config_sha256", "configured_device", "session_configured_backend", "stats_sha256", "stats_path",
+              "cue_count"
+            ],
+            "properties": {
+              "engine_id": {"type": "string", "minLength": 1},
+              "source_id": {"type": "string", "minLength": 1},
+              "episode_id": {"type": "string", "minLength": 1},
+              "split": {"enum": ["train", "validation", "test"]},
+              "media_sha256": {"$ref": "#/$defs/sha256"},
+              "prediction_srt_path": {"type": "string", "minLength": 1},
+              "prediction_srt_sha256": {"$ref": "#/$defs/sha256"},
+              "model_sha256": {"$ref": "#/$defs/sha256"},
+              "config_sha256": {"$ref": "#/$defs/sha256"},
+              "configured_device": {"enum": ["gpu", "cpu"]},
+              "session_configured_backend": {"type": "string", "minLength": 1},
+              "stats_sha256": {"$ref": "#/$defs/sha256"},
+              "stats_path": {"type": "string", "minLength": 1},
+              "cue_count": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "limits": {"type": "array", "minItems": 3, "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

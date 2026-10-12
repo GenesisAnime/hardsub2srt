@@ -433,28 +433,32 @@ def _load_predictions(path: Path, groups: dict, references: dict, experiment: di
     if type(records) is not list or len(records) != len(groups) * 2:
         raise VideoEvalError("Baseline ve aday için her source/episode grubunda bir SRT gerekli")
     found, profiles = {}, {}
-    required = {"engine_id", "source_id", "episode_id", "split", "media_sha256",
-                "prediction_srt_path", "prediction_srt_sha256", "model_sha256",
-                "config_sha256", "device", "backend"}
+    required_common = {"engine_id", "source_id", "episode_id", "split", "media_sha256",
+                       "prediction_srt_path", "prediction_srt_sha256", "model_sha256",
+                       "config_sha256"}
+    legacy_fields = required_common | {"device", "backend"}
+    configured_fields = required_common | {"configured_device", "session_configured_backend"}
     for record in records:
-        if type(record) is not dict or set(record) != required:
+        if type(record) is not dict or set(record) not in (legacy_fields, configured_fields):
             raise VideoEvalError("Prediction kaydı alanları tam eşleşmeli")
         if (type(record["engine_id"]) is not str or type(record["source_id"]) is not str
                 or type(record["episode_id"]) is not str or type(record["split"]) is not str):
             raise VideoEvalError("Prediction engine/source/episode/split alanları geçersiz")
         engine, key = record["engine_id"], prep._group_key(record)
+        configured_device = record.get("configured_device", record.get("device"))
+        configured_backend = record.get("session_configured_backend", record.get("backend"))
         if engine not in engines or key not in groups or (engine, key) in found:
             raise VideoEvalError("Prediction engine/grup bilinmiyor veya yinelenmiş")
         ref = references[key]
         if (record["split"] != groups[key] or record["media_sha256"] != ref["media_sha256"]
                 or not SHA256_RE.fullmatch(str(record["model_sha256"]))
                 or not SHA256_RE.fullmatch(str(record["config_sha256"]))
-                or type(record["device"]) is not str or record["device"] not in {"gpu", "cpu"}
-                or type(record["backend"]) is not str or not record["backend"].strip()
+                or type(configured_device) is not str or configured_device not in {"gpu", "cpu"}
+                or type(configured_backend) is not str or not configured_backend.strip()
                 or not SHA256_RE.fullmatch(str(record["prediction_srt_sha256"]))):
-            raise VideoEvalError("Prediction split/media/model config/device provenance uyuşmuyor")
+            raise VideoEvalError("Prediction split/media/model config/configured-device provenance uyuşmuyor")
         profile = (record["model_sha256"], record["config_sha256"],
-                   record["device"], record["backend"])
+                   configured_device, configured_backend)
         if engine in profiles and profiles[engine] != profile:
             raise VideoEvalError("Aynı engine için config/device/backend gruplar arasında değişiyor")
         profiles[engine] = profile
@@ -670,7 +674,8 @@ def run(dataset: Path, metadata: Path, experiment: Path, references_path: Path,
                         "execution_provenance": "user_supplied_not_independently_verified",
                         "engine_profiles": {key: {"model_sha256": value[0],
                                                    "config_sha256": value[1],
-                                                   "device": value[2], "backend": value[3]}
+                                                   "configured_device": value[2],
+                                                   "session_configured_backend": value[3]}
                                             for key, value in profiles.items()}},
         "scope": {"measurement": "fixed full-episode SRT vs timed source-language reference",
                   "ocr_executed": False, "training_performed": False,
