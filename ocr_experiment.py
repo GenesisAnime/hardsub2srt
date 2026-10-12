@@ -29,6 +29,12 @@ MAX_RIGHTS_EVIDENCE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_RIGHTS_EVIDENCE_BYTES = 64 * 1024 * 1024
 MAX_IMAGE_SIDE = 1280
 MAX_IMAGE_PIXELS = 1280 * 1280
+MAX_PLAN_BYTES = 1024 * 1024
+COVERAGE_DEFINITION = (
+    "matched_cues / reference_cues per source+episode test group; matched is "
+    "the deterministic one-to-one temporal match with overlap/reference duration >= 0.5; "
+    "unmatched reference cues remain in the denominator; extra predictions do not"
+)
 
 
 class InputError(ValueError):
@@ -44,6 +50,70 @@ def _json(path: Path):
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _write_json_exclusive(path: Path, value: dict) -> bytes:
+    raw = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    with path.open("xb") as stream:
+        stream.write(raw)
+    return raw
+
+
+def validate_evaluation_plan(plan_path: Path, split_doc: dict,
+                             dataset_manifest_sha256: str,
+                             metadata_sha256: str) -> tuple[dict, str]:
+    """Load and verify the pre-result Phase 5 plan bound by the frozen split."""
+    try:
+        _reject_reparse_components(plan_path)
+        if plan_path.stat().st_size > MAX_PLAN_BYTES:
+            raise InputError("Evaluation plan boyut sınırını aşıyor")
+        if not plan_path.is_file():
+            raise InputError("Evaluation plan normal dosya olmalı")
+        raw = plan_path.read_bytes()
+
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise InputError(f"Evaluation plan JSON alanı yineleniyor: {key}")
+                result[key] = value
+            return result
+
+        plan = json.loads(raw.decode("utf-8"), object_pairs_hook=unique)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise InputError("Evaluation plan okunamadı") from exc
+    required = {"schema_version", "experiment_id", "dataset_manifest_sha256",
+                "metadata_sha256", "split_seed", "baseline_id", "candidate_id",
+                "predeclared_gate"}
+    if type(plan) is not dict or set(plan) != required or type(plan.get("schema_version")) is not int or plan["schema_version"] != 1:
+        raise InputError("evaluation-plan-v1 şeması gerekli")
+    gate_required = {"max_candidate_corpus_cer_increase", "timing_tolerance_ms",
+                     "min_test_group_coverage", "require_no_test_group_regression",
+                     "coverage_definition"}
+    gate = plan.get("predeclared_gate")
+    threshold = gate.get("min_test_group_coverage") if type(gate) is dict else None
+    cer_delta = gate.get("max_candidate_corpus_cer_increase") if type(gate) is dict else None
+    tolerance = gate.get("timing_tolerance_ms") if type(gate) is dict else None
+    if (type(gate) is not dict or set(gate) != gate_required
+            or type(threshold) not in (int, float) or not math.isfinite(threshold)
+            or threshold <= 0 or threshold > 1
+            or type(cer_delta) not in (int, float) or not math.isfinite(cer_delta) or cer_delta < 0
+            or (tolerance is not None and (type(tolerance) is not int or tolerance < 0))
+            or gate.get("require_no_test_group_regression") is not True
+            or gate.get("coverage_definition") != COVERAGE_DEFINITION):
+        raise InputError("Evaluation plan predeclared gate alanları geçersiz/eksik")
+    if (type(plan.get("experiment_id")) is not str or not plan["experiment_id"]
+            or type(plan.get("split_seed")) is not str or not plan["split_seed"].strip()
+            or type(plan.get("baseline_id")) is not str or not plan["baseline_id"].strip()
+            or type(plan.get("candidate_id")) is not str or not plan["candidate_id"].strip()
+            or plan["baseline_id"] == plan["candidate_id"]
+            or plan.get("dataset_manifest_sha256") != dataset_manifest_sha256
+            or plan.get("metadata_sha256") != metadata_sha256
+            or plan.get("experiment_id") != split_doc.get("experiment_id")
+            or plan.get("split_seed") != split_doc.get("seed")
+            or _sha256(raw) != split_doc.get("evaluation_plan_sha256")):
+        raise InputError("Evaluation plan hash'i veya split/dataset bağları uyuşmuyor")
+    return plan, _sha256(raw)
 
 
 def _read_capped(path: Path, cap: int, label: str) -> bytes:
@@ -678,12 +748,17 @@ def assign_splits(rows: list[dict], metadata: dict[str, dict], seed: str) -> dic
 
 def make_artifacts(dataset: Path, metadata_path: Path, out_dir: Path, seed: str,
                    baseline_id: str, candidate_id: str, no_regression_cer_delta: float,
-                   timing_tolerance_ms: int | None) -> None:
+                   timing_tolerance_ms: int | None,
+                   min_test_group_coverage: float) -> None:
     rows = validate_dataset(dataset)
     metadata = validate_metadata(metadata_path, rows)
     provenance_full = verify_phase2_provenance(dataset, rows)
     validate_provenance_groups(provenance_full, metadata, rows)
     provenance = provenance_summary(provenance_full)
+    if (type(min_test_group_coverage) not in (int, float)
+            or not math.isfinite(min_test_group_coverage)
+            or min_test_group_coverage <= 0 or min_test_group_coverage > 1):
+        raise InputError("min_test_group_coverage 0'dan büyük ve <= 1 olmalı")
     split = assign_splits(rows, metadata, seed)
     human_rights_review_complete = all(
         meta["license"]["human_review"]["status"] == "reviewed" for meta in metadata.values())
@@ -694,6 +769,22 @@ def make_artifacts(dataset: Path, metadata_path: Path, out_dir: Path, seed: str,
     else:
         raise InputError("Deney çıktısı verified dataset klasörünün içine yazılamaz")
     out_dir.mkdir(parents=True, exist_ok=False)
+    dataset_manifest_sha256 = _sha256((dataset / "manifest.jsonl").read_bytes())
+    metadata_sha256 = _sha256(metadata_path.read_bytes())
+    predeclared_gate = {
+        "max_candidate_corpus_cer_increase": no_regression_cer_delta,
+        "timing_tolerance_ms": timing_tolerance_ms,
+        "min_test_group_coverage": min_test_group_coverage,
+        "require_no_test_group_regression": True,
+        "coverage_definition": COVERAGE_DEFINITION,
+    }
+    plan_doc = {"schema_version": 1, "experiment_id": out_dir.name,
+                "dataset_manifest_sha256": dataset_manifest_sha256,
+                "metadata_sha256": metadata_sha256, "split_seed": seed,
+                "baseline_id": baseline_id, "candidate_id": candidate_id,
+                "predeclared_gate": predeclared_gate}
+    plan_raw = _write_json_exclusive(out_dir / "evaluation-plan-v1.json", plan_doc)
+    plan_sha256 = _sha256(plan_raw)
     crop_rows = []
     group_split = {}
     for row in rows:
@@ -708,8 +799,10 @@ def make_artifacts(dataset: Path, metadata_path: Path, out_dir: Path, seed: str,
                           "ocr_confidence": row["ocr_confidence"],
                           "width": row["_width"], "height": row["_height"],
                           "review_event_id": row["review_event_id"]})
-    split_doc = {"schema_version": 1, "dataset_manifest_sha256": _sha256((dataset / "manifest.jsonl").read_bytes()),
-                 "metadata_sha256": _sha256(metadata_path.read_bytes()),
+    split_doc = {"schema_version": 1, "experiment_id": out_dir.name,
+                 "evaluation_plan_sha256": plan_sha256,
+                 "dataset_manifest_sha256": dataset_manifest_sha256,
+                 "metadata_sha256": metadata_sha256,
                  "provenance_sha256": provenance["provenance_sha256"], "seed": seed,
                  "algorithm": "sha256(seed + NUL + canonical-source-episode-group), rank then fixed 80/10/10 group counts",
                  "group_split": group_split, "rows": crop_rows,
@@ -719,7 +812,10 @@ def make_artifacts(dataset: Path, metadata_path: Path, out_dir: Path, seed: str,
                                 "rights_verified": False,
                                 "human_rights_review_complete": human_rights_review_complete}}
     (out_dir / "split-manifest.json").write_text(json.dumps(split_doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    report = {"schema_version": 1, "experiment_id": out_dir.name, "status": "PREPARED_NOT_RUN",
+    report = {"schema_version": 1, "experiment_id": out_dir.name,
+              "evaluation_plan_sha256": plan_sha256,
+              "split_manifest_sha256": _sha256((out_dir / "split-manifest.json").read_bytes()),
+              "status": "PREPARED_NOT_RUN",
               "dataset": {"manifest_sha256": split_doc["dataset_manifest_sha256"],
                           "metadata_sha256": split_doc["metadata_sha256"], "rows": len(rows),
                           "groups": len(group_split),
@@ -733,9 +829,7 @@ def make_artifacts(dataset: Path, metadata_path: Path, out_dir: Path, seed: str,
                               "local_only": True, "training_performed": False},
               "experiment": {"baseline_id": baseline_id, "candidate_id": candidate_id,
                              "device_backend_config": None, "normalization": "NFC + whitespace collapse + trim; case and punctuation preserved",
-                             "predeclared_gate": {"max_candidate_corpus_cer_increase": no_regression_cer_delta,
-                                                  "timing_tolerance_ms": timing_tolerance_ms,
-                                                  "require_no_test_group_regression": True}},
+               "predeclared_gate": predeclared_gate},
               "metrics": {"ocr": {"cer": None, "wer": None, "exact_match_cue_rate": None,
                                    "cue_precision": None, "cue_recall": None,
                                    "timing_start_abs_error_ms": None, "timing_end_abs_error_ms": None,
@@ -763,6 +857,8 @@ def main(argv=None) -> int:
     parser.add_argument("--baseline", required=True, help="baseline motor/sürüm kimliği")
     parser.add_argument("--candidate", required=True, help="aday motor/sürüm kimliği")
     parser.add_argument("--max-cer-regression", required=True, type=float, help="önceden belirlenmiş izinli CER artış üst sınırı")
+    parser.add_argument("--min-test-group-coverage", required=True, type=float,
+                        help="sonuçları görmeden dondurulacak her test grubu için minimum coverage oranı (0 < oran <= 1)")
     parser.add_argument("--timing-tolerance-ms", type=int, help="referans hizası zaman toleransı; bilinmiyorsa belirtilmez")
     args = parser.parse_args(argv)
     if not args.seed.strip() or not args.baseline.strip() or not args.candidate.strip():
@@ -771,9 +867,13 @@ def main(argv=None) -> int:
         parser.error("--max-cer-regression sonlu ve >= 0 olmalı")
     if args.timing_tolerance_ms is not None and args.timing_tolerance_ms < 0:
         parser.error("--timing-tolerance-ms >= 0 olmalı")
+    if (not math.isfinite(args.min_test_group_coverage)
+            or not 0 < args.min_test_group_coverage <= 1):
+        parser.error("--min-test-group-coverage sonlu olmalı ve 0 < oran <= 1 koşulunu sağlamalı")
     try:
         make_artifacts(args.dataset, args.metadata, args.out, args.seed, args.baseline,
-                       args.candidate, args.max_cer_regression, args.timing_tolerance_ms)
+                       args.candidate, args.max_cer_regression, args.timing_tolerance_ms,
+                       args.min_test_group_coverage)
     except (InputError, OSError, UnicodeError) as exc:
         print(f"DURDURULDU: {exc}", file=sys.stderr)
         return 2

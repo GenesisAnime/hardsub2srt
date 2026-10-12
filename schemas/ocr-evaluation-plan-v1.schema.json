@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hardsub2srt/ocr-evaluation-plan-v1.schema.json",
+  "title": "Frozen local OCR evaluation plan v1",
+  "description": "Created before OCR/video evaluation. Its raw SHA-256 is bound by the experiment report and deterministic split; it is an integrity link, not a signature or rights approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "experiment_id", "dataset_manifest_sha256", "metadata_sha256", "split_seed", "baseline_id", "candidate_id", "predeclared_gate"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "experiment_id": {"type": "string", "minLength": 1},
+    "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "metadata_sha256": {"$ref": "#/$defs/sha256"},
+    "split_seed": {"type": "string", "minLength": 1},
+    "baseline_id": {"type": "string", "minLength": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "predeclared_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_candidate_corpus_cer_increase", "timing_tolerance_ms", "min_test_group_coverage", "require_no_test_group_regression", "coverage_definition"],
+      "properties": {
+        "max_candidate_corpus_cer_increase": {"type": "number", "minimum": 0},
+        "timing_tolerance_ms": {"type": ["integer", "null"], "minimum": 0},
+        "min_test_group_coverage": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "require_no_test_group_regression": {"const": true},
+        "coverage_definition": {"const": "matched_cues / reference_cues per source+episode test group; matched is the deterministic one-to-one temporal match with overlap/reference duration >= 0.5; unmatched reference cues remain in the denominator; extra predictions do not"}
+      }
+    }
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

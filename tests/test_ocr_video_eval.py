@@ -13,6 +13,16 @@ def cue(index, start, end, text):
 
 
 class FullVideoAdapterTests(unittest.TestCase):
+    def test_preparation_requires_explicit_coverage_threshold(self):
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            prep.main(["synthetic-dataset", "--metadata", "synthetic-metadata.json",
+                       "--out", "synthetic-experiment", "--seed", "SYNTHETIC-SEED",
+                       "--baseline", "synthetic-baseline", "--candidate", "synthetic-candidate",
+                       "--max-cer-regression", "0.01"])
+        self.assertEqual(raised.exception.code, 2)
+
     def test_strict_srt_parser_reads_synthetic_cues_and_rejects_bad_time(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "fixture.srt"
@@ -56,6 +66,91 @@ class FullVideoAdapterTests(unittest.TestCase):
         # but assigning it there would leave reference 1 unmatched.
         preds = [cue(0, 0, 1500, "merged"), cue(1, 0, 900, "short")]
         self.assertEqual(video_eval.match_cues(refs, preds), [(0, 1), (1, 0)])
+
+    def test_coverage_gate_uses_reference_cues_and_per_group_boundary(self):
+        key_a, key_b = "a" * 64, "b" * 64
+
+        def engine(name, values):
+            return {"engine_id": name, "per_source_episode": [
+                {"group_key_sha256": key, "split": "test", "reference_cues": denominator,
+                 "matched_cues": numerator, "coverage": numerator / denominator}
+                for key, numerator, denominator in values]}
+
+        baseline = engine("baseline", [(key_a, 9, 10), (key_b, 3, 4)])
+        candidate = engine("candidate", [(key_a, 9, 10), (key_b, 3, 4)])
+        boundary = video_eval._coverage_gate([baseline, candidate], {key_a, key_b}, 0.75)
+        self.assertEqual(boundary["status"], "PASS")
+        self.assertEqual(boundary["per_engine_group"][-1]["coverage"], 0.75)
+        self.assertEqual(boundary["per_engine_group"][-1]["numerator_matched_cues"], 3)
+        self.assertEqual(boundary["per_engine_group"][-1]["denominator_reference_cues"], 4)
+
+        candidate["per_source_episode"][1]["matched_cues"] = 2
+        candidate["per_source_episode"][1]["coverage"] = 0.5
+        below = video_eval._coverage_gate([baseline, candidate], {key_a, key_b}, 0.75)
+        self.assertEqual(below["status"], "FAIL")
+        self.assertFalse(below["per_engine_group"][-1]["passed"])
+
+    def test_coverage_gate_rejects_missing_duplicate_and_inconsistent_groups(self):
+        key_a, key_b = "a" * 64, "b" * 64
+        group = {"group_key_sha256": key_a, "split": "test", "reference_cues": 2,
+                 "matched_cues": 2, "coverage": 1.0}
+        engine = lambda name, rows: {"engine_id": name, "per_source_episode": rows}
+        for records in ([group], [group, dict(group)],
+                        [dict(group, matched_cues=1, coverage=1.0)]):
+            with self.assertRaises(video_eval.VideoEvalError):
+                video_eval._coverage_gate([engine("baseline", records),
+                                           engine("candidate", [group])],
+                                          {key_a, key_b}, 0.9)
+
+    def test_coverage_gate_rejects_disabled_or_invalid_threshold(self):
+        group = {"group_key_sha256": "a" * 64, "split": "test", "reference_cues": 1,
+                 "matched_cues": 1, "coverage": 1.0}
+        engines = [{"engine_id": name, "per_source_episode": [group]}
+                   for name in ("baseline", "candidate")]
+        for threshold in (0, float("nan"), 1.01):
+            with self.assertRaises(video_eval.VideoEvalError):
+                video_eval._coverage_gate(engines, {"a" * 64}, threshold)
+
+    def test_cer_limit_failure_marks_comparison_fail_and_cli_returns_nonzero(self):
+        import contextlib
+        import io
+        comparison = video_eval._comparison_gate(
+            0.10, 0.13, 0.02,
+            [{"candidate_minus_baseline": 0.0}], True, True)
+        self.assertFalse(comparison["cer_limit_passed"])
+        self.assertTrue(comparison["no_test_group_regression_passed"])
+        self.assertEqual(comparison["status"], "FAIL")
+        report = {"predeclared_comparison": {"comparison_gate": comparison}}
+        args = ["synthetic-dataset", "--metadata", "synthetic-metadata.json",
+                "--experiment", "synthetic-experiment-report.json",
+                "--references", "synthetic-references.json",
+                "--predictions", "synthetic-predictions.json",
+                "--out", "synthetic-output.json"]
+        with patch.object(video_eval, "run", return_value=report), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(video_eval.main(args), 1)
+
+    def test_test_group_regression_marks_comparison_fail_and_cli_returns_nonzero(self):
+        import contextlib
+        import io
+        # Opposite group deltas keep the aggregate unchanged but still violate
+        # the frozen no-regression rule for an individual held-out group.
+        comparison = video_eval._comparison_gate(
+            0.10, 0.10, 0.01,
+            [{"candidate_minus_baseline": 0.02},
+             {"candidate_minus_baseline": -0.02}], True, True)
+        self.assertTrue(comparison["cer_limit_passed"])
+        self.assertFalse(comparison["no_test_group_regression_passed"])
+        self.assertEqual(comparison["status"], "FAIL")
+        report = {"predeclared_comparison": {"comparison_gate": comparison}}
+        args = ["synthetic-dataset", "--metadata", "synthetic-metadata.json",
+                "--experiment", "synthetic-experiment-report.json",
+                "--references", "synthetic-references.json",
+                "--predictions", "synthetic-predictions.json",
+                "--out", "synthetic-output.json"]
+        with patch.object(video_eval, "run", return_value=report), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(video_eval.main(args), 1)
 
     def test_dense_nonqualifying_pairs_hit_pair_operation_bound(self):
         refs = [cue(i, 0, 100, "reference") for i in range(3)]
@@ -171,7 +266,10 @@ class FullVideoAdapterTests(unittest.TestCase):
                                        "candidate_id": "synthetic-candidate",
                                        "predeclared_gate": {"max_candidate_corpus_cer_increase": 0.01,
                                                              "timing_tolerance_ms": 150,
+                                                             "min_test_group_coverage": 0.9,
+                                                             "coverage_definition": prep.COVERAGE_DEFINITION,
                                                              "require_no_test_group_regression": True}}}
+            exp_doc["evaluation_plan_sha256"] = hashes["split"]
             refs = {key: {"split": split, "media_sha256": "b" * 64,
                           "cues": [cue(0, 1000, 2000, "Synthetic source text")]}
                     for key, split in groups.items()}
@@ -193,6 +291,7 @@ class FullVideoAdapterTests(unittest.TestCase):
                 video_eval.run(dataset, metadata_path, experiment,
                                reference_manifest, prediction_manifest, out)
             report = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(report["predeclared_comparison"]["comparison_gate"]["status"], "PASS")
             self.assertEqual(report["status"], "MEASURED_ADAPTER_ONLY_NOT_RELEASE_PASS")
             self.assertFalse(report["phase6_eligible"])
             self.assertFalse(report["dataset"]["rights_verified"])

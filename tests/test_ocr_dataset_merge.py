@@ -101,7 +101,7 @@ class DatasetMergeTests(unittest.TestCase):
         with self.assertRaises(prep.InputError):
             prep.make_artifacts(target, blank_metadata,
                                 self.root / "synthetic-experiment", "SYNTHETIC-SEED",
-                                "synthetic-baseline", "synthetic-candidate", 0.002, 500)
+                                "synthetic-baseline", "synthetic-candidate", 0.002, 500, 0.95)
 
     def test_merge_refuses_same_pack_twice(self):
         _pack, dataset, _cue_id = self._export(1)

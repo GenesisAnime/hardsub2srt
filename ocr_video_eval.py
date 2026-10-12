@@ -307,11 +307,28 @@ def _validated_split(experiment_path: Path, split_path: Path, dataset: Path,
             or type(exp.get("predeclared_gate")) is not dict):
         raise VideoEvalError("Experiment report Phase 5 dataset/engine/gate alanları doğrulanamadı")
     gate = exp["predeclared_gate"]
+    try:
+        plan, plan_hash = prep.validate_evaluation_plan(
+            experiment_path.parent / "evaluation-plan-v1.json",
+            split, manifest_hash, metadata_hash)
+    except prep.InputError as exc:
+        raise VideoEvalError(str(exc)) from exc
+    if (experiment.get("experiment_id") != plan["experiment_id"]
+            or experiment.get("evaluation_plan_sha256") != plan_hash
+            or experiment.get("split_manifest_sha256") != split_hash
+            or exp.get("baseline_id") != plan["baseline_id"]
+            or exp.get("candidate_id") != plan["candidate_id"]
+            or gate != plan["predeclared_gate"]):
+        raise VideoEvalError("Experiment report evaluation plan/hash bağları uyuşmuyor")
     if (type(gate.get("max_candidate_corpus_cer_increase")) not in (int, float)
             or not math.isfinite(gate["max_candidate_corpus_cer_increase"])
             or gate["max_candidate_corpus_cer_increase"] < 0
             or type(gate.get("timing_tolerance_ms")) is not int
             or gate["timing_tolerance_ms"] < 0
+            or type(gate.get("min_test_group_coverage")) not in (int, float)
+            or not math.isfinite(gate["min_test_group_coverage"])
+            or not 0 < gate["min_test_group_coverage"] <= 1
+            or gate.get("coverage_definition") != prep.COVERAGE_DEFINITION
             or gate.get("require_no_test_group_regression") is not True
             or stop.get("human_rights_review_complete") is not True
             or stop.get("human_provenance_verified") is not True
@@ -491,6 +508,89 @@ def _aggregate(engine_id: str, split: str, group_records: list[dict], tolerance:
                 for item, value in zip(group_records, values)]}
 
 
+def _coverage_gate(test_results: list[dict], expected_group_hashes: set[str],
+                   threshold: float) -> dict:
+    """Require defined, unique coverage for every test group and engine."""
+    if (type(threshold) not in (int, float) or not math.isfinite(threshold)
+            or not 0 < threshold <= 1 or not expected_group_hashes):
+        raise VideoEvalError("Coverage gate threshold/test group kümesi geçersiz")
+    by_engine = {}
+    group_results = []
+    passed = True
+    for engine_result in test_results:
+        if type(engine_result) is not dict:
+            raise VideoEvalError("Coverage gate engine sonucu nesne olmalı")
+        engine = engine_result.get("engine_id")
+        if type(engine) is not str or not engine or engine in by_engine:
+            raise VideoEvalError("Coverage gate engine kapsamı eksik veya belirsiz")
+        records = engine_result.get("per_source_episode")
+        if type(records) is not list:
+            raise VideoEvalError("Coverage gate per-group kayıtları eksik")
+        found = {}
+        for record in records:
+            if type(record) is not dict:
+                raise VideoEvalError("Coverage gate group kaydı nesne olmalı")
+            key = record.get("group_key_sha256")
+            if (type(key) is not str or not SHA256_RE.fullmatch(key)
+                    or key in found or record.get("split") != "test"):
+                raise VideoEvalError("Coverage gate test grubu eksik veya belirsiz")
+            denominator = record.get("reference_cues")
+            numerator = record.get("matched_cues")
+            coverage = record.get("coverage")
+            if (type(denominator) is not int or denominator <= 0
+                    or type(numerator) is not int or not 0 <= numerator <= denominator
+                    or type(coverage) not in (int, float) or not math.isfinite(coverage)
+                    or not math.isclose(coverage, numerator / denominator,
+                                        rel_tol=0.0, abs_tol=1e-12)):
+                raise VideoEvalError("Coverage group pay/payda eksik veya tutarsız")
+            found[key] = (numerator, denominator, coverage)
+        if set(found) != expected_group_hashes:
+            raise VideoEvalError("Coverage test grupları frozen split ile tam eşleşmiyor")
+        by_engine[engine] = {key: values[2] for key, values in found.items()}
+        for key in sorted(found):
+            numerator, denominator, ratio = found[key]
+            group_passed = ratio >= threshold
+            passed = passed and group_passed
+            group_results.append({"engine_id": engine, "group_key_sha256": key,
+                                  "numerator_matched_cues": numerator,
+                                  "denominator_reference_cues": denominator,
+                                  "coverage": ratio, "passed": group_passed})
+    if len(by_engine) != 2:
+        raise VideoEvalError("Coverage gate baseline ve candidate sonuçları gerekli")
+    return {"status": "PASS" if passed else "FAIL",
+            "minimum_per_test_group": threshold,
+            "definition": prep.COVERAGE_DEFINITION,
+            "applies_to": "both baseline and candidate for every frozen test group",
+            "per_engine_group": group_results}
+
+
+def _comparison_gate(baseline_cer, candidate_cer, max_cer_increase: float,
+                     test_group_comparison: list[dict],
+                     require_no_test_group_regression: bool,
+                     coverage_passed: bool) -> dict:
+    """Combine all frozen comparison criteria without granting release status."""
+    cer_available = (type(baseline_cer) in (int, float) and math.isfinite(baseline_cer)
+                     and type(candidate_cer) in (int, float) and math.isfinite(candidate_cer))
+    cer_delta = candidate_cer - baseline_cer if cer_available else None
+    cer_passed = bool(cer_available and cer_delta <= max_cer_increase)
+    group_deltas = [row.get("candidate_minus_baseline")
+                    for row in test_group_comparison if type(row) is dict]
+    group_data_complete = (len(group_deltas) == len(test_group_comparison) and bool(group_deltas)
+                           and all(type(delta) in (int, float) and math.isfinite(delta)
+                                   for delta in group_deltas))
+    no_group_regression = (not require_no_test_group_regression or
+                           (group_data_complete and all(delta <= 0 for delta in group_deltas)))
+    all_passed = cer_passed and no_group_regression and coverage_passed
+    return {"status": "PASS" if all_passed else "FAIL",
+            "cer_limit_passed": cer_passed,
+            "candidate_corpus_cer_increase": cer_delta,
+            "maximum_candidate_corpus_cer_increase": max_cer_increase,
+            "no_test_group_regression_required": require_no_test_group_regression,
+            "no_test_group_regression_passed": no_group_regression,
+            "test_group_cer_data_complete": group_data_complete,
+            "coverage_passed": coverage_passed}
+
+
 def run(dataset: Path, metadata: Path, experiment: Path, references_path: Path,
         predictions_path: Path, out_path: Path):
     dataset = dataset.resolve(strict=True)
@@ -531,6 +631,10 @@ def run(dataset: Path, metadata: Path, experiment: Path, references_path: Path,
                          if r["engine_id"] == engine_ids[0] and r["split"] == "test")
     candidate_test = next(r for r in results
                           if r["engine_id"] == engine_ids[1] and r["split"] == "test")
+    expected_test_groups = {
+        _sha256(key.encode("utf-8")) for key, split in groups.items() if split == "test"}
+    coverage = _coverage_gate([baseline_test, candidate_test], expected_test_groups,
+                              gate["min_test_group_coverage"])
     baseline_cer = baseline_test["micro"]["cer"]
     candidate_cer = candidate_test["micro"]["cer"]
     baseline_groups = {r["group_key_sha256"]: r
@@ -545,6 +649,10 @@ def run(dataset: Path, metadata: Path, experiment: Path, references_path: Path,
                                       "baseline_cer": before, "candidate_cer": after,
                                       "candidate_minus_baseline": (after - before
                                                                    if before is not None and after is not None else None)})
+    comparison = _comparison_gate(
+        baseline_cer, candidate_cer, gate["max_candidate_corpus_cer_increase"],
+        test_group_comparison, gate["require_no_test_group_regression"],
+        coverage["status"] == "PASS")
     report = {
         "schema_version": 1,
         "status": "MEASURED_ADAPTER_ONLY_NOT_RELEASE_PASS",
@@ -573,9 +681,11 @@ def run(dataset: Path, metadata: Path, experiment: Path, references_path: Path,
                   "normalization": crop_eval.NORMALIZATION,
                   "timing_tolerance_ms": tolerance,
                   "metrics_persisted": "aggregate only; no cue text or absolute paths"},
-        "engines": results,
-        "predeclared_comparison": {"baseline_id": engine_ids[0], "candidate_id": engine_ids[1],
-                                   "max_candidate_corpus_cer_increase": gate["max_candidate_corpus_cer_increase"],
+         "engines": results,
+         "predeclared_comparison": {"baseline_id": engine_ids[0], "candidate_id": engine_ids[1],
+                                    "coverage_plan_sha256": experiment_doc["evaluation_plan_sha256"],
+                                    "comparison_gate": comparison,
+                                    "max_candidate_corpus_cer_increase": gate["max_candidate_corpus_cer_increase"],
                                    "candidate_test_cer_minus_baseline": (candidate_cer - baseline_cer
                                                                           if baseline_cer is not None and candidate_cer is not None else None),
                                    "candidate_cer_exceeds_predeclared_limit": (
@@ -586,13 +696,14 @@ def run(dataset: Path, metadata: Path, experiment: Path, references_path: Path,
                                        row["candidate_minus_baseline"] is not None
                                        and row["candidate_minus_baseline"] > 0
                                        for row in test_group_comparison),
-                                   "coverage_gate": "NOT_PREDECLARED_IN_PHASE5_V1",
+                                    "coverage_gate": coverage,
                                    "release_decision": "NOT_MADE_BY_THIS_ADAPTER"},
         "release_gate": {"status": "BLOCKED_ADAPTER_ONLY", "phase6_blocked": True,
                          "reason": "Fixed SRT evaluation does not independently verify rights, reference trust, model execution provenance, or candidate artifacts; use the Phase 6 validator only after the full authorized evidence chain is established."},
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return report
 
 
 def main(argv=None) -> int:
@@ -605,12 +716,16 @@ def main(argv=None) -> int:
     parser.add_argument("--out", required=True, type=Path, help="u yeni aggregate JSON raporu")
     args = parser.parse_args(argv)
     try:
-        run(args.dataset, args.metadata, args.experiment, args.references,
-            args.predictions, args.out)
+        report = run(args.dataset, args.metadata, args.experiment, args.references,
+                     args.predictions, args.out)
     except (VideoEvalError, crop_eval.EvalError, prep.InputError, OSError) as exc:
         print(f"DURDURULDU: {exc}", file=sys.stderr)
         return 2
     print(f"Sabit SRT ölçüm raporu yazıldı: {args.out}; Phase 6 için uygun değildir.")
+    if report["predeclared_comparison"]["comparison_gate"]["status"] != "PASS":
+        print("DURDURULDU: önceden ilan edilen CER, grup gerilemesi veya coverage gate başarısız.",
+              file=sys.stderr)
+        return 1
     return 0
 
 

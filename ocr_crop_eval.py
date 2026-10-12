@@ -74,7 +74,8 @@ def validate_run(dataset: Path, metadata_path: Path, split_path: Path):
         raise EvalError("Her kayıt için insan rights review status=reviewed gerekli; rights_verified yine false kalır")
 
     split_doc, split_raw = _json_unique(split_path, MAX_SPLIT_BYTES)
-    required = {"schema_version", "dataset_manifest_sha256", "metadata_sha256", "provenance_sha256", "seed",
+    required = {"schema_version", "experiment_id", "evaluation_plan_sha256",
+                "dataset_manifest_sha256", "metadata_sha256", "provenance_sha256", "seed",
                 "algorithm", "group_split", "rows", "invariants"}
     if set(split_doc) != required or type(split_doc.get("schema_version")) is not int or split_doc["schema_version"] != 1:
         raise EvalError("split-manifest.json Phase 5 split v1 şemasıyla eşleşmiyor")
@@ -86,6 +87,27 @@ def validate_run(dataset: Path, metadata_path: Path, split_path: Path):
         raise EvalError("Metadata hash'i split manifest ile eşleşmiyor")
     if split_doc.get("provenance_sha256") != provenance.get("provenance_sha256"):
         raise EvalError("Phase 2 source-lineage hash'i frozen split ile eşleşmiyor")
+    try:
+        plan, plan_hash = prep.validate_evaluation_plan(
+            split_path.parent / "evaluation-plan-v1.json", split_doc,
+            sha256(manifest_bytes), sha256(metadata_bytes))
+    except prep.InputError as exc:
+        raise EvalError(str(exc)) from exc
+    try:
+        experiment_doc, experiment_raw = _json_unique(
+            split_path.parent / "experiment-report.json", MAX_SPLIT_BYTES)
+    except (OSError, EvalError) as exc:
+        raise EvalError("Dondurulmuş experiment report okunamadı") from exc
+    expected_gate = plan["predeclared_gate"]
+    experiment_config = experiment_doc.get("experiment")
+    if (type(experiment_config) is not dict
+            or experiment_doc.get("experiment_id") != plan["experiment_id"]
+            or experiment_doc.get("evaluation_plan_sha256") != plan_hash
+            or experiment_doc.get("split_manifest_sha256") != sha256(split_raw)
+            or experiment_config.get("baseline_id") != plan["baseline_id"]
+            or experiment_config.get("candidate_id") != plan["candidate_id"]
+            or experiment_config.get("predeclared_gate") != expected_gate):
+        raise EvalError("Experiment report evaluation plan/hash bağları uyuşmuyor")
     seed = split_doc.get("seed")
     if type(seed) is not str or not seed.strip():
         raise EvalError("Split tohumu eksik")

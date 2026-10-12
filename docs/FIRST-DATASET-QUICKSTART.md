@@ -80,7 +80,7 @@ py -3 ocr_dataset_metadata.py `
 
 ## 6. Grup split’ini ve hazırlık raporunu dondurun
 
-Sonuçları görmeden önce split seed’ini, baseline/aday engine kimliklerini, izin verilen CER artışını ve zaman toleransını seçin. Kimlikler ölçüm boyunca değişmemeli. Metadata ve hash’leri doğrulayan, `train`/`validation`/`test` gruplarını donduran komut:
+Sonuçları görmeden önce split seed’ini, baseline/aday engine kimliklerini, izin verilen CER artışını, zaman toleransını ve **her test source+episode grubu için minimum coverage oranını** seçin. Coverage için uygulama varsayılanı yoktur; yüzdeyi desteklenen kapsamınıza göre sonuçları görmeden belirleyin. `0.90` aşağıdaki komutta yalnızca sentetik örnek değerdir. Kimlikler ve eşikler ölçüm boyunca değişmemeli. Metadata ve hash’leri doğrulayan, `train`/`validation`/`test` gruplarını donduran komut:
 
 ```powershell
 py -3 ocr_experiment.py `
@@ -91,10 +91,11 @@ py -3 ocr_experiment.py `
   --baseline "synthetic-baseline-engine-v1" `
   --candidate "synthetic-candidate-engine-v1" `
   --max-cer-regression 0.002 `
+  --min-test-group-coverage 0.90 `
   --timing-tolerance-ms 500
 ```
 
-Yukarıdaki engine kimlikleri, seed ve eşikler örnektir; bunları gerçek, önceden kararlaştırılmış değerlerle değiştirin. `--out` yeni ve henüz var olmayan bir klasör olmalıdır. Komut `split-manifest.json` ve `experiment-report.json` üretir; split atamasını veya test gruplarını sonuca baktıktan sonra değiştirmeyin.
+Yukarıdaki engine kimlikleri, seed ve eşikler örnektir; bunları gerçek, önceden kararlaştırılmış değerlerle değiştirin. `--out` yeni ve henüz var olmayan bir klasör olmalıdır. Komut `evaluation-plan-v1.json`, `split-manifest.json` ve `experiment-report.json` üretir; rapor ve split plan SHA-256 değerini bağlar. Bu hash bağı yalnız mevcut dosyalar arasındaki değişikliği gösterir; plan, split ve rapor birlikte değiştirilip hash'ler yeniden hesaplanırsa bunu engellemez. İmza, güvenilir zaman damgası veya hak onayı değildir. Eski, coverage-plan hash'i olmayan Phase 5 v1 hazırlık klasörleri geçerli girdiye yükseltilmez; eski çıktıları koruyup komutu yeni ve boş `--out` klasöründe tekrar çalıştırın. Split atamasını veya test gruplarını sonuca baktıktan sonra değiştirmeyin.
 
 Bu yalnız **hazırlıktır**: rapor `PREPARED_NOT_RUN`, metrikler `null`, `experiment_run_blocked: true` ve `rights_verified: false` kalır. Komut OCR çalıştırmaz, model eğitmez ve hakları doğrulamaz. Hak incelemesini `reviewed` olarak tamamlamadan sonraki kapılar açılmaz.
 
