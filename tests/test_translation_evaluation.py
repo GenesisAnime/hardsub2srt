@@ -253,6 +253,26 @@ class TranslationEvaluationTests(unittest.TestCase):
         self.assertIn(corrected["event_id"], log)
         self.assertEqual(log.count("\n"), 3)  # seal + original rating + correction
 
+    def test_condition_mapping_reveal_is_terminal_for_later_corrections(self):
+        mapping_sha = _sha("private condition mapping bytes")
+        with self.assertRaisesRegex(evaluation.EvaluationError, "only after all blind ratings"):
+            evaluation.reveal_condition_mapping(self.root, "reviewer-a", self.condition_a, mapping_sha)
+        for case in self.manifest["cases"]:
+            for candidate in case["candidates"]:
+                self.record(candidate=candidate)
+        active = evaluation._active_ratings(evaluation._load(self.root)[3])
+        reveal = evaluation.reveal_condition_mapping(
+            self.root, "reviewer-a", self.condition_a, mapping_sha)
+        self.assertEqual(reveal["event_type"], "condition_mapping_revealed")
+        events = evaluation._load(self.root)[3]
+        self.assertEqual(events[-1]["event_id"], reveal["event_id"])
+        self.assertNotIn("private_label", events[-1])
+        prior = active[(self.candidate["blind_candidate_id"], "reviewer-a")]
+        with self.assertRaisesRegex(evaluation.EvaluationError, "terminally closed"):
+            self.record(candidate=self.candidate, supersedes=prior["event_id"])
+        self.assertEqual(len(evaluation._load(self.root)[3]), len(events))
+        self.assertFalse(evaluation.aggregate_report(self.root, self.resolver)["phase6_eligible"])
+
     def test_hash_chain_tamper_fails_closed(self):
         self.record()
         path = self.root / "translation-evaluation-events.jsonl"

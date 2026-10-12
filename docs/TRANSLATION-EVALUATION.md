@@ -53,7 +53,7 @@ The owner also maintains a separate `condition-mapping-v1.json` beside the regis
 }
 ```
 
-The private label is revealed through the local UI only after every blind candidate has an active rating. Mixed condition IDs are rejected before scoring; a hidden label alone is not used to imply blindness.
+The private label is revealed through the local UI only after every blind candidate has an active rating. Reveal appends a terminal event to the quality journal; after it, the server rejects any new rating or correction. Mixed condition IDs are rejected before scoring; a hidden label alone is not used to imply blindness.
 
 The server revalidates dataset and metadata hashes, Phase 2 OCR event/crop provenance, completed human rights review and hash-linked evidence, the frozen source/episode split, trusted timed references, matching source/target languages, one current manual AI proposal for every test cue, and its private condition assignment. At least three source/episode groups and a non-empty test split are required. The predeclared per-group rating floor is mandatory and has no implicit default. The cohort must map all selected proposals to one opaque condition ID; mixed condition assignments are rejected. The program cannot independently identify which AI/provider produced manually imported text, so even a one-condition assignment is user-maintained provenance and rates remain descriptive rather than system-comparative. The current repository has no eligible real bilingual held-out cohort; do not populate these files with synthetic or unverified artifacts to get past the blocker.
 

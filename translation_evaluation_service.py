@@ -856,7 +856,8 @@ def real_status(evaluation_id: object) -> dict:
             "start_ms": source["cue"]["start_ms"], "end_ms": source["cue"]["end_ms"],
             "crop_url": f"/api/ocr-inceleme/{review_id}/crop/{link['cue_id']}",
         })
-    active = evaluation._active_ratings(evaluation._load(root)[3])
+    events = evaluation._load(root)[3]
+    active = evaluation._active_ratings(events)
     active_ratings = {
         candidate_id: {
             key: event[key] for key in (
@@ -864,15 +865,19 @@ def real_status(evaluation_id: object) -> dict:
         }
         for (candidate_id, reviewer), event in active.items() if reviewer == "local_user"
     }
+    mapping_revealed = any(event["event_type"] == "condition_mapping_revealed" for event in events)
     return {
-        "evaluation_id": manifest["evaluation_id"], "mode": "human_held_out",
+        "evaluation_id": manifest["evaluation_id"],
+        "mode": "human_held_out_unblinded" if mapping_revealed else "human_held_out",
         "source_language": manifest["source_language"], "target_language": manifest["target_language"],
         "style_profile": context["registry"]["style_profile"],
         "glossary": context["registry"]["glossary"],
         "rubric": evaluation.RUBRIC, "items": items,
         "rated_candidate_ids": list(active_ratings),
         "active_ratings": active_ratings,
-        "mapping_reveal_available": _ratings_complete(set(candidates_by_id), active),
+        "mapping_revealed": mapping_revealed,
+        "mapping_reveal_available": (not mapping_revealed and
+                                      _ratings_complete(set(candidates_by_id), active)),
         "report": report,
     }
 
@@ -880,12 +885,6 @@ def real_status(evaluation_id: object) -> dict:
 def reveal_condition_mapping(evaluation_id: object) -> dict:
     """Unblind the private condition label only after every candidate is rated."""
     root, manifest, _sidecar, context = _load_real_evaluation(evaluation_id)
-    _path, _manifest, _digest, events = evaluation._load(root)
-    active = evaluation._active_ratings(events)
-    candidate_ids = {candidate["blind_candidate_id"]
-                     for case in manifest["cases"] for candidate in case["candidates"]}
-    if not _ratings_complete(candidate_ids, active):
-        raise evaluation.EvaluationError("Koşul eşlemesi tüm kör adaylar puanlandıktan sonra açılabilir")
     conditions = {candidate["condition_id"]
                   for case in manifest["cases"] for candidate in case["candidates"]}
     if len(conditions) != 1:
@@ -894,7 +893,10 @@ def reveal_condition_mapping(evaluation_id: object) -> dict:
     private_label = context["condition_mapping"]["labels"].get(condition_id)
     if not private_label:
         raise evaluation.EvaluationError("Özel koşul eşlemesi cohort ile eşleşmiyor")
-    return {"revealed": True, "condition_id": condition_id, "private_label": private_label}
+    reveal_event = evaluation.reveal_condition_mapping(
+        root, "local_user", condition_id, context["condition_mapping"]["sha256"])
+    return {"revealed": True, "reveal_event_id": reveal_event["event_id"],
+            "condition_id": condition_id, "private_label": private_label}
 
 
 def record_real_rating(evaluation_id: object, blind_candidate_id: object,
@@ -931,6 +933,7 @@ _PUBLIC_BLOCKER_MESSAGES = {
     "INVALID_CONDITION_MAP": "Sunucu tarafındaki özel koşul eşlemesi doğrulanamadı.",
     "CONDITION_ASSIGNMENT_MISSING": "Her held-out AI önerisine özel koşul ataması gerekli.",
     "MIXED_CONDITIONS": "Bu pilot yalnız tek koşul destekler; karışık koşul atamaları reddedildi.",
+    "COHORT_ALREADY_UNBLINDED": "Koşul eşlemesi daha önce açıldı; bu cohort artık kör puanlama için kapalı.",
 }
 
 
@@ -943,7 +946,17 @@ def readiness(review_id: object) -> dict:
     cohort = None
     try:
         cohort = _real_registry_context(review_id)
+        existing_root = _real_base() / cohort["candidate_data"]["evaluation_id"]
+        if existing_root.exists():
+            existing_events = evaluation._load(existing_root)[3]
+            if any(event["event_type"] == "condition_mapping_revealed" for event in existing_events):
+                raise RealEvidenceBlocked(
+                    "COHORT_ALREADY_UNBLINDED",
+                    "Koşul eşlemesi açıldı; bu cohort için yeni kör puanlama başlatılamaz.",
+                )
     except RealEvidenceBlocked as exc:
+        if exc.code == "COHORT_ALREADY_UNBLINDED":
+            cohort = None
         blockers.append({"code": exc.code,
                          "message": _PUBLIC_BLOCKER_MESSAGES.get(
                              exc.code, "Sunucu tarafındaki held-out cohort kanıtı doğrulanamadı.")})

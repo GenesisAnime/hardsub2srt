@@ -224,7 +224,8 @@ class TranslationEvaluationApiTests(unittest.TestCase):
         manifest = {**manifest, "cases": [
             {**case, "candidates": [case["candidates"][0]]} for case in manifest["cases"]]}
         condition_id = manifest["cases"][0]["candidates"][0]["condition_id"]
-        fake_context = {"condition_mapping": {"labels": {condition_id: "PRIVATE PROVIDER LABEL"}}}
+        fake_context = {"condition_mapping": {
+            "labels": {condition_id: "PRIVATE PROVIDER LABEL"}, "sha256": "e" * 64}}
         with patch.object(evaluation_service, "_load_real_evaluation",
                           return_value=(root, manifest, {}, fake_context)):
             before = self._get("/api/ceviri-kalitesi/gercek/kosul-eslemesi",
@@ -232,8 +233,6 @@ class TranslationEvaluationApiTests(unittest.TestCase):
             self.assertEqual(before.status_code, 409)
             self.assertNotIn("PRIVATE PROVIDER LABEL", before.get_data(as_text=True))
             for candidate in demo["candidates"]:
-                if candidate["blind_candidate_id"] != candidate_id:
-                    continue
                 payload = {
                     "evaluation_id": demo["evaluation_id"],
                     "blind_candidate_id": candidate["blind_candidate_id"], "status": "rated",
@@ -247,8 +246,34 @@ class TranslationEvaluationApiTests(unittest.TestCase):
             after = self._get("/api/ceviri-kalitesi/gercek/kosul-eslemesi",
                               query_string={"evaluation_id": demo["evaluation_id"]})
             self.assertEqual(after.status_code, 200)
-            self.assertEqual(after.get_json(), {"revealed": True, "condition_id": condition_id,
-                                                "private_label": "PRIVATE PROVIDER LABEL"})
+            reveal = after.get_json()
+            self.assertTrue(reveal["revealed"])
+            self.assertEqual(reveal["condition_id"], condition_id)
+            self.assertEqual(reveal["private_label"], "PRIVATE PROVIDER LABEL")
+            before_events = evaluation_backend._load(root)[3]
+            self.assertEqual(before_events[-1]["event_type"], "condition_mapping_revealed")
+            with (patch.object(evaluation_service, "_real_registry_context", return_value={
+                      "candidate_data": {"evaluation_id": demo["evaluation_id"]}}),
+                  patch.object(evaluation_service, "_real_base", return_value=root.parent)):
+                readiness = evaluation_service.readiness(self.review_id)
+            self.assertFalse(readiness["real_evaluation_enabled"])
+            self.assertEqual(readiness["blockers"][0]["code"], "COHORT_ALREADY_UNBLINDED")
+            self.assertNotIn("PRIVATE PROVIDER LABEL", json.dumps(
+                self._get("/api/ceviri-kalitesi/sentetik/durum",
+                          query_string={"evaluation_id": demo["evaluation_id"]}).get_json()))
+            current = self._get("/api/ceviri-kalitesi/sentetik/durum",
+                                query_string={"evaluation_id": demo["evaluation_id"]}).get_json()
+            prior = current["active_ratings"][candidate_id]
+            correction = {
+                "evaluation_id": demo["evaluation_id"], "blind_candidate_id": candidate_id,
+                "status": "rated", "dimensions": {key: 1 for key in (
+                    "semantic_adequacy", "omissions", "additions", "terminology", "style_register")},
+                "issues": [], "rubric_outcome": "edited", "exclusion_reason": None,
+                "supersedes_event_id": prior["event_id"],
+            }
+            rejected = self._post("/api/ceviri-kalitesi/sentetik/puan", json_body=correction)
+            self.assertEqual(rejected.status_code, 409)
+            self.assertEqual(len(evaluation_backend._load(root)[3]), len(before_events))
 
     def test_claim_fields_cannot_be_used_to_create_synthetic_or_real_cohort(self):
         forged = {
@@ -446,7 +471,10 @@ class TranslationEvaluationBrowserSmoke(unittest.TestCase):
                     for select in card.locator(".eval-dimension").all():
                         select.select_option("2")
                     card.get_by_role("button", name="Sentetik kararı kaydet").click()
-                    card.get_by_role("button", name="Sentetik karar kaydedildi").wait_for()
+                    card.get_by_role("button", name="Puanı düzelt (yeni kayıt ekler)").wait_for()
+                    card.locator(".eval-dimension").first.select_option("1")
+                    card.get_by_role("button", name="Puanı düzelt (yeni kayıt ekler)").click()
+                    card.get_by_role("button", name="Puanı düzelt (yeni kayıt ekler)").wait_for()
                     page.get_by_text("kalite metriği yok · Faz 6 uygun değil").wait_for()
                 finally:
                     browser.close()

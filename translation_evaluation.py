@@ -425,12 +425,29 @@ def _validate_event_bindings(manifest: dict, digest: str, events: list[dict]) ->
     _cases, candidates = _case_index(manifest)
     prior_events = {}
     current = {}
+    reveal_seen = False
     for event in events[1:]:
         if (event["evaluation_id"] != manifest["evaluation_id"] or
                 event["manifest_sha256"] != digest or
                 event["rubric_version"] != manifest["rubric_version"] or
                 event["rubric_sha256"] != manifest["rubric_sha256"]):
             raise EvaluationError("rating event is not bound to the frozen cohort/rubric")
+        if reveal_seen:
+            raise EvaluationError("blind rating is terminally closed after condition mapping reveal")
+        if event["event_type"] == "condition_mapping_revealed":
+            condition_ids = {candidate["condition_id"] for case in manifest["cases"]
+                             for candidate in case["candidates"]}
+            if event["condition_id"] not in condition_ids:
+                raise EvaluationError("condition mapping reveal references an unknown condition")
+            active_before_reveal = _active_ratings(events[1:events.index(event) + 1])
+            candidate_ids = {candidate["blind_candidate_id"] for case in manifest["cases"]
+                             for candidate in case["candidates"]}
+            rated_ids = {candidate_id for (candidate_id, reviewer) in active_before_reveal
+                         if reviewer == event["reviewer_id"]}
+            if candidate_ids != rated_ids:
+                raise EvaluationError("condition mapping was revealed before all blind ratings were complete")
+            reveal_seen = True
+            continue
         if event["event_type"] != "rating":
             raise EvaluationError("unsupported event type in evaluation journal")
         candidate_link = candidates.get(event["blind_candidate_id"])
@@ -603,6 +620,8 @@ def record_rating(root: str | os.PathLike[str], blind_candidate_id: str, reviewe
     """
     with _LOCK:
         path, manifest, digest, events = _load(root)
+        if any(event["event_type"] == "condition_mapping_revealed" for event in events):
+            raise EvaluationError("blind rating is terminally closed after condition mapping reveal")
         _validate_resolver(source_resolver)
         _cases, candidate_index = _case_index(manifest)
         linked = candidate_index.get(blind_candidate_id)
@@ -623,6 +642,47 @@ def record_rating(root: str | os.PathLike[str], blind_candidate_id: str, reviewe
         return _append(path, body)
 
 
+def reveal_condition_mapping(root: str | os.PathLike[str], reviewer_id: str,
+                             condition_id: str, condition_map_sha256: str) -> dict:
+    """Append a terminal unblinding event after this reviewer rated every candidate."""
+    with _LOCK:
+        path, manifest, digest, events = _load(root)
+        if not isinstance(reviewer_id, str) or not _REVIEWER.fullmatch(reviewer_id):
+            raise EvaluationError("reviewer_id must be a local pseudonymous alias")
+        if not _id(condition_id) or not _hash(condition_map_sha256):
+            raise EvaluationError("condition mapping identity/hash is invalid")
+        prior_reveals = [event for event in events if event["event_type"] == "condition_mapping_revealed"]
+        if prior_reveals:
+            prior = prior_reveals[0]
+            if (prior["reviewer_id"], prior["condition_id"], prior["condition_map_sha256"]) != (
+                    reviewer_id, condition_id, condition_map_sha256):
+                raise EvaluationError("a different condition mapping was already revealed")
+            return prior
+        conditions = {candidate["condition_id"] for case in manifest["cases"]
+                      for candidate in case["candidates"]}
+        if condition_id not in conditions:
+            raise EvaluationError("condition mapping reveal references an unknown condition")
+        candidate_ids = {candidate["blind_candidate_id"] for case in manifest["cases"]
+                         for candidate in case["candidates"]}
+        active = _active_ratings(events)
+        rated_ids = {candidate_id for (candidate_id, reviewer) in active if reviewer == reviewer_id}
+        if candidate_ids != rated_ids:
+            raise EvaluationError("condition mapping is available only after all blind ratings are complete")
+        return _append(path, {
+            "schema_version": SCHEMA_VERSION,
+            "event_type": "condition_mapping_revealed",
+            "event_id": uuid.uuid4().hex,
+            "evaluation_id": manifest["evaluation_id"],
+            "manifest_sha256": digest,
+            "rubric_version": manifest["rubric_version"],
+            "rubric_sha256": manifest["rubric_sha256"],
+            "reviewer_id": reviewer_id,
+            "condition_id": condition_id,
+            "condition_map_sha256": condition_map_sha256,
+            "created_at": _now(),
+        })
+
+
 def _valid_event(event: dict) -> bool:
     if (type(event.get("schema_version")) is not int or event["schema_version"] != SCHEMA_VERSION or
             not _id(event.get("event_id")) or not _valid_time(event.get("created_at")) or
@@ -635,6 +695,18 @@ def _valid_event(event: dict) -> bool:
                 _hash(event["manifest_sha256"]) and event["rubric_version"] == RUBRIC["version"] and
                 event["rubric_sha256"] == RUBRIC_SHA256 and event["previous_event_sha256"] is None and
                 _hash(event["event_sha256"]))
+    if event["event_type"] == "condition_mapping_revealed":
+        required = base | {
+            "evaluation_id", "manifest_sha256", "rubric_version", "rubric_sha256",
+            "reviewer_id", "condition_id", "condition_map_sha256",
+        }
+        return (set(event) == required and _id(event["evaluation_id"]) and
+                _hash(event["manifest_sha256"]) and event["rubric_version"] == RUBRIC["version"] and
+                event["rubric_sha256"] == RUBRIC_SHA256 and
+                isinstance(event["reviewer_id"], str) and _REVIEWER.fullmatch(event["reviewer_id"]) is not None and
+                _id(event["condition_id"]) and _hash(event["condition_map_sha256"]) and
+                _hash(event["event_sha256"]) and
+                (event["previous_event_sha256"] is None or _hash(event["previous_event_sha256"])))
     if event["event_type"] != "rating":
         return False
     required = base | {
