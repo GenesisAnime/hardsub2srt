@@ -104,6 +104,12 @@ def parse_srt(text: str):
         m = TIME_RE.search(lines[tidx])
         start = tuple(int(m.group(i)) for i in range(1, 5))
         end = tuple(int(m.group(i)) for i in range(5, 9))
+        start_ms = ((start[0] * 60 + start[1]) * 60 + start[2]) * 1000 + start[3]
+        end_ms = ((end[0] * 60 + end[1]) * 60 + end[2]) * 1000 + end[3]
+        if start[1] >= 60 or start[2] >= 60 or end[1] >= 60 or end[2] >= 60:
+            continue  # gecersiz dakika/saniye alani
+        if start_ms >= end_ms:
+            continue  # ASS negatif/sifir sureli event kabul etmez
         text_lines = [clean_text(ln) for ln in lines[tidx + 1:]]
         text_lines = [ln for ln in text_lines if ln]
         if not text_lines:
