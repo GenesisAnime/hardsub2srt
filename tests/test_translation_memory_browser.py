@@ -6,6 +6,7 @@ directory, and browser requests to non-local origins are blocked.
 """
 
 import hashlib
+import json
 import os
 import tempfile
 import threading
@@ -294,6 +295,147 @@ class TranslationMemoryBrowserAcceptance(unittest.TestCase):
                 context.close()
             finally:
                 browser.close()
+
+    def test_browser_explicit_scoped_lexicon_suggestion_and_append_only_rollback(self):
+        """The local terminology UI is scoped, suggestive, and reversible."""
+        _require_browser(sync_playwright is not None,
+                         "Playwright is missing; install it or use strict browser-test mode")
+
+        with sync_playwright() as playwright:
+            browser_path = Path(playwright.chromium.executable_path)
+            _require_browser(browser_path.is_file(),
+                             "Playwright Chromium missing; install it or use strict browser-test mode")
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                context = browser.new_context()
+                blocked_requests = []
+
+                def restrict_to_exact_local_origin(route):
+                    if _same_origin(route.request.url, self.base_url):
+                        route.continue_()
+                    else:
+                        blocked_requests.append(route.request.url)
+                        route.abort()
+
+                context.route("**/*", restrict_to_exact_local_origin)
+                page = context.new_page()
+                page.goto(f"{self.base_url}/ocr-inceleme", wait_until="domcontentloaded")
+                page.locator("#path").fill(str(self.pack))
+                page.locator("#open").click()
+                page.locator("#workspace:not(.hidden)").wait_for()
+                page.locator("#step-ai-translation summary").click()
+                page.locator("#step-memory summary").click()
+                page.locator("#tm-project").fill("synthetic-series")
+
+                # Add through the visible local UI, then retrieve inside that exact
+                # (project, source-language, target-language) scope.
+                page.locator("#tm-source-term").fill("source")
+                page.locator("#tm-target-term").fill("origin")
+                page.locator("#tm-add-term").click()
+                entry = page.locator("#tm-entries article.notice").filter(
+                    has_text="source → origin")
+                entry.wait_for()
+                first_draft = page.locator(".ai-draft").first
+                first_draft.fill("keep this synthetic draft")
+                lookup = page.locator("#ai-drafts button", has_text="Bellekten öneri ara").first
+                lookup.click()
+                result = page.locator(f"#tm-cue-{self.cue_ids[0]}")
+                result.get_by_text("Terim önerisi: synthetic origin line", exact=False).wait_for()
+                self.assertEqual(await_value(first_draft), "keep this synthetic draft",
+                                 "lexicon lookup must never silently replace the draft")
+                result.get_by_role("button", name="Terimleri taslağa uygula").click()
+                self.assertEqual(await_value(first_draft), "synthetic origin line")
+
+                # Exact project and target-language isolation: neither a different
+                # project nor the same project in English can see the Japanese→Turkish term.
+                page.locator("#tm-project").fill("other-series")
+                first_draft.fill("project scope stays isolated")
+                lookup.click()
+                result.get_by_text("tam eşleşme bulunamadı", exact=False).wait_for()
+                self.assertEqual(await_value(first_draft), "project scope stays isolated")
+                page.locator("#tm-project").fill("synthetic-series")
+                page.locator("#ai-source-lang").fill("en")
+                page.locator("#tm-load").click()
+                lookup.click()
+                result.get_by_text("tam eşleşme bulunamadı", exact=False).wait_for()
+                self.assertEqual(await_value(first_draft), "project scope stays isolated")
+                page.locator("#ai-source-lang").fill("ja")
+                page.locator("#ai-target-lang").fill("en")
+                page.locator("#tm-load").click()
+                lookup.click()
+                result.get_by_text("tam eşleşme bulunamadı", exact=False).wait_for()
+                self.assertEqual(await_value(first_draft), "project scope stays isolated")
+
+                # A second target for the same term is surfaced as ambiguous and
+                # offers no apply button. Remove it with the explicit UI rollback.
+                page.locator("#ai-target-lang").fill("tr")
+                page.locator("#tm-load").click()
+                page.locator("#tm-source-term").fill("source")
+                page.locator("#tm-target-term").fill("conflict")
+                page.locator("#tm-add-term").click()
+                conflict = page.locator("#tm-entries article.notice").filter(
+                    has_text="source → conflict")
+                conflict.wait_for()
+                event_id = self._event_id_from_article(page, conflict)
+                first_draft.fill("keep through ambiguity")
+                lookup.click()
+                result.get_by_text("Çakışan terim eşleşmeleri var; uygulanmadı.", exact=False).wait_for()
+                self.assertEqual(await_value(first_draft), "keep through ambiguity")
+                self.assertEqual(result.get_by_role("button").count(), 0)
+
+                scope = translation_memory._scope("synthetic-series", "ja", "tr")
+                event_path, _translation_projection, lexicon_projection = translation_memory._paths(scope)
+                before = [json.loads(line) for line in event_path.read_text(
+                    encoding="utf-8").splitlines()]
+                self.assertEqual([row["event_type"] for row in before],
+                                 ["lexicon_add", "lexicon_add"])
+                self.assertIn(event_id, {row["event_id"] for row in before})
+
+                conflict.get_by_role("button", name="Geri al").click()
+                conflict.wait_for(state="detached")
+                after = [json.loads(line) for line in event_path.read_text(
+                    encoding="utf-8").splitlines()]
+                self.assertEqual([row["event_type"] for row in after],
+                                 ["lexicon_add", "lexicon_add", "rollback"])
+                self.assertEqual(after[-1]["undo_event_id"], event_id)
+                self.assertEqual(lexicon_projection.read_text(encoding="utf-8").count("\n"), 1)
+                active = [json.loads(line) for line in lexicon_projection.read_text(
+                    encoding="utf-8").splitlines()]
+                self.assertEqual([(row["source_term"], row["target_term"]) for row in active],
+                                 [("source", "origin")])
+
+                # Retrying the exact rollback is safe and does not append a second
+                # rollback. Once the conflict is removed, the remaining suggestion
+                # can again be explicitly applied.
+                retry = page.evaluate("""async ({eventId}) => {
+                    const response = await fetch('/api/ceviri-bellegi/geri-al', {
+                      method: 'POST', headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({project_key:'synthetic-series', source_language:'ja',
+                        target_language:'tr', event_id:eventId})
+                    });
+                    return {status: response.status, body: await response.json()};
+                }""", {"eventId": event_id})
+                self.assertEqual(retry["status"], 200)
+                self.assertTrue(retry["body"]["already_rolled_back"])
+                first_draft.fill("draft after rollback")
+                lookup.click()
+                result.get_by_role("button", name="Terimleri taslağa uygula").click()
+                self.assertEqual(await_value(first_draft), "synthetic origin line")
+                self.assertEqual(len([row for row in event_path.read_text(
+                    encoding="utf-8").splitlines() if json.loads(row)["event_type"] == "rollback"]), 1)
+                self.assertEqual(blocked_requests, [], "the lexicon browser flow must make no external request")
+                context.close()
+            finally:
+                browser.close()
+
+    @staticmethod
+    def _event_id_from_article(page, article):
+        onclick = page.evaluate(
+            "el => el.querySelector('button[onclick^=\\\"rollbackTm\\\"]')?.getAttribute('onclick')",
+            article.element_handle())
+        if not onclick or not onclick.startswith("rollbackTm('"):
+            raise AssertionError("visible lexicon entry does not expose its rollback action")
+        return onclick[len("rollbackTm('"):-2]
 
 
 def await_value(locator):
