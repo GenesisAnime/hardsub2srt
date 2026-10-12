@@ -174,6 +174,16 @@ except Exception as _ogren_hatasi:
 app = Flask(__name__)
 
 
+@app.before_request
+def _reject_non_loopback_hosts():
+    """Prevent DNS-rebinding access to every route on the loopback-only server."""
+    host = request.environ.get("HTTP_HOST", "")
+    allowed_hosts = {"localhost", "127.0.0.1", f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+    if host.strip() != host or any(ch.isspace() for ch in host) or host.lower() not in allowed_hosts:
+        return jsonify({"hata": "Arayüz yalnız localhost veya 127.0.0.1 üzerinden kullanılabilir"}), 403
+    return None
+
+
 def _memory_request_error():
     """Reject DNS-rebinding Host headers and cross-origin browser mutations."""
     allowed_hosts = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
