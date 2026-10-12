@@ -309,7 +309,11 @@ def validate(manifest_path: Path, report_path: Path, trust_path: Path) -> list[s
     if evaluation["phase5_status"] != "EVALUATED" or evaluation["release_gate"] != "PASS":
         blockers.append("Aday manifesti Phase 5 EVALUATED/PASS sonucuna bağlanmıyor")
     raw_report, _ = _load_json(report_file)
-    report = _obj(raw_report, "Phase 5 report")
+    # The Phase 5 schema is versioned and validated by _check_phase5_report;
+    # here only require an object before passing it to that version-aware gate.
+    if type(raw_report) is not dict:
+        raise GateError("Phase 5 report: JSON nesnesi gerekli")
+    report = raw_report
     blockers.extend(_check_phase5_report(report, report_hash, manifest, _load_trust(trust_path), files, bundle_hash))
 
     rights = _obj(manifest["rights_review"], "rights_review", {"receipt_path", "receipt_sha256", "review_id"})
