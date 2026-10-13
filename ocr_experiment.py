@@ -142,6 +142,7 @@ def _safe_crop(root: Path, raw: object) -> Path:
     _reject_reparse_path(candidate, root)
     path = candidate.resolve(strict=True)
     try:
+        # path-scope-ok: root (üstte) ve path (candidate.resolve) çözülmüş yollar
         path.relative_to(root.resolve())
     except ValueError as exc:
         raise InputError(f"crop_path veri kümesi dışına çıkıyor: {raw!r}") from exc

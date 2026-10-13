@@ -84,6 +84,7 @@ def _reject_reparse_components(path: Path) -> None:
 
 def _inside(path: Path, root: Path) -> bool:
     try:
+        # path-scope-ok: çağrı yerleri iki tarafı da resolve edilmiş geçiriyor (117, 123)
         path.relative_to(root)
         return True
     except ValueError:

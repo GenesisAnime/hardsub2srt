@@ -391,6 +391,7 @@ def run(dataset: Path, metadata_path: Path, split_path: Path, out_path: Path,
     dataset = dataset.resolve()
     for protected in (dataset, dataset.parent, metadata_path.resolve().parent):
         try:
+            # path-scope-ok: out_path (üstte) ve her protected kökü burada çözülüyor
             out_path.relative_to(protected.resolve())
         except ValueError:
             continue

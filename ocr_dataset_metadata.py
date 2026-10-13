@@ -44,6 +44,7 @@ def make_template(dataset: Path, output: Path) -> tuple[int, Path]:
 
     output = output.resolve(strict=False)
     try:
+        # path-scope-ok: dataset (üstte) ve output (hemen üstte) çözülmüş yollar
         output.relative_to(dataset)
     except ValueError:
         pass

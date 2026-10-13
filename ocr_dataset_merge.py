@@ -242,6 +242,7 @@ def merge_exports(root: Path, source_exports: list[Path], out_name: str) -> tupl
         configured = os.environ.get(variable, "").strip()
         if configured:
             try:
+                # path-scope-ok: root yukarıda resolve(strict=True) edildi, sağ taraf da burada çözülüyor
                 if root.is_relative_to(Path(configured).expanduser().resolve(strict=False)):
                     raise MergeError(f"Ortak kök senkronizasyon klasöründe ({variable}); yerel klasör kullanın")
             except OSError as exc:

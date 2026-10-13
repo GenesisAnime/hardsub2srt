@@ -78,6 +78,7 @@ def _safe_file(root: Path, value: object, label: str) -> Path:
     candidate = root.joinpath(*rel.parts)
     try:
         resolved = candidate.resolve(strict=True)
+        # path-scope-ok: resolved ve sağdaki root aynı blokta çözülüyor
         resolved.relative_to(root.resolve(strict=True))
     except (OSError, ValueError) as exc:
         raise GateError(f"{label}: dosya yok veya aday klasörü dışına çıkıyor") from exc
