@@ -1,0 +1,54 @@
+# Test paketi: her PR'da ve main'e push'ta, Linux + Windows.
+#
+# Neden bu bağımlılık seti: paket, OCR motorlarını (easyocr → torch,
+# rapidocr → onnxruntime) tembel içe aktarır; testler bu motorları hiç
+# çalıştırmaz. Bu yüzden ağır/gigabaytlık çalışma zamanı yerine yalnız
+# testlerin gerçekten dokunduğu paketler kurulur (ölçüldü: temiz sanal
+# ortamda flask+numpy+opencv-python-headless+pytest ile paket yeşil).
+# `requirements.txt` bilinçli olarak kurulmaz: easyocr/rapidocr/onnxruntime
+# kurulumu dakikalar sürer ve CI'a ek kapsama katmaz.
+#
+# OpenCV'nin başsız (headless) sürümü seçildi: koşucularda GUI/X11 gerekmez.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      # Bir platform kırmızı diye diğerinin sonucu gizlenmesin.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # Geliştirme makinesiyle aynı sürüm (ölçüm 13.10.2026: Python 3.14.3).
+        python-version: ["3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Test bağımlılıklarını kur
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest flask numpy opencv-python-headless
+
+      - name: Paketi çalıştır
+        run: python -m pytest -q
