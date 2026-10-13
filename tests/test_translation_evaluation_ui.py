@@ -70,7 +70,7 @@ def _require_browser(available, reason):
 class TranslationEvaluationApiTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()   # kanonik kök (kısa ad/bağ karışmasın)
         self.storage = self.root / "private-local-app-data" / "translation-evaluation-v1" / "synthetic"
         self.storage.mkdir(parents=True)
         self.service_root_patch = patch.object(evaluation_service, "_local_root", return_value=self.storage)
@@ -410,7 +410,7 @@ class TranslationEvaluationBrowserSmoke(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()   # kanonik kök (kısa ad/bağ karışmasın)
         self.storage = self.root / "private-local-app-data" / "translation-evaluation-v1" / "synthetic"
         self.storage.mkdir(parents=True)
         self.service_root_patch = patch.object(evaluation_service, "_local_root", return_value=self.storage)

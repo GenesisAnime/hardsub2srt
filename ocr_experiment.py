@@ -18,6 +18,8 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
+import path_scope
+
 SCHEMA_VERSION = 1
 LICENSE_STATUSES = {"public_domain", "permissive_license", "permission_granted", "user_owned"}
 SPLITS = (("train", 0.80), ("validation", 0.10), ("test", 0.10))
@@ -501,7 +503,7 @@ def _resolve_root_relative(root: Path, value: object, label: str) -> Path:
     _reject_reparse_path(path, root)
     resolved = path.resolve(strict=True)
     try:
-        resolved.relative_to(root)
+        path_scope.relative_to(resolved, root)
     except ValueError as exc:
         raise InputError(f"{label}: path escapes the composite root") from exc
     return resolved

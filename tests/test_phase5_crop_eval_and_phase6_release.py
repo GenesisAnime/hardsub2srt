@@ -91,7 +91,7 @@ class SyntheticPhase5Inputs:
 class Phase5CropEvalTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="hardsub-phase5-synthetic-")
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()   # kanonik kök (kısa ad/bağ karışmasın)
         self.inputs = SyntheticPhase5Inputs(self.root)
 
     def tearDown(self):
@@ -215,7 +215,7 @@ class Phase5CropEvalTests(unittest.TestCase):
 class Phase6ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="hardsub-phase6-synthetic-")
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()   # kanonik kök (kısa ad/bağ karışmasın)
         self.bundle = self.root / "model"
         self.bundle.mkdir()
         (self.bundle / "weights.bin").write_bytes(b"SYNTHETIC MODEL BYTES ONLY")

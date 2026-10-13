@@ -77,6 +77,8 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+import path_scope
+
 KLASOR = Path(__file__).resolve().parent
 ARAC = KLASOR / "hardsub2srt.py"
 SRT2ASS = KLASOR / "srt2ass.py"
@@ -1991,7 +1993,7 @@ def api_ocr_inceleme_metadata_sablonu():
     try:
         path = ocr_review.create_metadata_template(body["review_id"], body["dataset_name"])
         pack = ocr_review.pack_for(body["review_id"])
-        return jsonify({"ok": True, "path": path.relative_to(pack["pack"]).as_posix()})
+        return jsonify({"ok": True, "path": path_scope.relative_to(path, pack["pack"]).as_posix()})
     except Exception as exc:
         return _ocr_hata(exc)
 
@@ -2919,12 +2921,12 @@ def is_srt_bul(is_id):
 
 
 def _yol_altinda(yol, kok):
-    """Çözümlenmiş yolun kök klasör içinde kaldığını doğrular."""
-    try:
-        yol.relative_to(kok)
-        return True
-    except ValueError:
-        return False
+    """Çözümlenmiş yolun kök klasör içinde kaldığını doğrular.
+
+    İki taraf da normalize edilir: iş kaydındaki yol ile klasör aynı dizini
+    farklı gösterimle (8.3 kısa ad/bağ) taşıyabilir.
+    """
+    return path_scope.is_within(yol, kok)
 
 
 @app.get("/api/bloklar")
@@ -3221,7 +3223,7 @@ def api_pano():
     for sp in sorted(klasor.rglob("*.stats.json")):
         try:
             sp = sp.resolve()
-            stats_rel = sp.relative_to(klasor).as_posix()
+            stats_rel = path_scope.relative_to(sp, klasor).as_posix()
         except (OSError, ValueError):
             continue
         kok_ad = sp.name[:-len(".stats.json")]
@@ -3251,7 +3253,7 @@ def api_pano():
         except OSError:
             tarih = ""
         satirlar.append({
-            "ad": (sp.parent / kok_ad).relative_to(klasor).as_posix(),
+            "ad": path_scope.relative_to(sp.parent / kok_ad, klasor).as_posix(),
             "stats": sp.name, "stats_rel": stats_rel,
             "blok": blok, "low_conf": low, "low_pct": low_pct,
             "low_yuksek": bool(low_pct is not None and
@@ -3308,7 +3310,7 @@ def api_pano_incele():
         if not _yol_altinda(stats_path, klasor):
             return jsonify({"hata": "yol klasör dışına çıkıyor"}), 403
         kok_ad = stats_path.name[:-len(".stats.json")]
-        ad = (stats_path.parent / kok_ad).relative_to(klasor).as_posix()
+        ad = path_scope.relative_to(stats_path.parent / kok_ad, klasor).as_posix()
         srt = stats_path.with_name(kok_ad + ".srt")
     else:
         # Önceki arayüz sürümünün API çağrıları için geriye dönük uyum.
