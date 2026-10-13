@@ -35,8 +35,8 @@ from pathlib import Path
 
 # SRT zaman satiri: 00:00:05,464 --> 00:00:11,637 (virgul VEYA nokta toleransli)
 TIME_RE = re.compile(
-    r'(\d\d):(\d\d):(\d\d)[,.](\d\d\d)\s*-->\s*'
-    r'(\d\d):(\d\d):(\d\d)[,.](\d\d\d)'
+    r'(?<!\d)(\d{2,9}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*'
+    r'(\d{2,9}):(\d{2}):(\d{2})[,.](\d{3})'
 )
 # <i>, </b>, <font color="#fff"> gibi HTML etiketleri
 HTML_TAG_RE = re.compile(r'</?[a-zA-Z][^>]*>')
