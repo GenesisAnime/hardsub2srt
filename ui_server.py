@@ -79,6 +79,7 @@ from datetime import datetime
 from pathlib import Path
 
 import path_scope
+from srt_format import format_srt_ms, normalise_srt_text, parse_timing_pair
 
 KLASOR = Path(__file__).resolve().parent
 ARAC = KLASOR / "hardsub2srt.py"
@@ -3044,19 +3045,13 @@ def api_qa(dosya):
 
 
 # -------------------------------------------- blok editörü + VTT kıyas -----
-SRT_ZAMAN_RE = re.compile(r"^(\d{1,3}):(\d{1,2}):(\d{1,2})[.,](\d{1,3})$")
-
-
 def srt_zaman_norm(s):
-    """'0:00:01,000' / '00:00:01.3' → '00:00:01,300'; geçersizse None."""
-    s = str(s or "").strip()
-    m = SRT_ZAMAN_RE.match(s.replace(".", ","))
-    if not m:
-        return None
-    h, mi, se, ms = m.groups()
-    if int(mi) > 59 or int(se) > 59:
-        return None
-    return f"{int(h):02d}:{int(mi):02d}:{int(se):02d},{(ms + '000')[:3]}"
+    """'0:00:01,000' / '00:00:01.3' → '00:00:01,300'; geçersizse None.
+
+    Kural tek yerde: `srt_format.normalise_srt_text` (ayırıcı, alan sınırları,
+    dakika/saniye ≤ 59, saat alanı sınırı).
+    """
+    return normalise_srt_text(s)
 
 
 def _srt_zaman_ms(normalized):
@@ -3078,14 +3073,12 @@ def srt_parse(metin):
         ti = next((k for k, ln in enumerate(satirlar) if "-->" in ln), None)
         if ti is None:
             continue
-        sol, _, sag = satirlar[ti].partition("-->")
-        sol_tokens, sag_tokens = sol.split(), sag.split()
-        st = srt_zaman_norm(sol_tokens[-1]) if sol_tokens else None
-        en = srt_zaman_norm(sag_tokens[0]) if sag_tokens else None
+        pair = parse_timing_pair(satirlar[ti], token_edges=True, loose=True)
         mtn = "\n".join(satirlar[ti + 1:]).strip()
-        if st is None or en is None or not mtn:
+        if pair is None or not mtn:
             continue
-        bloklar.append({"index": len(bloklar), "start": st, "end": en, "metin": mtn})
+        bloklar.append({"index": len(bloklar), "start": format_srt_ms(pair[0]),
+                        "end": format_srt_ms(pair[1]), "metin": mtn})
     return bloklar
 
 

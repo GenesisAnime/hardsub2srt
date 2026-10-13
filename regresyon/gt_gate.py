@@ -19,6 +19,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent
+# vtt-qa.py kardeş modülleri (ör. srt_format) içe aktarır; harness proje kökünü
+# sys.path'e eklemezse yükleme ImportError ile düşer.
+if str(PROJECT) not in sys.path:
+    sys.path.insert(0, str(PROJECT))
 DEFAULT_CASES = HERE / "gt_cases.json"
 
 
