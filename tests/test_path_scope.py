@@ -16,8 +16,10 @@ from unittest.mock import patch
 import ocr_dataset_merge
 import ocr_experiment
 import ocr_review
+import ocr_video_eval
 import path_scope
 import phase5_execution
+import translation_evaluation
 import ui_server
 
 
@@ -94,6 +96,17 @@ class ProductGuardTests(unittest.TestCase):
         with self.assertRaises(ocr_dataset_merge.MergeError):
             ocr_dataset_merge._root_relative(self.real, self.outside)
 
+    def test_video_eval_relative_file_accepts_the_link_spelling(self):
+        srt = self.real / "pack" / "kaynak.srt"
+        srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nsynthetic\n\n", encoding="utf-8")
+        self.assertEqual(ocr_video_eval._relative_file(self.alias, "pack/kaynak.srt", "kaynak"),
+                         srt.resolve(strict=True))
+        self.assertEqual(ocr_video_eval._relative_file(self.real, "pack/kaynak.srt", "kaynak"),
+                         srt.resolve(strict=True))
+        for escaping in ("../disarida.srt", "pack/../../disarida.srt"):
+            with self.assertRaises(ocr_video_eval.VideoEvalError):
+                ocr_video_eval._relative_file(self.alias, escaping, "kaynak")
+
 
 class AmbientSpellingTests(unittest.TestCase):
     """Ortamın kendi ikinci yazımı (GitHub koşucusunda 8.3 kısa ad).
@@ -124,6 +137,23 @@ class AmbientSpellingTests(unittest.TestCase):
         target.write_text("{}", encoding="utf-8")
         resolved = ocr_experiment._resolve_root_relative(self.root, "veri/manifest.json", "manifest")
         self.assertEqual(resolved, target.resolve(strict=True))
+
+    def test_translation_evaluation_storage_accepts_the_ambient_spelling(self):
+        storage = translation_evaluation._safe_root(self.root / "depo", create=True)
+        self.assertEqual(storage, path_scope.normalize(self.root / "depo"))
+        self.assertEqual(translation_evaluation._child(storage, "kayit.json"),
+                         storage / "kayit.json")
+        with self.assertRaises(translation_evaluation.EvaluationError):
+            translation_evaluation._safe_root(Path("goreli/depo"))
+
+    def test_video_eval_relative_file_accepts_the_ambient_spelling(self):
+        srt = self.root / "veri" / "kaynak.srt"
+        srt.parent.mkdir()
+        srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nsynthetic\n\n", encoding="utf-8")
+        self.assertEqual(ocr_video_eval._relative_file(self.root, "veri/kaynak.srt", "kaynak"),
+                         srt.resolve(strict=True))
+        with self.assertRaises(ocr_video_eval.VideoEvalError):
+            ocr_video_eval._relative_file(self.root, "../disarida.srt", "kaynak")
 
     def test_source_bundle_hashes_the_copy_spelled_by_the_environment(self):
         copy = self.root / "desktop-copy"
