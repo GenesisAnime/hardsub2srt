@@ -62,6 +62,7 @@ import atexit
 import base64
 import ctypes
 import json
+import math
 import os
 import re
 import shutil
@@ -89,6 +90,7 @@ LOG_YANIT = 200            # /api/durum yanıtında dönen satır
 KUYRUK_YANIT = 100         # /api/durum yanıtında dönen iş sayısı
 MAX_BATCH = 100            # tek ekle isteğinin üst sınırı
 MAX_AKTIF_KUYRUK = 2000    # çalışan + bekleyen işlerin üst sınırı
+MAX_QA_SAYISI = 1000       # iş başına QA montajı seçeneğinin üst sınırı
 
 
 def _child_process_env():
@@ -2411,10 +2413,81 @@ def api_is_gecmisi():
                         "uyari": "İş geçmişi okunamadı; canlı kuyruk etkilenmedi."})
 
 
+class _IstekHatasi(ValueError):
+    """Geçersiz arayüz istek gövdesi; rotalar bunu 400 olarak raporlar."""
+
+
+def _istek_json_nesnesi():
+    """Gövdeyi JSON nesnesi olarak döndürür; nesne değilse _IstekHatasi.
+
+    ``get_json(force=True, silent=True) or {}`` tek başına yetmez: gövde bir
+    JSON dizesi olduğunda (`"abc"`) sonuç truthy kalır ve `.get()` çağrısı
+    AttributeError ile 500 üretir. Eksik/boş gövde eskisi gibi {} döner.
+    """
+    deger = request.get_json(force=True, silent=True)
+    if deger is None:
+        return {}
+    if not isinstance(deger, dict):
+        raise _IstekHatasi("JSON nesnesi gerekli")
+    return deger
+
+
+def _secenek_tamsayi(ham, ad, en_az, en_cok):
+    """Arayüz gövdesindeki tamsayı seçeneği; aralık dışıysa _IstekHatasi.
+
+    bool kabul edilmez (JSON true sessizce 1'e dönüşmesin), None/"" varsayılan
+    0'dır. Metin dönüşümü burada yapılır; rotada int() ValueError fırlatıp
+    isteği 500'e düşürmez.
+    """
+    if ham is None or ham == "":
+        return 0
+    if isinstance(ham, bool):
+        raise _IstekHatasi(f"{ad} sayı olmalı (true/false kabul edilmez)")
+    if isinstance(ham, float):
+        if not math.isfinite(ham) or not ham.is_integer():
+            raise _IstekHatasi(f"{ad} tam sayı olmalı")
+        ham = int(ham)
+    elif not isinstance(ham, int):
+        try:
+            ham = int(str(ham).strip())
+        except (TypeError, ValueError):
+            raise _IstekHatasi(f"{ad} tam sayı olmalı")
+    if not en_az <= ham <= en_cok:
+        raise _IstekHatasi(f"{ad} {en_az}-{en_cok} aralığında olmalı")
+    return ham
+
+
+def _secenek_sonlu_sayi(ham, ad):
+    """Arayüz gövdesindeki ondalık seçenek; sonlu ve negatif değilse kabul et.
+
+    float('inf')/'nan' kabul edilirse alt sürece ``--limit-seconds inf``
+    bayrağı gider ve süre sınırı anlamsızlaşır; bu yüzden sonluluk şart.
+    """
+    if ham is None or ham == "":
+        return 0.0
+    if isinstance(ham, bool):
+        raise _IstekHatasi(f"{ad} sayı olmalı (true/false kabul edilmez)")
+    if isinstance(ham, (int, float)):
+        deger = float(ham)
+    else:
+        try:
+            deger = float(str(ham).strip())
+        except (TypeError, ValueError):
+            raise _IstekHatasi(f"{ad} sayı olmalı")
+    if not math.isfinite(deger):
+        raise _IstekHatasi(f"{ad} sonlu bir sayı olmalı")
+    if deger < 0:
+        raise _IstekHatasi(f"{ad} negatif olamaz")
+    return deger
+
+
 @app.post("/api/ekle")
 def api_ekle():
     global IS_SAYAC
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     yollar = v.get("yollar")
     if yollar is None and v.get("yol"):
         yollar = [v["yol"]]
@@ -2423,15 +2496,22 @@ def api_ekle():
     if len(yollar) > MAX_BATCH:
         return jsonify({"hata": f"Tek istekte en fazla {MAX_BATCH} video eklenebilir; seçilen: {len(yollar)}. Listeyi parçalara bölün."}), 413
 
+    try:
+        qa_sayi = _secenek_tamsayi(v.get("qa_sayi", 4), "qa_sayi",
+                                   0, MAX_QA_SAYISI)
+        limit_saniye = _secenek_sonlu_sayi(v.get("limit_saniye"), "limit_saniye")
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
+
     sec = {
         "ust_bant": bool(v.get("ust_bant")),
         "ass": bool(v.get("ass")),
         "cpu": bool(v.get("cpu", False)),
         "review_pack": bool(v.get("review_pack", False)),
         "dil": str(v.get("dil") or "tr,en"),
-        "qa_sayi": int(v.get("qa_sayi", 4) or 0),
+        "qa_sayi": qa_sayi,
         "cikti_klasor": str(v.get("cikti_klasor") or KLASOR),
-        "limit_saniye": float(v.get("limit_saniye") or 0),
+        "limit_saniye": limit_saniye,
         "onek": str(v.get("onek") or ""),
     }
     if any(c in sec["onek"] for c in '<>:"/\\|?*\x00\r\n'):
@@ -2502,7 +2582,10 @@ def api_iptal():
 
 @app.post("/api/klasortara")
 def api_klasortara():
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     dizin = str(v.get("dizin") or "").strip().strip('"')
     if not dizin:
         return jsonify({"hata": "dizin gerekli"}), 400
@@ -2667,7 +2750,10 @@ def api_secim():
         return jsonify({"hata": "Windows seçicisi yalnız Windows sunucusunda kullanılabilir; yolu elle girin."}), 501
     if PICKER_SHUTDOWN.is_set():
         return jsonify({"hata": "UI sunucusu kapanıyor; başlatıcıyı yeniden açın."}), 503
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     tur = v.get("tur")
     if tur not in ("dosya", "klasor", "inceleme"):
         return jsonify({"hata": "tur 'dosya', 'klasor' veya 'inceleme' olmalı"}), 400
@@ -2819,8 +2905,15 @@ def api_secim_durum(job_id):
 
 @app.post("/api/ac")
 def api_ac():
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     yol = str(v.get("yol") or "").strip()
+    if not yol:
+        # Path("") çalışma klasörünü temsil eder; boş yol sessizce sunucunun
+        # kendi klasörünü Explorer'da açardı.
+        return jsonify({"hata": "açılacak yol gerekli"}), 400
     p = Path(yol)
     if p.is_dir():
         subprocess.Popen(["explorer", str(p)], env=_child_process_env())
@@ -2990,7 +3083,10 @@ def api_blokkaydet():
     yedeği alır. Zamanlar doğrulanır (salt-okunur), boş bloklar düşer.
     v1.2: kayıt sonrası değişen bloklardan güvenli kelime çiftleri otomatik
     öğrenilir (ogren.py; sözlük + <ad>.ogrenme-gunlugu.json)."""
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     ham = v.get("bloklar")
     snap, srt, hata = is_srt_bul(str(v.get("is_id") or "").strip())
     if hata:
@@ -3048,7 +3144,10 @@ def api_blokkaydet():
 def api_ogret():
     """Kullanıcı düzeltmesini kullanici-sozlugu.txt'e yazar: eski<TAB>yeni.
     Tekrar: aynı satır varsa 'zaten-var'; eski farklı yeniyle varsa günceller."""
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     eski = str(v.get("eski") or "").strip()
     yeni = str(v.get("yeni") or "").strip()
     if not eski or not yeni:
