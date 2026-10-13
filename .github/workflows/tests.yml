@@ -45,21 +45,11 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      # Koşucu imajı TEMP'i 8.3 kısa adıyla verir (C:\Users\RUNNER~1\...);
-      # tempfile bu değeri aynen kullanır, koddaki denetimler ise Path.resolve()
-      # ile uzun ad üretir. Karışım, çözümlenmiş yolu çözümlenmemiş kökle
-      # karşılaştıran yerlerde fail-closed hatasına dönüşür (ölçüldü: 44 test).
-      # Normal Windows kurulumlarında TEMP uzun addır; koşucu da öyle yapılır.
-      # Kod tarafındaki asıl kırılganlık PR açıklamasında ayrı iş olarak yazılı.
-      - name: Windows koşucusunda TEMP'i uzun yol biçimine getir
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $long = python -c "import os,sys; print(os.path.realpath(sys.argv[1]))" $env:TEMP
-          "TEMP=$long" >> $env:GITHUB_ENV
-          "TMP=$long" >> $env:GITHUB_ENV
-          Write-Host "TEMP -> $long"
-
+      # Koşucu imajı TEMP'i 8.3 kısa adıyla verir (C:\Users\RUNNER~1\...).
+      # Bilinçli olarak sabitlenmez: kod tarafı aynı ağacın iki gösterimini de
+      # normalize eder (path_scope.py), yani Windows işi kısa adlı TEMP ile
+      # koşarak bu sınıfı gerçek koşucuda da kanıtlar
+      # (tests/test_path_scope.py → AmbientSpellingTests).
       - name: Test bağımlılıklarını kur
         run: |
           python -m pip install --upgrade pip
