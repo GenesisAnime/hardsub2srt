@@ -56,4 +56,6 @@ jobs:
           python -m pip install pytest flask numpy opencv-python-headless
 
       - name: Paketi çalıştır
-        run: python -m pytest -q
+        # -rs: atlanan testlerin nedeni logda görünsün (ör. ortam 8.3 kısa ad
+        # sunmuyorsa test_path_scope.py::AmbientSpellingTests neden atlandı).
+        run: python -m pytest -q -rs
