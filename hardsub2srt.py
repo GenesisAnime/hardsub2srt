@@ -377,6 +377,7 @@ import argparse
 import difflib
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -755,23 +756,109 @@ def note(msg):
     print(msg, file=sys.stderr)
 
 
+class VideoOkumaHatasi(RuntimeError):
+    """ffprobe akış bilgisi güvenilir biçimde alınamadı (net kullanıcı hatası)."""
+
+
+def _ffprobe_sayi(deger):
+    """ffprobe sayısal alanını int'e çevirir; çevrilemezse 0 döner."""
+    try:
+        return int(deger)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _ffprobe_fps(v):
+    """avg_frame_rate → r_frame_rate sırasıyla fps; kullanılamazsa None.
+
+    ffprobe bilinmeyen kare hızını '0/0' olarak bildirir; eski kod
+    float(num)/float(den) ile ZeroDivisionError fırlatıyordu.
+    """
+    for key in ("avg_frame_rate", "r_frame_rate"):
+        num, ayrac, den = str(v.get(key) or "").strip().partition("/")
+        if not ayrac:
+            continue
+        try:
+            pay, payda = float(num), float(den)
+        except ValueError:
+            continue
+        if pay > 0 and payda > 0 and math.isfinite(pay / payda):
+            return pay / payda
+    return None
+
+
+def _ffprobe_sure(data, v, fps):
+    """Süre (sn): format → stream → nb_frames/fps sırası; bulunamazsa None.
+
+    Ham H.264/HEVC ilköğretim akışlarında `format.duration` HİÇ bulunmaz ve
+    akış düzeyinde de duration/nb_frames yoktur (ölçüldü, 13.10.2026); eski
+    kod bu durumda KeyError ile traceback basıyordu.
+    """
+    bicim = data.get("format")
+    adaylar = [bicim.get("duration") if isinstance(bicim, dict) else None,
+               v.get("duration")]
+    for ham in adaylar:
+        if ham is None:
+            continue
+        try:
+            deger = float(ham)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(deger) and deger > 0:
+            return deger
+    kare = _ffprobe_sayi(v.get("nb_frames"))
+    if kare > 0 and fps:
+        return kare / fps
+    return None
+
+
 def run_ffprobe(path):
-    """Video akış bilgisi: fps, süre, frame sayısı, altyazı streamleri."""
+    """Video akış bilgisi: fps, süre, frame sayısı, altyazı streamleri.
+
+    ffprobe'un kısmi/bozuk çıktısı ham KeyError/CalledProcessError yerine
+    VideoOkumaHatasi olarak döner; çağrı yeri kullanıcıya tek satırlık net
+    hata basar (traceback değil).
+    """
     args = [FFPROBE, "-v", "error", *_offline_media_protocol_args(),
             "-print_format", "json", "-show_streams", "-show_format", str(path)]
     proc = subprocess.run(
         args,
-        capture_output=True, text=True, check=True)
-    data = json.loads(proc.stdout)
-    v = next(s for s in data["streams"] if s["codec_type"] == "video")
-    num, den = v["avg_frame_rate"].split("/")
-    fps = float(num) / float(den)
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        satirlar = [s for s in (proc.stderr or "").strip().splitlines() if s.strip()]
+        detay = satirlar[-1] if satirlar else "ffprobe sıfırdan farklı kod döndü"
+        raise VideoOkumaHatasi(f"{Path(path).name} okunamadı — {detay}")
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise VideoOkumaHatasi(
+            f"{Path(path).name}: ffprobe çıktısı JSON değil ({exc})") from exc
+    streams = data.get("streams") if isinstance(data, dict) else None
+    if not isinstance(streams, list):
+        raise VideoOkumaHatasi(
+            f"{Path(path).name}: ffprobe akış listesi döndürmedi")
+    v = next((s for s in streams
+              if isinstance(s, dict) and s.get("codec_type") == "video"), None)
+    if v is None:
+        raise VideoOkumaHatasi(
+            f"{Path(path).name}: video akışı yok (ses/altyazı dosyası olabilir)")
+    fps = _ffprobe_fps(v)
+    if not fps:
+        raise VideoOkumaHatasi(
+            f"{Path(path).name}: kare hızı okunamadı (avg/r_frame_rate 0/0)")
+    duration = _ffprobe_sure(data, v, fps)
+    if duration is None:
+        raise VideoOkumaHatasi(
+            f"{Path(path).name}: süre bilgisi yok — ham akış yerine "
+            f"kapsayıcılı dosya (mp4/mkv) kullanın")
     subs = [{"index": s["index"], "codec": s["codec_name"],
              "lang": s.get("tags", {}).get("language", "?")}
-            for s in data["streams"] if s["codec_type"] == "subtitle"]
-    return {"fps": fps, "duration": float(data["format"]["duration"]),
-            "nb_frames": int(v.get("nb_frames", 0)), "subtitles": subs,
-            "width": v["width"], "height": v["height"]}
+            for s in streams
+            if isinstance(s, dict) and s.get("codec_type") == "subtitle"]
+    return {"fps": fps, "duration": duration,
+            "nb_frames": _ffprobe_sayi(v.get("nb_frames")), "subtitles": subs,
+            "width": _ffprobe_sayi(v.get("width")),
+            "height": _ffprobe_sayi(v.get("height"))}
 
 
 def extract_softsub(path, out_srt, sub_index):
@@ -3822,7 +3909,11 @@ def main(argv=None):
 
     video = Path(args.video)
     out = Path(args.out)
-    info = run_ffprobe(video)
+    try:
+        info = run_ffprobe(video)
+    except VideoOkumaHatasi as exc:
+        # Kullanıcı hatası: traceback değil, tek satırlık net mesaj.
+        sys.exit(f"video okunamadı: {exc}")
     fps = info["fps"]
     print(f"[i] {video.name}: {info['width']}x{info['height']}, "
           f"fps={fps:.5f}, sure={info['duration']:.1f}s, "
