@@ -823,14 +823,17 @@ def run_ffprobe(path):
             "-print_format", "json", "-show_streams", "-show_format", str(path)]
     proc = subprocess.run(
         args,
-        capture_output=True, text=True)
+        capture_output=True)
     if proc.returncode != 0:
-        satirlar = [s for s in (proc.stderr or "").strip().splitlines() if s.strip()]
+        stderr = proc.stderr or b""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        satirlar = [s for s in str(stderr).strip().splitlines() if s.strip()]
         detay = satirlar[-1] if satirlar else "ffprobe sıfırdan farklı kod döndü"
         raise VideoOkumaHatasi(f"{Path(path).name} okunamadı — {detay}")
     try:
         data = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
         raise VideoOkumaHatasi(
             f"{Path(path).name}: ffprobe çıktısı JSON değil ({exc})") from exc
     streams = data.get("streams") if isinstance(data, dict) else None
