@@ -33,11 +33,8 @@ import re
 import sys
 from pathlib import Path
 
-# SRT zaman satiri: 00:00:05,464 --> 00:00:11,637 (virgul VEYA nokta toleransli)
-TIME_RE = re.compile(
-    r'(\d\d):(\d\d):(\d\d)[,.](\d\d\d)\s*-->\s*'
-    r'(\d\d):(\d\d):(\d\d)[,.](\d\d\d)'
-)
+from srt_format import parse_timing_pair
+
 # <i>, </b>, <font color="#fff"> gibi HTML etiketleri
 HTML_TAG_RE = re.compile(r'</?[a-zA-Z][^>]*>')
 
@@ -89,27 +86,36 @@ def ass_time(t) -> str:
     return f'{h}:{m:02d}:{s:02d}.{ms // 10:02d}'
 
 
+def _tuple_ms(ms):
+    """ms -> ASS'nin bekledigi (saat, dakika, saniye, milisaniye) dordulusu."""
+    hours, rest = divmod(ms, 3600000)
+    minutes, rest = divmod(rest, 60000)
+    seconds, millis = divmod(rest, 1000)
+    return (hours, minutes, seconds, millis)
+
+
 def parse_srt(text: str):
     """SRT metnini (baslangic, bitis, [temiz satirlar]) bloklarina ayirir.
 
     Index satirlari atlanir (zaman satirindan onceki her sey), zamansiz /
-    metinsiz bloklar dusurulur.
+    metinsiz bloklar dusurulur. Zaman damgasi kurali srt_format icinde tek
+    yerde tanimlidir; gecersiz dakika/saniye alani olan bloklar dusurulur.
     """
     blocks = []
     for raw in re.split(r'\n\s*\n', text.strip()):
         lines = raw.replace('\r', '').split('\n')
-        tidx = next((i for i, ln in enumerate(lines) if TIME_RE.search(ln)), None)
-        if tidx is None:
+        tidx, pair = None, None
+        for index, line in enumerate(lines):
+            candidate = parse_timing_pair(line, token_edges=True, loose=True,
+                                          full_match=False)
+            if candidate is not None:
+                tidx, pair = index, candidate
+                break
+        if pair is None:
             continue  # zaman satiri yok (index/gurultu) -> atla
-        m = TIME_RE.search(lines[tidx])
-        start = tuple(int(m.group(i)) for i in range(1, 5))
-        end = tuple(int(m.group(i)) for i in range(5, 9))
-        start_ms = ((start[0] * 60 + start[1]) * 60 + start[2]) * 1000 + start[3]
-        end_ms = ((end[0] * 60 + end[1]) * 60 + end[2]) * 1000 + end[3]
-        if start[1] >= 60 or start[2] >= 60 or end[1] >= 60 or end[2] >= 60:
-            continue  # gecersiz dakika/saniye alani
-        if start_ms >= end_ms:
+        if pair[0] >= pair[1]:
             continue  # ASS negatif/sifir sureli event kabul etmez
+        start, end = _tuple_ms(pair[0]), _tuple_ms(pair[1])
         text_lines = [clean_text(ln) for ln in lines[tidx + 1:]]
         text_lines = [ln for ln in text_lines if ln]
         if not text_lines:

@@ -33,6 +33,8 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 
+from srt_format import format_vtt_ms, parse_loose_ms, parse_timing_pair
+
 # ---------------------------------------------------------------------------
 # Levenshtein: rapidfuzz varsa onu kullan, yoksa saf Python yedeği
 # ---------------------------------------------------------------------------
@@ -103,32 +105,13 @@ class Cue:
     index: int   # dosyadaki 0 tabanlı sıra
 
 
-# Saat alanı sınırlıdır (<=9 hane): sınırsız alan int()'te Python'un 4300
-# hanelik dönüşüm sınırına takılıp ValueError fırlatır ve VTT kıyasını
-# traceback ile düşürürdü (bkz. srt_lint/ocr_video_eval aynı sınır).
-_TS_RE = re.compile(r"^\s*(?:(\d{1,9}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*")
-
-
 def parse_ts(s: str):
-    """'HH:MM:SS.mmm' | 'MM:SS.mmm' | 'HH:MM:SS,mmm' -> ms (int) ya da None."""
-    m = _TS_RE.match(s)
-    if not m:
-        return None
-    h = int(m.group(1) or 0)
-    mi = int(m.group(2))
-    se = int(m.group(3))
-    ms = int((m.group(4) + "000")[:3])
-    return ((h * 60 + mi) * 60 + se) * 1000 + ms
+    """VTT/user timestamp; parse only the timestamp prefix before cue settings."""
+    return parse_loose_ms(s)
 
 
 def ms_to_ts(ms) -> str:
-    if ms is None:
-        return "?"
-    ms = int(round(ms))
-    h, ms = divmod(ms, 3600000)
-    mi, ms = divmod(ms, 60000)
-    se, ms = divmod(ms, 1000)
-    return f"{h:02d}:{mi:02d}:{se:02d}.{ms:03d}"
+    return format_vtt_ms(ms)
 
 
 # ---------------------------------------------------------------------------
@@ -192,18 +175,16 @@ def parse_vtt(text: str):
 
 def _read_cue(lines, i, idx):
     """lines[i] '-->' içerir; cue metnini okuyup (Cue, sonraki_satır) döner."""
-    left, _, right = lines[i].partition("-->")
-    st = parse_ts(left)
-    en = parse_ts(right)
+    pair = parse_timing_pair(lines[i], loose=True, full_match=False)
     i += 1
     text_lines = []
     while i < len(lines) and lines[i].strip():
         text_lines.append(lines[i])
         i += 1
     t = normalize(" ".join(text_lines))
-    if st is None or en is None or not t:
+    if pair is None or not t:
         return None, i
-    return Cue(st, en, t, idx), i
+    return Cue(pair[0], pair[1], t, idx), i
 
 
 # ---------------------------------------------------------------------------
@@ -220,13 +201,11 @@ def parse_srt(text: str):
         ti = next((k for k, ln in enumerate(lines) if "-->" in ln), None)
         if ti is None:
             continue
-        left, _, right = lines[ti].partition("-->")
-        st = parse_ts(left)
-        en = parse_ts(right)
+        pair = parse_timing_pair(lines[ti], loose=True, full_match=False)
         t = normalize(" ".join(lines[ti + 1:]))
-        if st is None or en is None or not t:
+        if pair is None or not t:
             continue
-        cues.append(Cue(st, en, t, idx))
+        cues.append(Cue(pair[0], pair[1], t, idx))
         idx += 1
     return cues
 

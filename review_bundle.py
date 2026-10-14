@@ -15,6 +15,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from srt_format import parse_srt_ms
+
 import cv2
 
 
@@ -30,19 +32,14 @@ def _sha256(data: bytes) -> str:
 
 
 def _timestamp_ms(value):
-    """Parse the writer's SRT timestamp without accepting loose input."""
+    """Parse the writer's SRT timestamp without accepting loose input.
+
+    Kural tek yerde: `srt_format.parse_srt_ms` (virgül, tam 3 hane milisaniye,
+    alan sınırları). Yazıcı (`fmt_ts`) her zaman bu biçimi üretir.
+    """
     if not isinstance(value, str):
         return None
-    try:
-        hours, minutes, rest = value.split(":", 2)
-        seconds, millis = rest.split(",", 1)
-        if (not hours.isdigit() or not minutes.isdigit() or
-                not seconds.isdigit() or len(millis) != 3 or not millis.isdigit() or
-                int(minutes) > 59 or int(seconds) > 59):
-            return None
-        return ((int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000 + int(millis))
-    except (ValueError, AttributeError):
-        return None
+    return parse_srt_ms(value)
 
 
 def _matching_writer_clamps(srt_digest, cues, generation_stats):

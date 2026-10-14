@@ -8,28 +8,18 @@ import re
 import sys
 from pathlib import Path
 
+from srt_format import duration_ms, parse_srt_ms
+
 MAX_SRT_BYTES = 64 * 1024 * 1024
 MAX_CUES = 100_000
 MAX_TEXT_CHARS = 4096
 MAX_OVERLAP_PAIRS = 200_000
-TIMESTAMP_RE = re.compile(r"^(\d{2,}):(\d{2}):(\d{2}),(\d{3})$")
 MARKUP_RE = re.compile(r"<[^>]*>|\{\\[^}]*\}")
 
 
 def _timestamp_ms(value: str) -> int | None:
-    match = TIMESTAMP_RE.fullmatch(value.strip())
-    if not match:
-        return None
-    hours_text, minutes_text, seconds_text, millis_text = match.groups()
-    # SRT hours may exceed two digits, but unbounded fields can make int()
-    # raise on Python's digit limit (or consume excessive CPU if it is disabled).
-    if len(hours_text) > 9:
-        return None
-    hours, minutes, seconds, millis = map(
-        int, (hours_text, minutes_text, seconds_text, millis_text))
-    if minutes >= 60 or seconds >= 60:
-        return None
-    return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis
+    """Kural tek yerde: `srt_format.parse_srt_ms` (alan/sınır denetimi orada)."""
+    return parse_srt_ms(value)
 
 
 def parse_srt(raw: bytes, label: str = "SRT") -> tuple[list[dict], list[str]]:
@@ -64,7 +54,7 @@ def parse_srt(raw: bytes, label: str = "SRT") -> tuple[list[dict], list[str]]:
             errors.append(f"{label}: {block_index}. blokta zaman damgası biçimi geçersiz")
             continue
         cue_text = "\n".join(lines[1:]).strip()
-        if start >= end:
+        if duration_ms(start, end) is None:
             errors.append(f"{label}: {block_index}. blokta bitiş başlangıçtan sonra değil")
             continue
         if not cue_text:

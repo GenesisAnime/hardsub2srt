@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import path_scope
+from srt_format import parse_srt_ms
 
 
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
@@ -145,19 +146,6 @@ def _validate_crop_bytes(data: bytes, cue: dict) -> bool:
             image.shape[0] == height and image.shape[2] == 3)
 
 
-def _srt_time_ms(value: str) -> int | None:
-    m = re.fullmatch(r"(\d{2,}):(\d{2}):(\d{2}),(\d{3})", value or "")
-    if not m:
-        return None
-    # SRT hours may exceed two digits, but an unbounded field makes int() raise
-    # on Python's 4300-digit conversion limit. That would escape the pack
-    # validator as a raw ValueError instead of the documented ReviewError, so
-    # bound it exactly like srt_lint and the video-evaluation adapter do.
-    if len(m[1]) > 9 or int(m[2]) > 59 or int(m[3]) > 59:
-        return None
-    return ((int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3])) * 1000 + int(m[4]))
-
-
 def _srt_cues_bytes(data: bytes) -> list[dict]:
     raw = data.decode("utf-8-sig", errors="strict")
     blocks = []
@@ -167,8 +155,9 @@ def _srt_cues_bytes(data: bytes) -> list[dict]:
         if at is None:
             continue
         left, _, right = lines[at].partition("-->")
-        left, right = left.strip(), right.strip().split()[0] if right.strip() else ""
-        start, end = _srt_time_ms(left), _srt_time_ms(right)
+        right_tokens = right.split()
+        start = parse_srt_ms(left)
+        end = parse_srt_ms(right_tokens[0] if right_tokens else None)
         text = "\n".join(lines[at + 1:]).strip()
         if start is None or end is None or not text:
             raise ReviewError("SRT içinde biçimi bozuk bir altyazı bloğu var", 422)
