@@ -1813,6 +1813,31 @@ if (new URLSearchParams(location.search).get("view") === "kalite") panoGoster(tr
 </html>
 """
 
+# ------------------------------------------- istek/yanıt sertleştirmesi ----
+# Rotaların çoğu kendi sınırını koyar (AI OCR/çeviri yanıtı 4 MiB, rubrik
+# puanı 32 KiB...), ama tek tek eksik kalan yollarda gövde sınırsız belleğe
+# alınırdı. Küresel üst sınır tek yerde: en büyük meşru gövde AI yanıtı
+# (4 MiB + JSON kabuğu, bkz. translation_review.MAX_RESPONSE_BYTES + 4096).
+MAX_ISTEK_BAYT = 8 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_ISTEK_BAYT
+
+
+@app.after_request
+def _yerel_yanit_basliklari(response):
+    """Yerel arayüz yanıtlarına MIME koklama/veri sızma koruması ekle.
+
+    ``setdefault`` bilinçli: `send_file` gibi çağrıların kendi Cache-Control
+    değerini ezmiyoruz. CSP eklenmiyor — arayüz tek dosyada satır içi script
+    kullanıyor, kısıtlayıcı bir politika sayfayı kırardı.
+    """
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    if request.path.startswith("/api/"):
+        # API yanıtları yerel durumu (yollar, SRT içeriği, iş günlükleri) taşır.
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
 # ------------------------------------------------------------------ API ----
 @app.get("/")
 def kok():
