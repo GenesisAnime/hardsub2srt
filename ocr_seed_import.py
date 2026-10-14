@@ -26,6 +26,7 @@ from pathlib import Path, PurePosixPath
 
 import cv2
 import numpy as np
+import path_scope
 
 
 SEED_SCHEMA = "hardsub2srt.screenshot-text-example"
@@ -177,8 +178,8 @@ def _strict_relative_image(value: object, seed_root: Path) -> Path:
     _check_no_reparse(path, seed_root)
     try:
         resolved = path.resolve(strict=True)
-        resolved.relative_to(seed_root)
-    except (OSError, ValueError) as exc:
+        path_scope.relative_to(resolved, seed_root)
+    except (OSError, RuntimeError, ValueError) as exc:
         raise ImportError("Kanıt görseli bulunamadı veya seed kökünün dışına çıkıyor") from exc
     if not resolved.is_file() or resolved.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
         raise ImportError("Kanıt görseli normal JPG/PNG dosyası olmalı")
