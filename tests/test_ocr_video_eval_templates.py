@@ -165,9 +165,14 @@ class VideoEvaluationTemplateTests(unittest.TestCase):
                 with self.assertRaises(templates.TemplateError):
                     templates._safe_output_parent(junction / "nested", [])
         finally:
-            if junction.exists() or junction.is_symlink():
+            if junction.is_symlink() and os.name != "nt":
+                junction.unlink()
+            elif junction.exists() or junction.is_symlink():
+                # Windows directory symlinks/junctions are removed with rmdir;
+                # POSIX symlinks use unlink even when their target is a directory.
                 os.rmdir(junction)
 
+    @unittest.skipUnless(os.name == "nt", "Exercises Windows mapped-drive detection")
     def test_resolved_unc_and_remote_drive_are_rechecked_before_directory_access(self):
         with patch.object(templates.Path, "resolve", return_value=Path(r"\\server\share\drafts")):
             with self.assertRaises(templates.TemplateError):
@@ -178,6 +183,7 @@ class VideoEvaluationTemplateTests(unittest.TestCase):
                 templates._safe_output_parent(self.out_parent, [])
         self.assertEqual(drive_type.call_count, 2)
 
+    @unittest.skipUnless(os.name == "nt", "Exercises Windows mapped-drive detection")
     def test_remote_mapped_drive_is_rejected_without_opening_it(self):
         with patch.object(templates, "_windows_drive_type", return_value=templates.DRIVE_REMOTE) as drive_type:
             with self.assertRaises(templates.TemplateError):
