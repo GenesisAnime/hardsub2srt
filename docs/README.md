@@ -1,33 +1,62 @@
 # Doküman haritası
 
-İlk kez kurulum için [Kurulum ve ilk çalıştırma](KURULUM-VE-ILK-CALISTIRMA.md); günlük kullanım için [Kullanım rehberi](KULLANIM-REHBERI.md); hata ayıklama için [Sorun giderme](SORUN-GIDERME.md) ile başlayın.
+**Türkçe [TR]** · [English documentation map](README.en.md) [EN]
 
-## Kullanım ve inceleme
+İlk kurulum için [Kurulum ve ilk çalıştırma](KURULUM-VE-ILK-CALISTIRMA.md) [TR] · günlük işler için [Kullanım rehberi](KULLANIM-REHBERI.md) [TR] · hata çözümü için [Sorun giderme](SORUN-GIDERME.md) [TR] ile başlayın. İngilizce dokümanlar aşağıdaki ayrı bölümde listelenmiştir.
 
-- [Ana README — hızlı başlangıç ve kapsam](../README.md) · [İngilizce README](../README.en.md) [EN]
-- [Review bundle: insan OCR incelemesi](REVIEW-BUNDLE.md) [EN]
-- [Manuel AI OCR görsel incelemesi](AI-OCR-GORSEL-INCELEME.md) [TR]
-- [AI incelemeli OCR seed import](SEED-IMPORT.md) [EN]
-- [Çeviri kalitesi değerlendirmesi](TRANSLATION-EVALUATION.md) [EN]
+## Türkçe dokümanlar [TR]
 
-## Veri ve OCR değerlendirmesi
+### Başlangıç ve kullanım
 
-- [İlk doğrulanmış OCR veri kümesi](FIRST-DATASET-QUICKSTART.md) [TR]
-- [Phase 0 ölçülmüş baseline](LEARNING-SYSTEM-BASELINE.md) [EN]
-- [Phase 5 çevrimdışı deney ve değerlendirme](OCR-OFFLINE-EXPERIMENT.md) [TR/EN — karma dil]
-- [Phase 5 yerel OCR runner](PHASE5-LOCAL-EXECUTION.md) [EN — opt-in, gerçek çalıştırma koşullu]
-- [Phase 6 kontrollü model sürümü](CONTROLLED-MODEL-RELEASE.md) [TR — scaffold, release bloklu]
-- [OCR çalışma süresi alanları](RUN-TIMING.md) [EN]
-
-## Katkı, bakım ve tasarım
-
+- [Ana README — hızlı başlangıç ve kapsam](../README.md) [TR]
+- [Kurulum ve ilk çalıştırma](KURULUM-VE-ILK-CALISTIRMA.md) [TR]
+- [Kullanım rehberi](KULLANIM-REHBERI.md) [TR]
+- [Sorun giderme](SORUN-GIDERME.md) [TR]
 - [Katkı kuralları](../CONTRIBUTING.md) [TR]
-- [OCR regresyonlarını çalıştırma](../regresyon/README-kisa.md) [TR]
-- [İsteğe bağlı katkı API’si](CONTRIBUTION-API.md) [TR — HTTPS, token ve retention yapılandırması gerekir]
-- [Yerel mimari yol haritası](LOCAL-ARCHITECTURE-ROADMAP.md) [TR — tasarım]
-- [Tarayıcı içi OCR port planı](BROWSER-OCR-PORT-PLAN.md) [TR — uygulanmış özellik değil]
-- [Öğrenme sistemi planı](LEARNING-SYSTEM-PLAN.md) [EN — uygulama tasarımı]
-- [Karar kayıtları: Nasıl ve neden](NASIL-VE-NEDEN.md) [TR]
+- [Tarayıcı içi OCR port planı](BROWSER-OCR-PORT-PLAN.md) [TR — plan]
+- [Phase 5 çevrimdışı deney ve değerlendirme](OCR-OFFLINE-EXPERIMENT.md) [TR — ölçüm sözleşmesi]
 - [Öğrenmeler ve tuzaklar](OGRENMELER.md) [TR]
+
+### İnceleme ve veri
+
+- [Manuel AI OCR görsel incelemesi](AI-OCR-GORSEL-INCELEME.md) [TR]
+- [İlk doğrulanmış OCR veri kümesi](FIRST-DATASET-QUICKSTART.md) [TR]
+- [İsteğe bağlı katkı API’si](CONTRIBUTION-API.md) [TR — HTTPS, token ve retention yapılandırması gerekir]
+
+### Tasarım ve bakım
+
+- [OCR regresyonlarını çalıştırma](../regresyon/README-kisa.md) [TR]
+- [Yerel mimari yol haritası](LOCAL-ARCHITECTURE-ROADMAP.md) [TR — tasarım]
+- [Kontrollü model sürümü](CONTROLLED-MODEL-RELEASE.md) [TR — scaffold; release bloklu]
+- [Karar kayıtları: Nasıl ve neden](NASIL-VE-NEDEN.md) [TR]
 - [Geliştirme günlüğü](GELISTIRME-GUNLUGU.md) [TR — tarihsel kayıt]
 - [Topluluk öğrenme tasarımı](../TOPLULUK-OGRENME-TASARIMI.md) [TR — tasarım]
+
+## English documentation [EN]
+
+### Getting started and usage
+
+- [Main README — quick start and scope](../README.en.md) [EN]
+- [Installation and first run](INSTALLATION-AND-FIRST-RUN.md) [EN]
+- [Usage guide](USAGE-GUIDE.md) [EN]
+- [Troubleshooting](TROUBLESHOOTING.md) [EN]
+- [Contribution guidelines](../CONTRIBUTING.en.md) [EN]
+- [AI OCR visual review](AI-OCR-VISUAL-REVIEW.en.md) [EN]
+- [Optional contribution API](CONTRIBUTION-API.en.md) [EN]
+
+### Review and evaluation
+
+- [Review bundle: human OCR review](REVIEW-BUNDLE.md) [EN]
+- [AI-assisted OCR seed import](SEED-IMPORT.md) [EN]
+- [Translation quality evaluation](TRANSLATION-EVALUATION.md) [EN]
+- [Phase 0 measured baseline](LEARNING-SYSTEM-BASELINE.md) [EN]
+- [Phase 5 offline experiment and evaluation](OCR-OFFLINE-EXPERIMENT.en.md) [EN]
+- [Phase 5 local OCR runner](PHASE5-LOCAL-EXECUTION.md) [EN — opt-in; actual execution is conditional]
+- [OCR run-time measurement fields](RUN-TIMING.md) [EN]
+
+### Design and implementation plans
+
+- [OCR and translation learning-system plan](LEARNING-SYSTEM-PLAN.md) [EN — design]
+- [Browser OCR port plan](BROWSER-OCR-PORT-PLAN.en.md) [EN — plan]
+
+Türkçe ve İngilizce belgeler bu haritada ayrı bölümlerde, ayrı dosyalar olarak listelenir. Etiketler dokümanın dilini gösterir; teknik terimler ve kod adları yerleşik biçimlerinde kalır. [English documentation map](README.en.md) [EN]

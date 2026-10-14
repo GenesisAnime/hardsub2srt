@@ -1,5 +1,7 @@
 # Kurulum ve ilk çalıştırma
 
+**Türkçe [TR]** · [English version](INSTALLATION-AND-FIRST-RUN.md) [EN]
+
 Bu depo Windows’u birincil kullanıcı platformu kabul eder. Ubuntu, GitHub Actions’ta Python 3.14 ile test edilir; bu CI, Ubuntu’da tam video/OCR akışının doğrulandığı anlamına gelmez. macOS uçtan uca kullanım bu depoda doğrulanmamıştır.
 
 ## Gerekenler

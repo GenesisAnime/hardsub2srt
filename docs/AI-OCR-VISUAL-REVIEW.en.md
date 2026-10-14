@@ -1,5 +1,7 @@
 # Manual AI OCR visual review
 
+**[Türkçe sürüm](AI-OCR-GORSEL-INCELEME.md) [TR]** · **English [EN]**
+
 This workflow lets a user manually ask GPT, DeepSeek, or another vision-capable AI to review selected crops alongside the initial OCR SRT text, before a human has approved it. The app does not connect to an AI provider or send content over the network. The user adds the downloaded ZIP to a chat of their choice and pastes the AI response into the local UI.
 
 **Sync warning:** the ZIP, private local sidecar, and proposal log are written inside the selected `.review-pack`. The app making no network calls does not prevent a sync client such as OneDrive from uploading these files. For strict local-only handling, **copy** the entire `.review-pack` (including the manifest, SRT, `review-events.jsonl`, and `crops/`) to a non-synced local directory, then open that copy in the UI. Do not move the originals or omit part of the pack.

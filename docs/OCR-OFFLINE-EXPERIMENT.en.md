@@ -1,5 +1,7 @@
 # Phase 5 — local OCR experiment preparation and evaluation contract
 
+**[Türkçe sürüm](OCR-OFFLINE-EXPERIMENT.md) [TR]** · **English [EN]**
+
 ## Current state
 
 `ocr_experiment.py` locally validates the Phase 2 `verified-ocr-dataset-*/manifest.jsonl` export and its separate metadata file. For valid inputs it creates `evaluation-plan-v1.json` before measurement, followed by a hash-bound `split-manifest.json` and `experiment-report.json`. It does not run OCR, train a model, modify the dataset, or access the network. Metadata, plans, splits, and reports are sensitive local files, not shareable packages.

@@ -1,5 +1,7 @@
 # Sorun giderme
 
+**Türkçe [TR]** · [English version](TROUBLESHOOTING.md) [EN]
+
 ## FFmpeg veya FFprobe bulunamıyor
 
 Yeni PowerShell penceresinde:

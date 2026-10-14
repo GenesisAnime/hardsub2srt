@@ -1,5 +1,7 @@
 # Browser OCR port — technical plan and decision gates
 
+**[Türkçe sürüm](BROWSER-OCR-PORT-PLAN.md) [TR]** · **English [EN]**
+
 This is a technical plan, not an implemented feature. It describes how far a pure browser client hosted on GitHub Pages could reproduce work that currently runs locally with Python, FFmpeg, and PyTorch.
 
 ## Technical boundary

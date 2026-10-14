@@ -1,11 +1,15 @@
 # Kullanım rehberi
 
+**Türkçe [TR]** · [English version](USAGE-GUIDE.md) [EN]
+
 ## Altyazı akışını anlama
 
 - **Hardsub:** yazı video karelerine işlenmiştir. ffprobe gömülü bir altyazı akışı bulmazsa araç OCR ile görünen metni okur.
 - **Softsub:** FFprobe gömülü bir altyazı track bulursa araç OCR yapmadan ilk track’i FFmpeg ile SRT’ye dönüştürmeyi dener. Desteklenmeyen codec/container FFmpeg hatası verir; hardsub OCR’a fallback yapılmaz. CLI’de track seçme veya otomatik çeviri yoktur.
 
 Her iki yol da çeviri yapmaz. Hardsub’da OCR, görüntüde okunan metni üretir; softsub’da mevcut altyazı metni çıkarılır. Dil değiştirmek istiyorsanız ayrı bir çeviri iş akışı gerekir.
+
+![Hardsub OCR ve softsub FFmpeg yollarını gösteren akış diyagramı](images/subtitle-extraction-flow.tr.svg)
 
 ## CLI örnekleri
 

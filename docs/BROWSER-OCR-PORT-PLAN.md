@@ -1,5 +1,7 @@
 # Tarayıcı içi OCR portu — teknik plan ve karar kapıları
 
+**Türkçe [TR]** · [English version](BROWSER-OCR-PORT-PLAN.en.md) [EN]
+
 Bu belge uygulanmış bir özellik değildir. GitHub Pages üzerinde çalışan saf tarayıcı istemcisinin, bugün yerel Python/FFmpeg/PyTorch ile yapılan işi ne ölçüde karşılayabileceğini tarif eder.
 
 ## Teknik sınır

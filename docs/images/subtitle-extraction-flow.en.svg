@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" xml:lang="en" lang="en" role="img" aria-labelledby="title desc" viewBox="0 0 1120 560" font-family="Inter, Segoe UI, Arial, sans-serif" fill="#172033">
+  <title id="title">Subtitle extraction flow</title>
+  <desc id="desc">When an embedded subtitle track is found, the softsub path tries to export the first track with FFmpeg. If no track is found, the hardsub path reads text rendered in video frames with OCR. An unsupported softsub codec or container causes an error; there is no OCR fallback. Neither path translates subtitles.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1120" height="560" rx="28" fill="#f8fafc"/>
+  <text x="560" y="54" text-anchor="middle" font-size="28" font-weight="700">How are subtitles extracted to SRT?</text>
+  <rect x="408" y="82" width="304" height="62" rx="16" fill="#e2e8f0"/>
+  <text x="560" y="121" text-anchor="middle" font-size="22" font-weight="650">Video</text>
+  <path class="line" d="M560 144V174"/>
+  <rect x="300" y="183" width="520" height="76" rx="18" fill="#fff" stroke="#94a3b8" stroke-width="2"/>
+  <text x="560" y="216" text-anchor="middle" font-size="19" font-weight="650">Does FFprobe find an embedded subtitle track?</text>
+  <text x="560" y="242" text-anchor="middle" fill="#475569" font-size="15">Only the first track is used; track selection is unavailable.</text>
+  <path d="M430 259C380 287 300 288 270 320" stroke="#475569" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M690 259C740 287 820 288 850 320" stroke="#475569" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <text x="326" y="294" font-size="16" font-weight="650" fill="#6d28d9">Yes · Softsub</text>
+  <text x="765" y="294" font-size="16" font-weight="650" fill="#0369a1">No · Hardsub</text>
+  <rect x="54" y="326" width="482" height="184" rx="22" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="86" y="365" font-size="22" font-weight="750" fill="#6d28d9">Softsub</text>
+  <text x="86" y="400" font-size="18">FFmpeg tries to export the first track to SRT.</text>
+  <rect x="82" y="423" width="426" height="62" rx="13" fill="#fff" stroke="#fca5a5" stroke-width="2"/>
+  <text x="101" y="449" font-size="15" font-weight="700" fill="#b91c1c">Unsupported codec/container</text>
+  <text x="101" y="471" font-size="15" fill="#7f1d1d">returns an error; there is no OCR fallback.</text>
+  <rect x="584" y="326" width="482" height="184" rx="22" fill="#eff6ff" stroke="#38bdf8" stroke-width="2"/>
+  <text x="616" y="365" font-size="22" font-weight="750" fill="#0369a1">Hardsub</text>
+  <text x="616" y="400" font-size="18">OCR reads text rendered into video frames.</text>
+  <rect x="612" y="423" width="426" height="62" rx="13" fill="#fff" stroke="#93c5fd" stroke-width="2"/>
+  <text x="825" y="462" text-anchor="middle" font-size="17" font-weight="650" fill="#1e3a8a">Produces SRT · Does not translate</text>
+  <text x="560" y="542" text-anchor="middle" fill="#475569" font-size="14">OCR reads visible hardsub text; softsub extraction exports existing subtitle text.</text>
+</svg>

@@ -1,5 +1,7 @@
 # Manuel AI OCR görsel incelemesi
 
+**Türkçe [TR]** · [English version](AI-OCR-VISUAL-REVIEW.en.md) [EN]
+
 Bu akış, OCR'ın ilk ürettiği SRT metnini henüz insan onayı yokken seçili kırpımlarla birlikte GPT, DeepSeek veya başka bir görsel okuyabilen AI'ya **elle** inceletmek içindir. Uygulama AI sağlayıcısına bağlanmaz ve hiçbir içeriği ağ üzerinden göndermez. Kullanıcı indirilen ZIP'i kendi seçtiği sohbete ekler; AI yanıtını yerel arayüze kullanıcı yapıştırır.
 
 **Eşitleme uyarısı:** ZIP, özel yerel yan kayıt ve öneri günlüğü seçilen `.review-pack` içine yazılır. Uygulamanın ağ çağrısı yapmaması, OneDrive gibi bir eşitleme istemcisinin bu dosyaları sunucuya eşitlemesini engellemez. Sıkı yerel kullanım istiyorsanız `.review-pack` klasörünün tamamını (manifest, SRT, `review-events.jsonl` ve `crops/` dâhil) eşitlenmeyen yerel bir klasöre **kopyalayın**, ardından arayüzde bu kopyayı açın. Orijinalleri taşımayın veya kopya paket içeriğini eksik bırakmayın.

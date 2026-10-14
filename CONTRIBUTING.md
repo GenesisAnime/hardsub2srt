@@ -1,9 +1,11 @@
 # Katkı kuralları
 
+**Türkçe [TR]** · [English guidelines](CONTRIBUTING.en.md) [EN]
+
 ## Dil ve dokümantasyon
 
-- Kullanıcıya yönelik yeni veya güncellenen dokümantasyonu doğal Türkçe yazın. Yerleşik teknik terimleri İngilizce kullanın: OCR, CLI, GPU, branch, commit, pull request, CI.
-- `README.md` Türkçe ana giriş, `README.en.md` İngilizce giriştir. Mevcut İngilizce teknik dokümanları çevirmeden bırakın; yeni doküman haritasında dilini ve belgenin kullanım kılavuzu mu, tasarım notu mu olduğunu belirtin.
+- Türkçe ve İngilizce dokümantasyonu ayrı dosyalarda tutun; `README.md` Türkçe, `README.en.md` İngilizce ana giriştir. Yeni proje dokümanları varsayılan olarak Türkçe yazılır; talep edilen İngilizce eşleri ayrı dosyada hazırlanır. Yerleşik teknik terimleri İngilizce bırakın: OCR, CLI, GPU, branch, commit, pull request, CI.
+- Doküman haritasında önce `[TR]`, sonra `[EN]` belgeleri listeleyin; dil etiketini her bağlantının yanında gösterin. Uygulama tasarımı, kullanım ve tarihsel kaydı birbirinden ayırın.
 - Uygulanmış davranış, ölçülmüş sonuç, plan ve bloklu işi ayrı ifade edin. Kod, test veya CI kanıtlamıyorsa destek/performans/doğruluk iddiası yazmayın.
 - Komutları ve seçenekleri güncel kaynakla karşılaştırın. Path, kullanıcı adı, medya adı veya makineye özgü bilgiyi örneğe koymayın; yer tutucu ve sentetik veri kullanın.
 

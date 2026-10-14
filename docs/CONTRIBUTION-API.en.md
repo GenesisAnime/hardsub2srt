@@ -1,5 +1,7 @@
 # Optional metrics contribution
 
+**[Türkçe sürüm](CONTRIBUTION-API.md) [TR]** · **English [EN]**
+
 ## Status
 
 The local client and Flask WSGI API code are ready; **they have not been deployed to a VDS and no remote data has been sent**. The API accepts only numeric OCR-run summaries. OCR, video, SRT/VTT, crops, and AI provider calls do not run in this service. GitHub Pages does not host this API.

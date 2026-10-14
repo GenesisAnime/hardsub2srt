@@ -1,6 +1,6 @@
 # hardsub2srt
 
-Videoya işlenmiş hardsub altyazılarını yerel OCR ile zamanlı SRT’ye çıkarır; videodaki gömülü softsub track’lerini ise FFprobe ile bulup FFmpeg kullanarak ilk track üzerinden dışa aktarmayı dener. Desteklenmeyen codec/container hata verir; OCR fallback yapılmaz. **OCR metni okur, çeviri yapmaz.** Ana kullanım Windows ve Python’dır. [İngilizce README](README.en.md) · [Doküman haritası](docs/README.md)
+Videoya işlenmiş hardsub altyazılarını yerel OCR ile zamanlı SRT’ye çıkarır; videodaki gömülü softsub track’lerini ise FFprobe ile bulup FFmpeg kullanarak ilk track üzerinden dışa aktarmayı dener. Desteklenmeyen codec/container hata verir; OCR fallback yapılmaz. **OCR metni okur, çeviri yapmaz.** Ana kullanım Windows ve Python’dır. [Türkçe doküman haritası](docs/README.md) [TR] · [English README](README.en.md) [EN] · [English documentation map](docs/README.en.md) [EN]
 
 ## Hızlı başlangıç
 
@@ -18,6 +18,8 @@ py -3 hardsub2srt.py "D:\LOCAL-ONLY-PLACEHOLDER\input.mkv" -o "D:\LOCAL-ONLY-PLA
 
 - **Hardsub:** Altyazı video karelerinin içine işlenmiştir; araç karelerden metni OCR ile okur.
 - **Softsub:** FFprobe bir altyazı track bulursa araç OCR yapmadan FFmpeg ile ilk track’i SRT’ye dönüştürmeyi dener. Codec/container desteklenmiyorsa FFmpeg hata verir; OCR fallback yapılmaz. Mevcut CLI’de track seçme seçeneği yoktur.
+
+![Hardsub OCR ve softsub FFmpeg yollarını gösteren akış diyagramı](docs/images/subtitle-extraction-flow.tr.svg)
 
 Hardsub OCR çıktısını çevirmez veya metnin doğru olduğunu garanti etmez. Hardsub OCR koşumunda CLI, SRT’nin yanında aynı ada bağlı istatistik ve eşleşme yan dosyaları da yazar; bunlarda video adı, boyut/değişiklik zamanı ve kısmi hash bulunabilir. Paylaşmadan önce yan dosyaları inceleyin.
 
@@ -40,7 +42,9 @@ Arayüzün QA montajı varsayılanı 4 örnektir; 0 ile kapatılır. OCR için C
 
 ## Gizlilik ve AI incelemesi
 
-Video, OCR ve arayüz işlemleri yereldir; program GPT/DeepSeek API’sine bağlanmaz. Kullanıcı isterse seçilen inceleme dosyalarını ZIP olarak indirip kendi seçtiği AI sohbetine elle gönderebilir. AI yanıtı öneridir; görsel OCR kararı veya çeviri belleği kaydı olmak için normal insan onay adımı gerekir. Review-pack SRT ve kare kırpımları içerir; eşitleme klasörlerine kaydedilirse OneDrive gibi araçlar bunları ayrıca senkronize edebilir. İsteğe bağlı `/katki` istemcisi ancak HTTPS hedefi, token ve retention gün sayısı yapılandırıldığında gönderim seçeneğini açar; kullanıcı önizlemeden sonra ayrıca onay verirse payload `duration_seconds`, `speech_seconds`, `frames_scanned`, `cue_count`, `low_conf_count` ve `low_conf_ratio` gibi sayısal metrikleri, `device_class` ve `engine_class` değerlerini, `schema_version` değerini, UUID biçimindeki `submission_id` değerini ve `created_at` zaman damgasını içerebilir. `speech_seconds` ve `low_conf_ratio` isteğe bağlıdır; CER bu UI’de kapalıdır. `frames_scanned` yalnızca sayımdır. Video dosyası, kare görüntüsü, SRT/VTT veya altyazı metni payload’a girmez. Ayrıntılar: [İsteğe bağlı katkı API’si](docs/CONTRIBUTION-API.md).
+Video, OCR ve arayüz işlemleri yereldir; program GPT/DeepSeek API’sine bağlanmaz. Kullanıcı isterse inceleme dosyalarını ZIP olarak indirip seçtiği AI sohbetine elle gönderebilir. AI yanıtı öneridir; OCR kararı veya çeviri belleği kaydı olmadan önce normal insan onayı gerekir. Review pack SRT metni ve kare kırpımları içerir; eşitleme klasörüne kaydedilirse OneDrive gibi araçlar bu dosyaları ayrıca senkronize edebilir.
+
+İsteğe bağlı `/katki` istemcisi yalnız HTTPS hedefi, token ve retention gün sayısı yapılandırıldığında açılır. Gönderimden önce kullanıcı önizlemeyi görür ve ayrıca onay verir. Payload `duration_seconds`, `frames_scanned`, `cue_count`, `low_conf_count`, `device_class`, `engine_class`, `schema_version`, UUID biçimindeki `submission_id` ve `created_at` alanlarını içerebilir. `speech_seconds` ile `low_conf_ratio` isteğe bağlıdır; `frames_scanned` yalnızca sayımdır. CER bu UI’de kapalıdır. Video, görüntü, SRT/VTT veya altyazı metni payload’a girmez. Katkı API’si prototiptir; VDS’ye dağıtılmamış ve uzak gönderim yapılmamıştır. Ayrıntılar: [İsteğe bağlı katkı API’si](docs/CONTRIBUTION-API.md).
 
 ## Destek ve sınırlar
 
