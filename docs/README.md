@@ -5,9 +5,9 @@
 ## Kullanım ve inceleme
 
 - [Ana README — hızlı başlangıç ve kapsam](../README.md) · [İngilizce README](../README.en.md) [EN]
-- [İnsan OCR inceleme paketi](REVIEW-BUNDLE.md) [EN]
+- [Review bundle: insan OCR incelemesi](REVIEW-BUNDLE.md) [EN]
 - [Manuel AI OCR görsel incelemesi](AI-OCR-GORSEL-INCELEME.md) [TR]
-- [AI incelemeli seed içe aktarma](SEED-IMPORT.md) [EN]
+- [AI incelemeli OCR seed import](SEED-IMPORT.md) [EN]
 - [Çeviri kalitesi değerlendirmesi](TRANSLATION-EVALUATION.md) [EN]
 
 ## Veri ve OCR değerlendirmesi
