@@ -41,7 +41,8 @@ class QueueOptionValidationTests(unittest.TestCase):
 
     def _post(self, path, body):
         data = body if isinstance(body, str) else json.dumps(body)
-        return self.client.post(path, base_url=BASE, data=data,
+        headers = {"Host": f"127.0.0.1:{ui_server.PORT}", "Origin": BASE}
+        return self.client.post(path, base_url=BASE, headers=headers, data=data,
                                 content_type="application/json")
 
     def _ekle(self, body):
