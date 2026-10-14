@@ -173,6 +173,46 @@ except Exception as _ogren_hatasi:
 
 app = Flask(__name__)
 
+# Browser-facing mutations in the local UI use one same-origin gate. Checking
+# the Origin header blocks form-compatible cross-site requests as well as JSON
+# fetches; Flask's forced JSON parsing alone is not a CSRF defense.
+LOCAL_MUTATION_PATHS = {
+    "/api/ekle", "/api/iptal", "/api/klasortara", "/api/secim", "/api/ac",
+    "/api/blokkaydet", "/api/ogret",
+}
+
+
+def _local_mutation_source_error():
+    """Reject DNS-rebinding hosts and cross-origin writes to local UI state."""
+    allowed_hosts = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+    raw_host = request.environ.get("HTTP_HOST", "")
+    host = raw_host.lower()
+    if raw_host != raw_host.strip() or any(ch.isspace() for ch in raw_host) or host not in allowed_hosts:
+        return jsonify({"hata": "Yerel değişiklik yalnız localhost veya 127.0.0.1 üzerinden kullanılabilir"}), 403
+    origin = request.headers.get("Origin")
+    if not origin:
+        referer = request.headers.get("Referer", "")
+        if referer:
+            try:
+                parsed_referer = urlsplit(referer)
+                origin = f"{parsed_referer.scheme}://{parsed_referer.netloc}"
+            except ValueError:
+                origin = ""
+    try:
+        parsed = urlsplit(origin or "")
+        valid_origin = (
+            parsed.scheme.lower() == "http" and parsed.netloc.lower() == host
+            and parsed.hostname is not None
+            and parsed.hostname.lower() in {"localhost", "127.0.0.1"}
+            and parsed.port == PORT and parsed.username is None and parsed.password is None
+            and parsed.path in ("", "/") and not parsed.query and not parsed.fragment
+        )
+    except ValueError:
+        valid_origin = False
+    if not valid_origin:
+        return jsonify({"hata": "Yerel değişiklik için aynı kaynak gerekli"}), 403
+    return None
+
 
 @app.before_request
 def _reject_non_loopback_hosts():
@@ -250,6 +290,10 @@ def _guard_local_translation_memory():
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not (
                 request.headers.get("Origin") or request.headers.get("Referer")):
             return jsonify({"hata": "Kalite kaydı için aynı localhost kaynağı gerekli"}), 403
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path in LOCAL_MUTATION_PATHS:
+        error = _local_mutation_source_error()
+        if error:
+            return error
     if request.path.startswith("/api/katki/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         host = request.environ.get("HTTP_HOST", "").lower()
         if host not in {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}:
