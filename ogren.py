@@ -65,7 +65,10 @@ _TR_LOW = str.maketrans("Iİ", "ıi")
 _KELIME_RE = re.compile(r"^([^A-Za-zçğıöşüÇĞİÖŞÜ0-9]*)([A-Za-zçğıöşüÇĞİÖŞÜ]+)"
                         r"([^A-Za-zçğıöşüÇĞİÖŞÜ0-9]*)$")
 _HARF_RE = re.compile(r"[A-Za-zçğıöşüÇĞİÖŞÜ]")
-_TS_RE = re.compile(r"^\s*(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*$")
+# Saat alanı sınırlıdır (<=9 hane): sınırsız alan int()'te Python'un 4300
+# hanelik dönüşüm sınırına takılıp ValueError fırlatır ve "Kaydet = öğren"
+# turunu traceback ile düşürürdü (bkz. srt_lint/ocr_video_eval aynı sınır).
+_TS_RE = re.compile(r"^\s*(?:(\d{1,9}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*$")
 
 _FREK = {"sozluk": None, "kaynak": None}
 

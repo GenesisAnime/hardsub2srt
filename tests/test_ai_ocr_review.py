@@ -139,6 +139,79 @@ class AiOcrReviewTests(unittest.TestCase):
             with self.assertRaises(ocr_review.ReviewError):
                 ai_ocr_review.create_package(self.review_id, selection)
 
+    def _outer_response_body(self, response):
+        return json.dumps({"review_id": self.review_id, "response": response},
+                          ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    def _new_response_template(self):
+        ai_ocr_review.create_package(self.review_id, [self.cue["cue_id"]])
+        sidecar = next((self.pack / "ai-ocr-review").glob("*.local.json"))
+        request_id = sidecar.stem.removesuffix(".local")
+        template = {"schema_version": 1, "request_id": request_id,
+                    "cues": [{"cue_id": self.cue["cue_id"], "start_ms": 1000,
+                              "end_ms": 2000, "status": "uncertain",
+                              "observed_text": "", "proposed_text": None,
+                              "reason": "synthetic valid response"}]}
+        return self.make_response(template, "uncertain")
+
+    def test_api_rejects_oversized_raw_body_without_content_length_before_writing(self):
+        response_doc = self._new_response_template()
+        row = response_doc["cues"][0]
+        row.update({"status": "correction_proposed", "observed_text": "o" * 20_000,
+                    "proposed_text": "p" * 20_000, "reason": "r" * 4_000})
+        response_doc["cues"] = [dict(row) for _ in range(ai_ocr_review.MAX_CUES)]
+        body = self._outer_response_body(response_doc)
+        self.assertGreater(len(body), ai_ocr_review.MAX_RESPONSE_BYTES)
+        artifacts_before = {path.name for path in (self.pack / "ai-ocr-review").iterdir()}
+
+        response = ui_server.app.test_client().post(
+            "/api/ai-ocr-gorsel/yanit", base_url="http://127.0.0.1:8765",
+            headers={"Origin": "http://127.0.0.1:8765",
+                     "Content-Type": "application/json"},
+            data=body, environ_overrides={"CONTENT_LENGTH": "",
+                                          "wsgi.input_terminated": True},
+        )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertIn("4 MiB", response.get_json()["hata"])
+        self.assertFalse((self.pack / "ai-ocr-review" / "proposals.jsonl").exists())
+        self.assertFalse((self.pack / "review-events.jsonl").exists())
+        self.assertEqual({path.name for path in (self.pack / "ai-ocr-review").iterdir()},
+                         artifacts_before)
+
+    def test_api_accepts_valid_json_at_exact_raw_body_limit(self):
+        response_doc = self._new_response_template()
+        body = self._outer_response_body(response_doc)
+        limit = ai_ocr_review.MAX_RESPONSE_BYTES
+        self.assertLess(len(body), limit)
+        body += b" " * (limit - len(body))
+        self.assertEqual(len(body), limit)
+
+        response = ui_server.app.test_client().post(
+            "/api/ai-ocr-gorsel/yanit", base_url="http://127.0.0.1:8765",
+            headers={"Origin": "http://127.0.0.1:8765",
+                     "Content-Type": "application/json"}, data=body,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"ok": True, "duplicate": False, "imported": 1})
+        proposals = self.pack / "ai-ocr-review" / "proposals.jsonl"
+        self.assertTrue(proposals.is_file())
+        self.assertEqual(len(proposals.read_text(encoding="utf-8").splitlines()), 1)
+        self.assertFalse((self.pack / "review-events.jsonl").exists())
+
+    def test_api_rejects_empty_and_non_object_json_without_writing(self):
+        client = ui_server.app.test_client()
+        for body in (b"", b"[]", b"null", b"not-json"):
+            with self.subTest(body=body[:16]):
+                response = client.post(
+                    "/api/ai-ocr-gorsel/yanit", base_url="http://127.0.0.1:8765",
+                    headers={"Origin": "http://127.0.0.1:8765",
+                             "Content-Type": "application/json"}, data=body,
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertFalse((self.pack / "ai-ocr-review" / "proposals.jsonl").exists())
+
     def test_local_api_exposes_manual_package_and_proposal_status(self):
         client = ui_server.app.test_client()
         page = client.get("/ocr-inceleme").get_data(as_text=True)
