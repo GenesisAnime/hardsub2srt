@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -73,7 +74,12 @@ class ContributionClientAndUiTests(unittest.TestCase):
         local_only_flow = render_flow[render_flow.index("localButton.onclick="):render_flow.index("if(record.destination_host!==destinationHost)")]
         self.assertIn("removeRetraction(record.submission_id)", local_only_flow)
         self.assertNotIn("/api/katki/sil", local_only_flow)
-        self.assertNotIn("localStorage", page[page.index("<label><input type=\"checkbox\" id=\"consent\""):page.index("</label>")])
+        consent_label = next((match.group(0) for match in re.finditer(
+            r"<label\b[^>]*>.*?</label>", page, flags=re.IGNORECASE | re.DOTALL)
+            if re.search(r"<input\b[^>]*\bid=[\"']consent[\"']", match.group(0),
+                         flags=re.IGNORECASE)), None)
+        self.assertIsNotNone(consent_label, "consent checkbox must remain inside a label")
+        self.assertNotIn("localStorage", consent_label)
 
     def test_destination_hostname_is_script_escaped_before_inline_javascript(self):
         with patch.dict(os.environ, {

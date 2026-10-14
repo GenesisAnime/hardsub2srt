@@ -73,7 +73,7 @@ import threading
 import time
 import tempfile
 import uuid
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -82,6 +82,72 @@ import path_scope
 from srt_format import format_srt_ms, normalise_srt_text, parse_timing_pair
 
 KLASOR = Path(__file__).resolve().parent
+if os.name == "nt":
+    _H2S_LOCAL_ROOT = Path(os.environ.get("LOCALAPPDATA") or
+                           (Path.home() / "AppData" / "Local"))
+else:
+    _H2S_LOCAL_ROOT = Path(os.environ.get("XDG_STATE_HOME") or
+                           (Path.home() / ".local" / "state"))
+APP_LOCAL_DIR = _H2S_LOCAL_ROOT / "hardsub2srt"
+
+
+def _seed_review_storage_roots():
+    """Return a short, profile-scoped set of Local AppData roots.
+
+    Packaged Windows launchers can virtualize LOCALAPPDATA for a child
+    process. The per-user Shell Folders registry value gives the canonical
+    Local AppData path; environment-derived paths remain a fallback. This
+    deliberately checks only these known roots, never searches the disk.
+    """
+    roots = []
+    raw_roots = []
+    if os.name == "nt":
+        try:
+            import winreg
+            for subkey in (
+                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"):
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+                        value, _kind = winreg.QueryValueEx(key, "Local AppData")
+                    if isinstance(value, str) and value.strip():
+                        raw_roots.append(os.path.expandvars(value.strip()))
+                except OSError:
+                    continue
+        except ImportError:
+            pass
+    raw_roots.extend((str(_H2S_LOCAL_ROOT), str(APP_LOCAL_DIR.parent)))
+    seen = set()
+    for raw in raw_roots:
+        try:
+            local_root = Path(raw).expanduser()
+            text = os.fspath(local_root)
+            if (not local_root.is_absolute() or text.startswith(("\\\\", "//")) or
+                    any(part in (".", "..") for part in local_root.parts)):
+                continue
+            app_root = local_root / "hardsub2srt"
+            key = os.path.normcase(os.path.abspath(os.fspath(app_root)))
+            if key not in seen:
+                seen.add(key)
+                roots.append(app_root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    if not roots:
+        roots.append(APP_LOCAL_DIR)
+    return roots
+
+
+def _seed_review_storage_catalog():
+    """Pick the first known Local AppData root containing validated seed packs."""
+    import ocr_seed_import
+    roots = _seed_review_storage_roots()
+    for root in roots:
+        packs = ocr_seed_import.list_seed_review_packs(root)
+        if packs:
+            return root, packs
+    return roots[0], []
+
+
 ARAC = KLASOR / "hardsub2srt.py"
 SRT2ASS = KLASOR / "srt2ass.py"
 VTT_QA = KLASOR / "vtt-qa.py"
@@ -907,7 +973,7 @@ main{padding:14px 18px 40px;display:grid;gap:14px;
   header h1{font-size:15px}
   header .klasor{order:4;flex-basis:100%;max-width:100%}
   #baglanti{margin-left:auto}
-  .app-nav{order:5;flex-basis:100%;overflow:visible;flex-wrap:wrap}
+  .app-nav{order:5;flex-basis:100%;overflow-x:auto;flex-wrap:nowrap}
   .app-nav a{white-space:nowrap;padding:6px 8px;font-size:12px}
   main{padding:10px 10px 28px;gap:10px}
   .kart{padding:12px}
@@ -923,8 +989,8 @@ main{padding:14px 18px 40px;display:grid;gap:14px;
 .kart{background:var(--panel);border:1px solid var(--cizgi);
   border-radius:10px;padding:14px}
 .queue-card{align-self:start;min-width:0}
-.kart h2{font-size:14px;margin:0 0 10px;color:var(--mavi);
-  text-transform:uppercase;letter-spacing:.4px}
+.kart h2{font-size:16px;margin:0 0 10px;color:var(--metin);
+  text-transform:none;letter-spacing:0;font-weight:650}
 label{font-size:12px;color:var(--soluk);display:block;margin:8px 0 3px}
 textarea,input[type=text],input[type=number]{
   width:100%;background:#0f1218;color:var(--metin);border:1px solid var(--cizgi);
@@ -1016,7 +1082,7 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
 .tarama label{display:flex;gap:7px;align-items:center;margin:3px 0;
   color:var(--metin);font-size:12px;font-family:Consolas,monospace}
 .bos{color:var(--soluk);font-size:13px;padding:10px 4px}
-.summary-row{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;color:var(--mavi);font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.summary-row{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;color:var(--metin);font-size:15px;font-weight:650;text-transform:none;letter-spacing:0}
 .summary-row .kucuk{font-weight:400;text-transform:none;letter-spacing:0}
 .summary-row:focus-visible{outline:2px solid #78aaff;outline-offset:3px}
 .view-production-hidden{display:none!important}
@@ -1054,6 +1120,13 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
 .incele-metin{font:13px/1.5 Consolas,monospace;white-space:pre-wrap;
   word-break:break-word}
 .pano-dusuk{background:#2a1618}
+#pano-video-association{margin:8px 0;padding:10px;border:1px solid var(--cizgi);
+  border-radius:8px;background:#171b24}
+#pano-video-preview{display:block;width:100%;max-height:32vh;margin-top:8px;
+  background:#05070b}
+#pano-video-status{overflow-wrap:anywhere}
+main.quality-view #kuyruk-kart{grid-column:1/-1}
+.quality-view .empty-state{min-height:54px}
 </style>
 </head>
 <body>
@@ -1205,8 +1278,18 @@ th{color:var(--soluk);font-weight:600;font-size:11px;text-transform:uppercase}
       <button class="ikincil" style="margin-left:auto" onclick="inceleKapat()">Kapat</button>
     </div>
     <div id="incele-banner"></div>
-    <div class="kucuk">Pano incelemesi salt-okunurdur — düzenleme kuyruktaki
-      işin "İncele" / "Kontrol Et" panelinden yapılır.</div>
+    <div id="incele-yardim" class="kucuk">Pano incelemesi salt-okunurdur — düzenleme kuyruktaki
+      işin "İncele" / "Kontrol Et" panelinden yapılır. Bu tarihsel görünümde
+      kaynak video, koşu kimliğiyle yerel olarak eşleştirilirse açılır; seed görseli
+      yalnız birebir eşleşme bulunursa açılır.</div>
+    <div id="pano-video-association" style="display:none">
+      <label for="pano-video-file">Bu koşunun kaynak videosunu seçin. Ad, boyut ve ilk 1 MiB özeti yalnız tarayıcıda doğrulanır; video sunucuya gönderilmez.</label>
+      <input id="pano-video-file" type="file" accept="video/*,.mkv,.avi"
+             onchange="panoYerelVideoDogrula(this.files && this.files[0])">
+      <div id="pano-video-status" class="kucuk" role="status" aria-live="polite"></div>
+      <video id="pano-video-preview" controls playsinline preload="metadata" style="display:none"
+             aria-label="Kimliği doğrulanmış yerel kaynak video önizlemesi"></video>
+    </div>
     <div id="incele-bloklar"></div>
   </div>
 </div>
@@ -1542,6 +1625,88 @@ function confCip(b, thr){
   return '<span class="conf-cip ' + cls + '">conf ' + b.conf.toFixed(2) + "</span>";
 }
 
+function panoGorselKontrol(block){
+  let controls = "";
+  const seconds = srtSaniye(block.start);
+  if (PANO_VIDEO_IDENTITY && seconds !== null)
+    controls += '<button class="ikincil pano-local-seek" type="button" disabled data-video-seconds="' +
+      seconds.toFixed(3) + '" title="Önce bu koşunun yerel videosunu seçip doğrulayın; dosya sunucuya gönderilmez." onclick="panoYerelVideodaAc(this)">Videoyu açmak için video seçin</button>';
+  else
+    controls += '<button class="ikincil" type="button" disabled title="Bu koşuda doğrulanabilir video kimliği yok.">Video yok</button>';
+  if (block.evidence_url)
+    controls += '<a href="' + escapeHtml(block.evidence_url) + '" target="_blank" rel="noopener">Görsel kanıtı aç</a>';
+  else
+    controls += '<button class="ikincil" type="button" disabled title="Bu blok için tam eşleşen seed görseli yok.">Görsel yok</button>';
+  return '<span class="e-actions">' + controls + '</span>';
+}
+
+function panoYerelVideoTemizle(){
+  PANO_LOCAL_VIDEO_CHECK++;
+  PANO_LOCAL_VIDEO_FILE = null;
+  if (PANO_LOCAL_VIDEO_URL) URL.revokeObjectURL(PANO_LOCAL_VIDEO_URL);
+  PANO_LOCAL_VIDEO_URL = null;
+  const input = $("pano-video-file"), video = $("pano-video-preview");
+  if (input) input.value = "";
+  if (video){ video.pause(); video.onerror = null; video.removeAttribute("src"); video.load(); video.style.display = "none"; }
+  document.querySelectorAll("#incele-bloklar .pano-local-seek").forEach(button => {
+    button.disabled = true; button.textContent = "Videoyu açmak için video seçin";
+  });
+}
+
+async function panoYerelVideoDogrula(file){
+  panoYerelVideoTemizle();
+  const check = PANO_LOCAL_VIDEO_CHECK;
+  const status = $("pano-video-status"), identity = PANO_VIDEO_IDENTITY;
+  const container = $("pano-video-association"), input = $("pano-video-file");
+  if (container) container.style.display = "";
+  if (input) input.disabled = !identity;
+  if (!identity){
+    if (status) status.textContent = "Bu tarihsel koşunun stats verisinde doğrulanabilir kaynak video kimliği yok; yerel video açma kullanılamıyor.";
+    return;
+  }
+  if (!file){ if (status) status.textContent = "Videoyu açmak için bu koşuya ait yerel video dosyasını seçin."; return; }
+  if (status) status.textContent = "Dosya adı, boyutu ve ilk 1 MiB özeti bu tarayıcıda doğrulanıyor…";
+  try{
+    if (!globalThis.crypto?.subtle || typeof file.slice !== "function")
+      throw Error("Bu tarayıcı güvenli SHA-1 dosya özeti hesabını desteklemiyor.");
+    if (String(file.name).toLocaleLowerCase("en-US") !== String(identity.ad).toLocaleLowerCase("en-US"))
+      throw Error("Dosya adı bu koşunun video kimliğiyle eşleşmiyor.");
+    if (file.size !== identity.boyut) throw Error("Dosya boyutu bu koşunun video kimliğiyle eşleşmiyor.");
+    const firstMiB = await file.slice(0, 1024 * 1024).arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-1", firstMiB);
+    const sha1 = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2,"0")).join("");
+    if (check !== PANO_LOCAL_VIDEO_CHECK) return;
+    if (sha1.toLowerCase() !== String(identity.sha1_ilk_1MB).toLowerCase())
+      throw Error("Dosyanın ilk 1 MiB SHA-1 özeti eşleşmiyor.");
+    const objectUrl = URL.createObjectURL(file);
+    PANO_LOCAL_VIDEO_FILE = file; PANO_LOCAL_VIDEO_URL = objectUrl;
+    const video = $("pano-video-preview");
+    video.src = objectUrl; video.style.display = "block";
+    video.onerror = () => { if (check === PANO_LOCAL_VIDEO_CHECK && status) status.textContent = "Kimlik eşleşti ancak bu tarayıcı video biçimini/kodeğini oynatamıyor."; };
+    if (status) status.textContent = "Video eşleşti. Dosya adı, boyut ve ilk 1 MiB doğrulandı. Video verisi sunucuya gönderilmedi.";
+    document.querySelectorAll("#incele-bloklar .pano-local-seek").forEach(button => { button.disabled = false; button.textContent = "Videoda aç"; });
+  }catch(e){
+    if (check !== PANO_LOCAL_VIDEO_CHECK) return;
+    PANO_LOCAL_VIDEO_FILE = null;
+    if (status) status.textContent = "Yerel video doğrulanamadı: " + e.message;
+  }
+}
+
+function panoYerelVideodaAc(button){
+  if (!PANO_LOCAL_VIDEO_FILE || !PANO_LOCAL_VIDEO_URL) return;
+  const video = $("pano-video-preview"), status = $("pano-video-status");
+  const seconds = Number(button.dataset.videoSeconds);
+  if (!Number.isFinite(seconds) || seconds < 0) return;
+  const seekAndPlay = () => {
+    if (!PANO_LOCAL_VIDEO_FILE || !PANO_LOCAL_VIDEO_URL) return;
+    video.currentTime = Math.min(seconds, Math.max(0, video.duration || seconds));
+    video.scrollIntoView({behavior:"smooth",block:"nearest"}); video.focus({preventScroll:true});
+    video.play().catch(() => { if (status) status.textContent = "Blok zamanı hazırlandı; oynatmak için Oynat'a basın."; });
+  };
+  if (video.readyState >= 1) seekAndPlay();
+  else video.addEventListener("loadedmetadata", seekAndPlay, {once:true});
+}
+
 async function editorAc(isId, kontrol){
   try{
     const j = await api((kontrol ? "/api/kontrol" : "/api/bloklar") +
@@ -1662,9 +1827,15 @@ async function ogret(k){
 // --- toplu kalite panosu (v1.3) --------------------------------------------
 let PANO_ACIK = false;
 let PANO_KLASOR = "";
+let PANO_VIDEO_IDENTITY = null;
+let PANO_LOCAL_VIDEO_FILE = null;
+let PANO_LOCAL_VIDEO_URL = null;
+let PANO_LOCAL_VIDEO_CHECK = 0;
 
 function panoGoster(acik){
   PANO_ACIK = Boolean(acik);
+  const main = document.querySelector("main");
+  if (main) main.classList.toggle("quality-view", PANO_ACIK);
   document.querySelectorAll(".view-production").forEach(s =>
     s.classList.toggle("view-production-hidden", PANO_ACIK));
   // Kuyruk ana iş akışının parçası olarak kalite görünümünde de görünür kalır.
@@ -1756,9 +1927,25 @@ function panoCiz(j){
 }
 
 async function inceleAc(statsRel, ad){
+  panoYerelVideoTemizle();
+  PANO_VIDEO_IDENTITY = null;
   try{
     const j = await api("/api/pano/incele?stats=" + encodeURIComponent(statsRel) +
                         "&klasor=" + encodeURIComponent(PANO_KLASOR));
+    const identity = j.video_identity;
+    PANO_VIDEO_IDENTITY = identity && typeof identity.ad === "string" &&
+      Number.isSafeInteger(identity.boyut) && identity.boyut > 0 &&
+      /^[a-f0-9]{40}$/i.test(String(identity.sha1_ilk_1MB || ""))
+        ? identity : null;
+    const videoContainer = $("pano-video-association");
+    const videoInput = $("pano-video-file");
+    const videoStatus = $("pano-video-status");
+    videoContainer.style.display = "";
+    videoInput.disabled = !PANO_VIDEO_IDENTITY;
+    videoStatus.textContent = PANO_VIDEO_IDENTITY
+      ? "Beklenen kaynak: " + PANO_VIDEO_IDENTITY.ad + " · " +
+        PANO_VIDEO_IDENTITY.boyut.toLocaleString("tr-TR") + " bayt. Seçilen dosya tarayıcıda doğrulanır; içerik sunucuya yüklenmez."
+      : (j.video_unavailable_reason || "Bu tarihsel koşuda doğrulanabilir kaynak video kimliği yok.");
     $("incele-ad").textContent = ad + " · " + j.bloklar.length + " blok";
     $("incele-durum").textContent = "eşik conf<" + (j.conf_thr ?? 0.75) +
       (j.bloklar_var ? " · düşük: " + j.bloklar.filter(b => b.dusuk).length
@@ -1769,7 +1956,7 @@ async function inceleAc(statsRel, ad){
       '<div class="e-blok' + (b.dusuk ? " e-dusuk" : "") + '">' +
       '<div class="e-zaman"><span>#' + ((b.index ?? -1) + 1) + " · " +
       escapeHtml(b.start || "?") + " → " + escapeHtml(b.end || "?") + "</span>" +
-      confCip(b, j.conf_thr) + "</div>" +
+      confCip(b, j.conf_thr) + panoGorselKontrol(b) + "</div>" +
       '<div class="incele-metin">' + escapeHtml(b.metin) + "</div></div>").join("");
     if (j.ekran && j.ekran.length){
       h += '<div class="kucuk" style="margin-top:8px">Ayrılan (_ekran.srt) bloklar — ' +
@@ -1783,10 +1970,19 @@ async function inceleAc(statsRel, ad){
     }
     $("incele-bloklar").innerHTML = h;
     $("incele-kapla").classList.add("acik");
-  }catch(e){ alert("İnceleme hatası: " + e.message); }
+  }catch(e){
+    PANO_VIDEO_IDENTITY = null;
+    $("pano-video-association").style.display = "none";
+    alert("İnceleme hatası: " + e.message);
+  }
 }
 
-function inceleKapat(){ $("incele-kapla").classList.remove("acik"); }
+function inceleKapat(){
+  $("incele-kapla").classList.remove("acik");
+  PANO_VIDEO_IDENTITY = null;
+  panoYerelVideoTemizle();
+  $("pano-video-association").style.display = "none";
+}
 
 async function poll(){
   try{
@@ -1866,13 +2062,12 @@ def katki_sayfasi():
                    .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
     html = r'''<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>İsteğe bağlı ölçüm katkısı</title><style>
-:root{color-scheme:dark}*{box-sizing:border-box}body{max-width:1000px;margin:0 auto;padding:0 18px;background:#12141a;color:#dde3f0;font:15px/1.55 "Segoe UI",system-ui,sans-serif}header{position:sticky;top:0;z-index:2;margin:0 -18px;padding:10px 18px;background:#151822;border-bottom:1px solid #2c3345;display:flex;align-items:center;gap:14px;flex-wrap:wrap}.brand{font-weight:700;color:#dde3f0;text-decoration:none}.app-nav{display:flex;gap:4px;flex-wrap:wrap}.app-nav a{color:#8b94ab;text-decoration:none;border-radius:6px;padding:7px 10px;font-size:13px;font-weight:650}.app-nav a:hover{background:#222a3a;color:#dde3f0}.app-nav a[aria-current="page"]{background:#243758;color:#a9c9ff}#queue-status{margin-left:auto;color:#a7b5ce;font-size:12px}#queue-status a{background:none;color:#a9c9ff;padding:0}main{padding:20px 0}a,button{color:#fff;background:#315fae;border:0;border-radius:6px;padding:9px 13px;cursor:pointer}input,select,pre{max-width:100%;background:#0e1016;color:#dde3f0;border:1px solid #394158;border-radius:6px;padding:10px}pre{white-space:pre-wrap;overflow-wrap:anywhere}.muted{color:#9aa6bd}.warn{color:#efbd66}button:disabled{opacity:.45;cursor:not-allowed}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #85b1ff;outline-offset:2px}
-ul.contribution-list{padding-left:22px}ul.contribution-list li{margin:10px 0;overflow-wrap:anywhere}ul.contribution-list button{margin:6px 6px 0 0}@media(max-width:600px){body{padding:0 12px}header{margin:0 -12px;padding:10px 12px;gap:8px}.app-nav{flex-basis:100%;overflow:visible;flex-wrap:wrap}.app-nav a{white-space:nowrap;padding:6px 8px;font-size:12px}#queue-status{margin-left:auto}main{padding:14px 0}}
-</style><header><a class="brand" href="/">Hardsub2srt</a><nav class="app-nav" aria-label="Ana gezinme"><a href="/">Üretim</a><a href="/ocr-inceleme">İnceleme</a><a href="/?view=kalite">Kalite ve öğrenme</a><a href="/katki" aria-current="page">İsteğe bağlı katkı</a></nav><span id="queue-status" role="status" aria-live="polite"><a href="/#kuyruk-kart">Kuyruk durumu yükleniyor…</a></span></header><main><h1>İsteğe bağlı ölçüm katkısı</h1><p>Bu özellik varsayılan olarak kapalıdır. Önizleme oluşturmak ağ isteği göndermez. Yalnızca onaydan sonra, gösterilen sayısal ölçümler yapılandırılmış HTTPS hedefine gönderilir. Video, kırpım, SRT/VTT metni, dosya adı/yolu ve kullanıcı adı gönderilmez. GPT/DeepSeek API’si kullanılmaz.</p>
-<p id="config" class="warn"></p><label for="job">Tamamlanan yerel OCR işi</label><select id="job"></select> <button id="preview">Önizlemeyi oluştur</button>
-<h2>Gönderilecek alanların önizlemesi</h2><pre id="payload">Henüz önizleme yok.</pre><p class="muted">Sunucu, katkı satırında bearer token'ın özetini tutar; aynı token ile yapılan gönderimler bu özet üzerinden ilişkilendirilebilir. Özet token başına hız sınırı ve aynı token sahibinin silme yetkisi için kullanılır. Katkı kayıtları token'a göre değil alım yaşına göre, yukarıda belirtilen süre sonunda silinir. Ham token saklanmaz. Son 100 gönderimin silme kimliği bu tarayıcıda yerel olarak tutulur; payload ve token localStorage'a yazılmaz.</p>
-<label><input type="checkbox" id="consent"> Önizlemedeki sayısal ölçümlerin yukarıdaki HTTPS hedefine, belirtilen en fazla __RETENTION__ süreyle gönderilmesini ve aynı token ile yapılan gönderimlerin ilişkilendirilebilir olmasını bu gönderim için onaylıyorum.</label><p><button id="send" disabled>Onayla ve gönder</button> <a href="/">Arayüze dön</a></p><p id="status" role="status"></p>
-<h2>Gönderimlerim ve silme</h2><p class="muted">Silme için aynı HTTPS hedefi ve token yapılandırılmış olmalı. Sunucu 404 verirse kayıt silinmez: bu, saklama süresinin dolması veya token uyuşmazlığı anlamına gelebilir. Eski bir kimliği yalnız tarayıcı listesinden kaldırmak için ayrı düğmeyi kullanın. Saklama süresi dolunca sunucu kaydı otomatik temizlenir.</p><ul id="retractions" class="contribution-list"></ul></main>
+:root{color-scheme:dark}*{box-sizing:border-box}body{max-width:100%;margin:0;padding:0 18px;background:#12141a;color:#dde3f0;font:14px/1.5 "Segoe UI",system-ui,sans-serif}header{position:sticky;top:0;z-index:5;margin:0 -18px;padding:10px 18px;background:#151822;border-bottom:1px solid #2c3345;display:flex;align-items:center;gap:12px;flex-wrap:wrap}.brand{font-size:17px;font-weight:650;color:#dde3f0;text-decoration:none;white-space:nowrap}.app-nav{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.app-nav a{background:transparent;border:0;border-radius:6px;color:#8b94ab;text-decoration:none;padding:7px 10px;font-size:13px;font-weight:600}.app-nav a:hover{background:#222a3a;color:#dde3f0}.app-nav a[aria-current="page"]{background:#243758;color:#a9c9ff}#queue-status{margin-left:auto;color:#a7b5ce;font-size:12px}#queue-status a{background:none;color:#a9c9ff;padding:0;text-decoration:none}main{max-width:1200px;margin:20px auto 42px;padding:0;display:grid;gap:14px}main h1{margin:0 0 8px;font-size:24px;line-height:1.2}main h2{margin:0 0 10px;font-size:17px;color:#dde3f0}.page-intro p{max-width:920px;margin:6px 0;color:#b5bfd2}.contribution-card{min-width:0;padding:16px;border:1px solid #2c3345;border-radius:10px;background:#1b1f29}.contribution-card p{margin:8px 0}.job-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;margin-bottom:14px}.job-picker label{display:block;margin:0 0 4px;color:#a7b5ce;font-size:12px}.job-picker select{width:100%}a,button{color:#fff;background:#315fae;border:0;border-radius:6px;padding:9px 13px;cursor:pointer;font:inherit;font-weight:600;text-decoration:none}a.action-link{display:inline-flex;align-items:center}input,select,pre{max-width:100%;background:#0e1016;color:#dde3f0;border:1px solid #394158;border-radius:6px;padding:10px;font:inherit}pre{max-height:300px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.muted{color:#9aa6bd}.warn{color:#efbd66}button:disabled{opacity:.45;cursor:not-allowed}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #85b1ff;outline-offset:2px}.consent-box{display:flex;align-items:flex-start;gap:9px;margin:14px 0;color:#c6cede;font-size:13px}.consent-box input{flex:0 0 auto;width:auto;margin:4px 0 0}.action-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.contribution-list{padding-left:22px;margin:10px 0 0}.contribution-list li{margin:10px 0;overflow-wrap:anywhere}.contribution-list button{margin:6px 6px 0 0}@media(max-width:700px){body{padding:0 12px}header{margin:0 -12px;padding:10px 12px;gap:8px}.app-nav{flex-basis:100%;overflow-x:auto;flex-wrap:nowrap}.app-nav a{white-space:nowrap;padding:6px 8px;font-size:12px}#queue-status{margin-left:auto}main{margin:14px auto 28px}.contribution-card{padding:12px}.job-picker{grid-template-columns:minmax(0,1fr)}.job-picker button{width:100%}}
+</style><header><a class="brand" href="/">Hardsub2srt</a><nav class="app-nav" aria-label="Ana gezinme"><a href="/">Üretim</a><a href="/ocr-inceleme">İnceleme</a><a href="/?view=kalite">Kalite ve öğrenme</a><a href="/katki" aria-current="page">İsteğe bağlı katkı</a></nav><span id="queue-status" role="status" aria-live="polite"><a href="/#kuyruk-kart">Kuyruk durumu yükleniyor…</a></span></header><main class="contribution-page"><section class="page-intro"><h1>İsteğe bağlı ölçüm katkısı</h1><p>Bu özellik varsayılan olarak kapalıdır. Önizleme oluşturmak ağ isteği göndermez. Yalnızca onaydan sonra, gösterilen sayısal ölçümler yapılandırılmış HTTPS hedefine gönderilir. Video, kırpım, SRT/VTT metni, dosya adı/yolu ve kullanıcı adı gönderilmez. GPT/DeepSeek API’si kullanılmaz.</p><p id="config" class="warn"></p></section>
+<section class="contribution-card" aria-labelledby="preview-heading"><div class="job-picker"><div><label for="job">Tamamlanan yerel OCR işi</label><select id="job"></select></div><button id="preview">Önizlemeyi oluştur</button></div>
+<h2 id="preview-heading">Gönderilecek alanların önizlemesi</h2><pre id="payload">Henüz önizleme yok.</pre><p class="muted">Sunucu, katkı satırında bearer token'ın özetini tutar; aynı token ile yapılan gönderimler bu özet üzerinden ilişkilendirilebilir. Özet token başına hız sınırı ve aynı token sahibinin silme yetkisi için kullanılır. Katkı kayıtları token'a göre değil alım yaşına göre, yukarıda belirtilen süre sonunda silinir. Ham token saklanmaz. Son 100 gönderimin silme kimliği bu tarayıcıda yerel olarak tutulur; payload ve token localStorage'a yazılmaz.</p>
+<label class="consent-box"><input type="checkbox" id="consent"> <span>Önizlemedeki sayısal ölçümlerin yukarıdaki HTTPS hedefine, belirtilen en fazla __RETENTION__ süreyle gönderilmesini ve aynı token ile yapılan gönderimlerin ilişkilendirilebilir olmasını bu gönderim için onaylıyorum.</span></label><div class="action-row"><button id="send" disabled>Onayla ve gönder</button><a class="action-link" href="/">Arayüze dön</a></div><p id="status" role="status" aria-live="polite"></p></section>
+<section class="contribution-card" aria-labelledby="retractions-heading"><h2 id="retractions-heading">Gönderimlerim ve silme</h2><p class="muted">Silme için aynı HTTPS hedefi ve token yapılandırılmış olmalı. Sunucu 404 verirse kayıt silinmez: bu, saklama süresinin dolması veya token uyuşmazlığı anlamına gelebilir. Eski bir kimliği yalnız tarayıcı listesinden kaldırmak için ayrı düğmeyi kullanın. Saklama süresi dolunca sunucu kaydı otomatik temizlenir.</p><ul id="retractions" class="contribution-list"></ul></section></main>
 <script>const configured=__ENABLED__,destinationHost=__DESTINATION__;const STORE_KEY='hardsub2srt.contribution.retractions.v1',MAX_LOCAL_RECORDS=100;const job=document.querySelector('#job'),pre=document.querySelector('#payload'),send=document.querySelector('#send'),consent=document.querySelector('#consent'),status=document.querySelector('#status'),retractions=document.querySelector('#retractions');let current=null;
 document.querySelector('#config').textContent=configured?'HTTPS hedefi: https://'+destinationHost+'. Token hazır. Sunucunun saklama süresi: '+__RETENTION__+'. Gönderim yalnız bu sayfadaki açık onaydan sonra yapılır.':'Gönderim kapalı: HTTPS URL, token ve H2S_CONTRIB_RETENTION_DAYS birlikte ayarlanmalı.';
 async function updateQueueStatus(){const el=document.querySelector('#queue-status');try{const r=await fetch('/api/durum'),j=await r.json();if(!r.ok)throw Error();el.innerHTML='<a href="/#kuyruk-kart">Kuyruk: '+(j.aktif?1:0)+' çalışıyor · '+j.isler_bekleyen+' bekliyor</a>'}catch(_){el.innerHTML='<a href="/#kuyruk-kart">Kuyruk durumu alınamadı · Üretime dön</a>'}}updateQueueStatus();setInterval(updateQueueStatus,2500);
@@ -1970,6 +2165,49 @@ def _ocr_hata(exc):
         return jsonify({"hata": str(exc)}), exc.status
     app.logger.exception("OCR review request failed")
     return jsonify({"hata": "OCR inceleme işlemi tamamlanamadı; günlükte ayrıntı var"}), 500
+
+
+@app.get("/api/ocr-inceleme/seed-paketleri")
+def api_ocr_inceleme_seed_paketleri():
+    """List only revalidated seed review packs below the fixed local app root."""
+    error = _memory_request_error()
+    if error:
+        return error
+    try:
+        _root, packs = _seed_review_storage_catalog()
+        return jsonify({"packs": [{
+            "pack_id": row["pack_id"],
+            "episode_key": row["episode_key"],
+            "candidate_count": row["candidate_count"],
+            "reviewed_count": row["reviewed_count"],
+        } for row in packs]})
+    except Exception:
+        app.logger.exception("Seed review pack list failed")
+        return jsonify({"hata": "Yerel seed paketleri güvenle listelenemedi"}), 500
+
+
+@app.post("/api/ocr-inceleme/seed-paket-ac")
+def api_ocr_inceleme_seed_paket_ac():
+    """Open a validated local seed pack by opaque ID; do not accept a path."""
+    error = _memory_request_error()
+    if error:
+        return error
+    if ocr_review is None:
+        return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
+    if not request.is_json:
+        return jsonify({"hata": "JSON isteği gerekli"}), 415
+    value = request.get_json(silent=True) or {}
+    if type(value) is not dict or set(value) != {"pack_id"}:
+        return jsonify({"hata": "Yalnız doğrulanmış seed pack kimliği kabul edilir"}), 400
+    try:
+        import ocr_seed_import
+        seed_root, _packs = _seed_review_storage_catalog()
+        pack_path = ocr_seed_import.open_seed_review_pack(seed_root, value["pack_id"])
+        review_id, pack = ocr_review.open_pack(str(pack_path))
+        pack["review_id"] = review_id
+        return jsonify(pack)
+    except Exception as exc:
+        return _ocr_hata(exc)
 
 
 @app.post("/api/ocr-inceleme/ac")
@@ -3342,6 +3580,65 @@ def _bloklar_json_oku(srt_yol):
     return ana, ekran
 
 
+def _pano_zaman_ms(value):
+    normalized = srt_zaman_norm(value)
+    if not normalized:
+        return None
+    try:
+        hours, minutes, tail = normalized.split(":")
+        seconds, millis = tail.split(",")
+        return ((int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000 +
+                int(millis))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _pano_video_identity(stats_path):
+    try:
+        if stats_path.stat().st_size > 4 * 1024 * 1024:
+            return None
+        metadata = json.loads(stats_path.read_text(encoding="utf-8"))
+        video = metadata.get("video") if isinstance(metadata, dict) else None
+        if not isinstance(video, dict):
+            return None
+        name = video.get("ad")
+        size = video.get("boyut")
+        digest = str(video.get("sha1_ilk_1MB") or "").lower()
+        if (not isinstance(name, str) or not name or Path(name).name != name or
+                Path(name).suffix.lower() not in VIDEO_UZANTILARI or
+                type(size) is not int or size <= 0 or
+                not re.fullmatch(r"[a-f0-9]{40}", digest)):
+            return None
+        return {"ad": name, "boyut": size, "sha1_ilk_1MB": digest}
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _pano_seed_evidence_ref(packs, video_identity, block):
+    """Match a crop only by video fingerprint, cue interval, and exact old text."""
+    if not isinstance(video_identity, dict) or not isinstance(block, dict):
+        return None
+    start_ms, end_ms = _pano_zaman_ms(block.get("start")), _pano_zaman_ms(block.get("end"))
+    if start_ms is None or end_ms is None or end_ms <= start_ms:
+        return None
+    if not isinstance(block.get("metin"), str) or not block["metin"]:
+        return None
+    matches = []
+    for pack in packs:
+        identity = pack.get("_video_identity") or {}
+        if (identity.get("size") != video_identity.get("boyut") or
+                identity.get("sha1_first_1mb") != video_identity.get("sha1_ilk_1MB")):
+            continue
+        for cue in pack.get("_cues", []):
+            if (cue.get("text") == block["metin"] and
+                    abs(cue.get("start_ms", -10**12) - start_ms) <= 800 and
+                    abs(cue.get("end_ms", -10**12) - end_ms) <= 800 and
+                    cue.get("crop_path")):
+                matches.append({"pack_id": pack.get("pack_id"),
+                                "cue_id": cue.get("cue_id")})
+    return matches[0] if len(matches) == 1 else None
+
+
 def _blok_conf(kayit):
     """bloklar.json kaydından float conf; yoksa/bozuksa None."""
     try:
@@ -3484,8 +3781,8 @@ def api_pano_incele():
     """Pano satırının blok dökümü: /api/pano/incele?stats=<rel-yol>&klasor=<dir>.
 
     SALT-OKUNUR görüntüleyicidir — düzenleme kuyruktaki iş üzerinden
-    (/api/kontrol + /api/blokkaydet) yapılır. .bloklar.json varsa koşu anındaki
-    döküm döner; yoksa SRT conf'suz listelenir (eski çıktı yolu)."""
+    (/api/kontrol + /api/blokkaydet) yapılır. SRT metin/zamanları kaynağıdır;
+    .bloklar.json yalnız birebir eşleştiğinde güven katkısı verir."""
     klasor = Path(request.args.get("klasor") or KLASOR)
     if not klasor.is_dir():
         return jsonify({"hata": f"klasör bulunamadı: {klasor}"}), 404
@@ -3529,39 +3826,140 @@ def api_pano_incele():
         return jsonify({"hata": "bloklar.json yolu klasör dışına çıkıyor"}), 403
     conf_thr = _stats_conf_thr(srt)
     ana_bj, ekran_bj = _bloklar_json_oku(srt)
+    try:
+        srt_blocks = srt_parse(srt.read_text(encoding="utf-8-sig", errors="replace"))
+    except OSError as exc:
+        return jsonify({"hata": f"SRT okunamadı: {exc}"}), 500
 
-    def _liste(kayitlar):
-        cikti = []
-        for b in kayitlar:
-            conf = _blok_conf(b)
-            cikti.append({"index": b.get("index"),
-                          "start": str(b.get("start") or ""),
-                          "end": str(b.get("end") or ""),
-                          "metin": str(b.get("metin") or ""),
-                          "conf": conf,
-                          "dusuk": bool(conf is not None and conf < conf_thr)})
-        return cikti
+    companion_matches = bool(ana_bj is not None and len(ana_bj) == len(srt_blocks))
+    if companion_matches:
+        for index, (companion, current) in enumerate(zip(ana_bj, srt_blocks)):
+            if (companion.get("index") != index or
+                    srt_zaman_norm(companion.get("start")) != current["start"] or
+                    srt_zaman_norm(companion.get("end")) != current["end"] or
+                    str(companion.get("metin") or "") != current["metin"]):
+                companion_matches = False
+                break
 
-    if ana_bj is not None:
-        return jsonify({"ad": ad, "srt": str(srt), "bloklar_var": True,
-                        "conf_thr": conf_thr, "uyari": None,
-                        "bloklar": _liste(ana_bj), "ekran": _liste(ekran_bj)})
-    uyari = BLOKLAR_JSON_ESKI_UYARI
-    bloklar = []
-    if srt.exists():
-        try:
-            bloklar = [{"index": b["index"], "start": b["start"],
-                        "end": b["end"], "metin": b["metin"], "conf": None,
-                        "dusuk": False}
-                       for b in srt_parse(srt.read_text(
-                           encoding="utf-8-sig", errors="replace"))]
-        except OSError as e:
-            return jsonify({"hata": f"SRT okunamadı: {e}"}), 500
+    if ana_bj is None:
+        uyari = BLOKLAR_JSON_ESKI_UYARI
+    elif not companion_matches:
+        uyari = ("bloklar.json SRT metni veya zamanıyla uyuşmuyor; güncel metin "
+                 "SRT'den açıldı, güven değerleri gösterilmiyor.")
     else:
-        uyari = "Bu ad için .srt bulunamadı: " + srt.name
-    return jsonify({"ad": ad, "srt": str(srt), "bloklar_var": False,
+        uyari = None
+
+    video_identity = _pano_video_identity(stats_companion)
+    blocks = []
+    for index, current in enumerate(srt_blocks):
+        confidence = _blok_conf(ana_bj[index]) if companion_matches else None
+        blocks.append({"index": index, "start": current["start"],
+                       "end": current["end"], "metin": current["metin"],
+                       "conf": confidence,
+                       "dusuk": bool(confidence is not None and confidence < conf_thr),
+                       "evidence_url": None})
+
+    seed_packs = None
+    stats_rel_for_url = path_scope.relative_to(stats_companion, klasor).as_posix()
+    for block in blocks:
+        if not video_identity:
+            break
+        if seed_packs is None:
+            try:
+                _seed_root, seed_packs = _seed_review_storage_catalog()
+            except Exception:
+                seed_packs = []
+        match = _pano_seed_evidence_ref(seed_packs, video_identity, block)
+        if match:
+            query = urlencode({"stats": stats_rel_for_url,
+                               "klasor": str(klasor), "index": block["index"]})
+            block["evidence_url"] = "/api/pano/seed-evidence?" + query
+
+    ekran = []
+    if companion_matches:
+        ekran = [{"index": item.get("index"),
+                  "start": str(item.get("start") or ""),
+                  "end": str(item.get("end") or ""),
+                  "metin": str(item.get("metin") or ""),
+                  "conf": _blok_conf(item),
+                  "dusuk": bool(_blok_conf(item) is not None and
+                                _blok_conf(item) < conf_thr),
+                  "evidence_url": None} for item in ekran_bj]
+    return jsonify({"ad": ad, "srt": str(srt),
+                    "bloklar_var": companion_matches,
                     "conf_thr": conf_thr, "uyari": uyari,
-                    "bloklar": bloklar, "ekran": []})
+                    "video_identity": video_identity,
+                    "video_unavailable_reason": (None if video_identity else
+                        "Tarihsel stats dosyasında doğrulanabilir video fingerprint yok."),
+                    "bloklar": blocks, "ekran": ekran})
+
+
+@app.get("/api/pano/seed-evidence")
+def api_pano_seed_evidence():
+    """Serve a crop only after re-matching local stats/SRT to one seed cue."""
+    error = _memory_request_error()
+    if error:
+        return error
+    klasor = Path(request.args.get("klasor") or KLASOR)
+    stats_rel = (request.args.get("stats") or "").strip()
+    try:
+        index = int(request.args.get("index", ""))
+    except (TypeError, ValueError):
+        return Response("Geçersiz blok indeksi.", status=400, mimetype="text/plain")
+    if (not stats_rel.endswith(".stats.json") or "\\" in stats_rel or
+            Path(stats_rel).is_absolute() or
+            any(part in ("", ".", "..") for part in stats_rel.split("/"))):
+        return Response("Geçersiz stats yolu.", status=400, mimetype="text/plain")
+    try:
+        klasor = klasor.resolve(strict=True)
+        stats_path = (klasor / stats_rel).resolve(strict=True)
+        if (not _yol_altinda(stats_path, klasor) or not stats_path.is_file() or
+                stats_path.stat().st_size > 4 * 1024 * 1024):
+            return Response("Stats kaynağı bulunamadı.", status=404, mimetype="text/plain")
+        stem = stats_path.name[:-len(".stats.json")]
+        srt = (stats_path.parent / f"{stem}.srt").resolve(strict=True)
+        if (not _yol_altinda(srt, klasor) or not srt.is_file() or
+                srt.stat().st_size > 16 * 1024 * 1024):
+            return Response("SRT kaynağı bulunamadı.", status=404, mimetype="text/plain")
+        video_identity = _pano_video_identity(stats_path)
+        if not video_identity:
+            return Response("Video fingerprint eşleşmedi.", status=404, mimetype="text/plain")
+        blocks = srt_parse(srt.read_text(encoding="utf-8-sig", errors="replace"))
+        if not 0 <= index < len(blocks):
+            return Response("Blok bulunamadı.", status=404, mimetype="text/plain")
+        import ocr_seed_import
+        _seed_root, packs = _seed_review_storage_catalog()
+        match = _pano_seed_evidence_ref(packs, video_identity, blocks[index])
+        if not match:
+            return Response("Birebir seed görsel eşleşmesi yok.", status=404,
+                            mimetype="text/plain")
+        pack_path = ocr_seed_import.open_seed_review_pack(_seed_root, match["pack_id"])
+        info = ocr_review._validated_pack(pack_path)
+        cue = next((item for item in info["cues"]
+                    if item["cue_id"] == match["cue_id"]), None)
+        imported = info["manifest"].get("seed_import")
+        verified = ocr_review._verify_crop(info, cue) if cue else None
+        start_ms = _pano_zaman_ms(blocks[index]["start"])
+        end_ms = _pano_zaman_ms(blocks[index]["end"])
+        if (not isinstance(imported, dict) or
+                imported.get("schema") != "hardsub2srt.assistant-reviewed-seed-import" or
+                imported.get("video_identity") != {
+                    "size": video_identity["boyut"],
+                    "sha1_first_1mb": video_identity["sha1_ilk_1MB"]} or
+                cue is None or cue.get("source_text_ocr") != blocks[index]["metin"] or
+                start_ms is None or end_ms is None or
+                abs(cue.get("start_ms", -10**12) - start_ms) > 800 or
+                abs(cue.get("end_ms", -10**12) - end_ms) > 800 or
+                verified is None):
+            return Response("Seed görsel kanıtı artık eşleşmiyor.", status=404,
+                            mimetype="text/plain")
+        return send_from_directory(pack_path, cue["crop_path"],
+                                   mimetype="image/jpeg", max_age=0,
+                                   conditional=True)
+    except Exception:
+        app.logger.info("Seed evidence request did not match a verified local pack")
+        return Response("Seed görsel kanıtı bulunamadı veya eşleşmedi.", status=404,
+                        mimetype="text/plain")
 
 
 @app.get("/api/vttrapor")

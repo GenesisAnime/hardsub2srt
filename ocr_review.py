@@ -464,6 +464,12 @@ def public_pack(info: dict) -> dict:
     raw_timing_metadata = info["manifest"].get("raw_timing_metadata")
     srt_digest = info["manifest"].get("srt_sha256_local")
     cues = []
+    seed_import = info["manifest"].get("seed_import")
+    seed_suggestions_enabled = (
+        isinstance(seed_import, dict) and
+        seed_import.get("schema") == "hardsub2srt.assistant-reviewed-seed-import" and
+        type(seed_import.get("version")) is int and seed_import.get("version") == 1
+    )
     for cue in info["cues"]:
         event = active.get(cue["cue_id"])
         public_cue = {k: cue.get(k) for k in (
@@ -473,10 +479,15 @@ def public_pack(info: dict) -> dict:
             "raw_end_ms", "clamp_delta_ms", "raw_end_time_basis")}
         public_cue["raw_end_note"] = _raw_end_note(
             cue, raw_timing_metadata, srt_digest)
+        candidate = cue.get("seed_candidate_text") if seed_suggestions_enabled else None
+        public_cue["seed_candidate_text"] = (
+            candidate if isinstance(candidate, str) and candidate.strip() and
+            len(candidate) <= MAX_TEXT_CHARS else None)
         public_cue["active_event"] = event
         cues.append(public_cue)
     return {"job_id": info["manifest"]["job_id"], "cues": cues,
-            "warnings": warnings, "review_log": "review-events.jsonl"}
+            "warnings": warnings, "review_log": "review-events.jsonl",
+            "seed_import": seed_suggestions_enabled}
 
 
 def _raw_end_note(cue: dict, metadata: object, srt_digest: object) -> str | None:
@@ -749,8 +760,36 @@ REVIEW_HTML = r'''<!doctype html>
 <style>
 body{margin:0;background:#11151e;color:#e8edf8;font:15px/1.5 "Segoe UI",system-ui,sans-serif}header{position:sticky;top:0;background:#191f2b;padding:10px 18px;border-bottom:1px solid #30394b;z-index:2;display:flex;align-items:center;gap:14px;flex-wrap:wrap}.brand{font-weight:700;white-space:nowrap}.app-nav{display:flex;gap:4px;flex-wrap:wrap}.app-nav a{color:#a7b5ce;text-decoration:none;padding:7px 10px;border-radius:6px;font-size:13px;font-weight:650}.app-nav a:hover{background:#252e40;color:#edf2ff}.app-nav a[aria-current="page"]{background:#243758;color:#a9c9ff}#queue-status{margin-left:auto;color:#a7b5ce;font-size:12px}#queue-status a{color:#a9c9ff;text-decoration:none}main{max-width:1240px;margin:18px auto;padding:0 16px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}input,textarea,button{background:#0f131b;color:#edf2ff;border:1px solid #39445a;border-radius:6px;padding:10px;font:inherit}input{flex:1;min-width:min(300px,100%)}.ai-select{flex:none;min-width:auto;width:auto}button{cursor:pointer;background:#29364e;font-weight:650}button:hover:not(:disabled){filter:brightness(1.12)}button:disabled{opacity:.5;cursor:not-allowed}button.primary{background:#3979ef;border-color:#3979ef}button.warn{background:#6b3841}a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid #85b1ff;outline-offset:2px}.help,.meta{color:#a7b5ce;font-size:13px}.notice{padding:10px 12px;margin:12px 0;background:#202838;border-left:3px solid #e2ae59;border-radius:4px}.cue{display:grid;grid-template-columns:minmax(220px,38%) minmax(0,1fr);gap:16px;border:1px solid #30394b;border-radius:9px;padding:14px;margin:12px 0;background:#1a202c}.cue img{display:block;max-width:100%;max-height:240px;object-fit:contain;background:#090c12;border-radius:4px}.cue textarea{box-sizing:border-box;width:100%;min-height:75px;resize:vertical}.controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.status{color:#82d9a0}.bad{color:#ffb978}.hidden{display:none}.start-card,.workflow-step{border:1px solid #30394b;border-radius:9px;padding:14px;margin:12px 0;background:#1a202c}.start-card h1{font-size:18px;margin:0 0 8px}.workflow-step>summary{cursor:pointer;font-size:15px;font-weight:700;color:#c8d8f5;list-style-position:inside}.workflow-step[open]>summary{margin-bottom:12px}.step-nav{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.step-nav a{display:inline-block;padding:7px 10px;border:1px solid #30394b;border-radius:18px;color:#c5d2e8;text-decoration:none;font-size:12px}.step-nav a:hover{background:#252e40}.empty-state{padding:12px;border:1px dashed #39445a;border-radius:8px;color:#a7b5ce}@media(max-width:700px){header{padding:9px 12px;gap:8px}.app-nav{flex-basis:100%;overflow:visible;flex-wrap:wrap}.app-nav a{white-space:nowrap;padding:6px 8px;font-size:12px}#queue-status{margin-left:auto}main{margin:12px auto;padding:0 10px}.start-card,.workflow-step{padding:11px}.start-card .row{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch}.start-card .row>*{width:100%;min-width:0}.row>*{min-width:0;max-width:100%}.cue{grid-template-columns:minmax(0,1fr);gap:10px}.cue img{max-height:200px}input{min-width:0;width:100%}.step-nav{overflow-x:auto;flex-wrap:nowrap}.step-nav a{white-space:nowrap}}
 </style><header><a class="brand" href="/" style="color:inherit;text-decoration:none">Hardsub2srt</a><nav class="app-nav" aria-label="Ana gezinme"><a href="/">Üretim</a><a href="/ocr-inceleme" aria-current="page">İnceleme</a><a href="/?view=kalite">Kalite ve öğrenme</a><a href="/katki">İsteğe bağlı katkı</a></nav><span id="queue-status" role="status" aria-live="polite"><a href="/#kuyruk-kart">Kuyruk durumu yükleniyor…</a></span></header>
-<main><section class="start-card" id="review-start"><h1>OCR ve çeviri incelemesi</h1><p class="help">Bir review-pack açın. Önce görseldeki kaynak metni doğrulayın; ardından isteğe bağlı AI önerilerini inceleyin. AI yanıtları kendiliğinden onay veya eğitim verisi olmaz.</p><div class="row"><input id="path" placeholder=".review-pack klasörünün yolu" aria-label="Review-pack klasörünün yolu"><button id="browse">Klasör seç</button><button class="primary" id="open">Paketi aç</button></div><div class="help">İşlem yereldir. GPT/DeepSeek çağrısı veya otomatik veri gönderimi yapılmaz.</div></section>
-<section id="workspace" class="hidden"><div id="summary" class="notice" role="status" aria-live="polite"></div>
+<style>
+body{font-size:14px;line-height:1.5}
+header{background:#151822;border-color:#2c3345;padding:10px 18px;gap:12px}
+.brand{font-size:17px;color:#dde3f0}
+.app-nav a{padding:7px 10px;font-size:13px}
+main.review-layout{max-width:none;width:100%;box-sizing:border-box;display:grid;grid-template-columns:minmax(240px,280px) minmax(0,1fr);gap:16px;align-items:start;margin:12px auto;padding:0 20px}
+#review-start{position:sticky;top:64px;overflow:visible;margin:0}
+#review-start input{box-sizing:border-box;width:100%;min-width:0}
+#review-start>.row{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch}
+#review-start>.row>*{width:100%;min-width:0}
+#seed-review-packs{max-height:min(36vh,260px);overflow:auto}
+#seed-review-list .row{display:flex;align-items:center}
+#seed-review-list .row span{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px}
+#seed-review-list .row button{padding:6px 8px;white-space:nowrap;font-size:12px}
+#seed-review-list button{flex:0 0 auto}
+#review-content,#workspace{min-width:0}
+#cues .cue{grid-template-columns:minmax(300px,42%) minmax(0,1fr);gap:18px}
+#cues .cue img{width:100%;max-height:min(45vh,420px)}
+.review-content-toolbar{display:flex;align-items:center;gap:12px;margin:0 0 12px}
+#review-content-toolbar.hidden{display:none}
+#review-sections-toggle{display:none}
+.review-empty{min-height:320px;display:grid;place-content:center;text-align:center;padding:32px;border:1px dashed #39445a;border-radius:10px;background:#1a202c;color:#a7b5ce}
+.review-empty h2{margin:0 0 8px;color:#e8edf8}
+@media(max-width:900px){main.review-layout{display:block;padding:0 14px}#review-start{position:static;max-height:none;overflow:visible;margin:0 0 14px}main.review-layout.review-open #review-start{display:none}#review-content{width:100%}#review-sections-toggle{display:inline-flex}#seed-review-packs{max-height:48vh}#cues .cue{grid-template-columns:minmax(0,1fr);gap:10px}#cues .cue img{max-height:42vh}}
+@media(max-height:680px) and (min-width:901px){#review-start{position:static}}
+@media(max-width:700px){header .app-nav{flex-basis:100%;overflow-x:auto;flex-wrap:nowrap}.app-nav a{white-space:nowrap}}
+</style>
+<main class="review-layout"><section class="start-card" id="review-start"><h1>OCR ve çeviri incelemesi</h1><p class="help">Bir review-pack açın. Görseli kontrol edip her altyazı için karar verin. AI önerileri otomatik onay veya eğitim verisi olmaz.</p><div class="row"><input id="path" placeholder=".review-pack klasörünün yolu" aria-label="Review-pack klasörünün yolu"><button id="browse">Klasör seç</button><button class="primary" id="open">Paketi aç</button></div><div class="help">İşlem yereldir; GPT/DeepSeek çağrısı veya otomatik veri gönderimi yapılmaz.</div><div id="seed-review-packs" class="notice" hidden></div><div id="seed-review-action-status" class="help" role="status" aria-live="polite"></div></section>
+<section id="review-content" aria-label="OCR inceleme içeriği"><div id="review-content-toolbar" class="review-content-toolbar hidden"><button type="button" id="review-sections-toggle" aria-controls="review-start" aria-expanded="false" onclick="reviewSectionsAc()">Bölümler</button><b id="review-selection-title"></b></div><div id="review-empty" class="review-empty"><div><h2>İncelemeye hazır</h2><p>Soldan bir review-pack yolu açın veya örnek bölümlerden birini seçin.</p><p class="help">Altyazı görselleri, SRT metni ve karar düğmeleri bu alanda görüntülenir.</p></div></div>
+<section id="workspace" class="hidden" tabindex="-1"><div id="seed-open-status" class="help" role="status" aria-live="polite"></div><div id="summary" class="notice" role="status" aria-live="polite"></div>
 <nav class="step-nav" aria-label="İnceleme adımları"><a href="#step-human">1 · Görsel OCR doğrulama</a><a href="#step-ai-ocr">2 · İsteğe bağlı AI OCR</a><a href="#step-ai-translation">3 · AI çeviri önerisi</a><a href="#step-memory">4 · Çeviri belleği</a><a href="#step-dataset">5 · Veri kümesi ve kalite</a></nav>
 <details class="workflow-step" id="step-human" open><summary>1 · Görsel OCR doğrulama <span class="help">Kırpımı inceleyin ve kaynak metin için insan kararı verin.</span></summary><div id="warnings"></div><div id="cues"></div></details>
 <details class="workflow-step" id="step-ai-ocr"><summary>2 · İsteğe bağlı AI OCR görsel incelemesi <span class="help">AI yalnız öneri üretir; insan kararı ayrı verilir.</span></summary>
@@ -777,7 +816,7 @@ body{margin:0;background:#11151e;color:#e8edf8;font:15px/1.5 "Segoe UI",system-u
 <div class="row"><label>Kaynak terim <input id="tm-source-term" maxlength="500"></label><label>Hedef karşılık <input id="tm-target-term" maxlength="500"></label><button id="tm-add-term">Terimi ekle</button></div><div id="tm-entries"></div>
 </details>
 <details class="workflow-step" id="step-dataset"><summary>5 · Veri kümesi ve kalite araçları <span class="help">Dışa aktarma SRT’yi değiştirmez ve hak onayı değildir.</span></summary><p class="help">Metadata alanlarını ve kullanım haklarını kendiniz doğrulayın. Kullanım hakkı veya izin onayı değildir; şablonu oluşturmak tek başına izin sağlamaz.</p><section class="notice" id="srt-lint-panel"><h2>Salt-okunur SRT taraması</h2><p>Dosya sırası, çakışma, karakter/sn ve kısa/uzun süre için sezgisel adaylar bulur. Bunlar OCR hatasını veya yanlış zamanlamayı kanıtlamaz; SRT'yi, OCR kararlarını ve öğrenme verisini değiştirmez.</p><div class="row"><button id="srt-lint-run">SRT taramasını çalıştır</button><span id="srt-lint-status" class="help" role="status" aria-live="polite"></span></div><div id="srt-lint-result"></div></section><div class="row"><button class="primary" id="export">Doğrulanmış OCR veri kümesini dışa aktar</button><button id="metadata-template" hidden>Boş Phase 5 metadata şablonu oluştur</button><span id="export-result" class="help" role="status" aria-live="polite"></span></div><div id="metadata-result" class="help" role="status" aria-live="polite"></div></details>
-</section></main>
+</section></section></main>
 <script>
 let reviewId=null, pack=null, pickerId=null, tmDraftSuggestions={}, translationEvaluationId=null, translationRealEvaluationId=null;
 const $=id=>document.getElementById(id);
@@ -786,19 +825,62 @@ function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 document.querySelectorAll('.step-nav a').forEach(link=>link.addEventListener('click',()=>{const target=$(decodeURIComponent(link.hash.slice(1)));if(target?.tagName==='DETAILS')target.open=true}));
 async function updateQueueStatus(){const status=$('queue-status');try{const j=await api('/api/durum');const active=j.aktif?1:0;status.innerHTML=`<a href="/#kuyruk-kart">Kuyruk: ${active} çalışıyor · ${j.isler_bekleyen} bekliyor</a>`}catch(_){status.innerHTML='<a href="/#kuyruk-kart">Kuyruk durumu alınamadı · Üretime dön</a>'}}
 updateQueueStatus();setInterval(updateQueueStatus,2500);
-async function openPack(path){const j=await api('/api/ocr-inceleme/ac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});reviewId=j.review_id;pack=j;exportedDatasetName=null;$('metadata-template').hidden=true;$('metadata-result').textContent='';$('export-result').textContent='';$('srt-lint-status').textContent='';$('srt-lint-result').textContent='';$('workspace').classList.remove('hidden');draw()}
+function showOpenedPack(j,selectedTitle=null){reviewId=j.review_id;pack=j;exportedDatasetName=null;$('metadata-template').hidden=true;$('metadata-result').textContent='';$('export-result').textContent='';$('srt-lint-status').textContent='';$('srt-lint-result').textContent='';$('review-empty').classList.add('hidden');$('review-content-toolbar').classList.remove('hidden');$('review-selection-title').textContent=selectedTitle||j.seed_episode_key||'İnceleme paketi';$('seed-open-status').textContent='';$('workspace').classList.remove('hidden');const layout=document.querySelector('main.review-layout');if(window.matchMedia('(max-width: 900px)').matches){layout.classList.add('review-open');$('review-sections-toggle').setAttribute('aria-expanded','false')}else{layout.classList.remove('review-open');$('review-sections-toggle').setAttribute('aria-expanded','true')}draw();const workspace=$('workspace');workspace.focus({preventScroll:true});workspace.scrollIntoView({behavior:'smooth',block:'start'})}
+function reviewSectionsAc(){const layout=document.querySelector('main.review-layout');layout.classList.remove('review-open');$('review-sections-toggle').setAttribute('aria-expanded','true');const selector=$('review-start');selector.scrollIntoView({behavior:'smooth',block:'start'});$('path').focus({preventScroll:true})}
+async function openPack(path){const j=await api('/api/ocr-inceleme/ac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});showOpenedPack(j)}
+let seedPackOpenPending=false;
+async function openSeedPack(packId,button){
+ const status=$('seed-review-action-status');
+ if(seedPackOpenPending){status.textContent='Başka bir bölüm açılıyor; lütfen biraz bekleyin.';return}
+ seedPackOpenPending=true;
+ const oldLabel=button?.textContent||'Bölümü incele';
+ if(button){button.disabled=true;button.textContent='Açılıyor…'}
+ status.textContent='Paket güvenli yerel kaynaktan açılıyor…';
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);
+ try{
+  const j=await api('/api/ocr-inceleme/seed-paket-ac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pack_id:packId}),signal:controller.signal});
+  if(j.seed_import!==true||!Array.isArray(j.cues))throw Error('Sunucu beklenen seed inceleme paketini döndürmedi.');
+  const episode=button?.dataset.episodeTitle||j.seed_episode_key||'Bölüm';
+  showOpenedPack(j,episode);
+  const message=`${episode} açıldı · ${j.cues.length} görsel. Öneriler insan kararı değildir; her satırı siz inceleyin.`;
+  status.textContent=message;$('seed-open-status').textContent=message;
+ }catch(e){
+  status.textContent=controller.signal.aborted?'Bölüm 20 saniyede açılamadı; bağlantıyı kontrol edip yeniden deneyin.':'Bölüm açılamadı: '+e.message;
+ }finally{
+  clearTimeout(timeout);seedPackOpenPending=false;
+  if(button?.isConnected){button.disabled=false;button.textContent=oldLabel}
+ }
+}
+async function loadSeedReviewPacks(){
+ const box=$('seed-review-packs'),status=$('seed-review-action-status');
+ box.hidden=false;box.innerHTML='<b>Yeniden incelenebilecek örnekler</b><p>Örnek listesi yükleniyor…</p>';status.textContent='';
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),12000);
+ try{
+  const j=await api('/api/ocr-inceleme/seed-paketleri',{signal:controller.signal});
+  if(!Array.isArray(j.packs))throw Error('Sunucu örnek listesi biçimini doğrulayamadı.');
+  if(!j.packs.length){box.hidden=true;return}
+  box.innerHTML='<b>Yeniden incelenebilecek örnekler</b><p>Öneriler onay değildir; görseli kontrol edip karar verin. Hak durumu doğrulanmamıştır.</p><div id="seed-review-list"></div>';
+  $('seed-review-list').innerHTML=j.packs.map(p=>`<div class="row" style="justify-content:space-between;margin:6px 0"><span><b>${esc(p.episode_key)}</b> · ${esc(p.candidate_count)} görsel · ${esc(p.reviewed_count)} karar</span><button type="button" data-episode-title="${esc(p.episode_key)}" onclick="openSeedPack('${esc(p.pack_id)}',this)">Bölümü incele</button></div>`).join('');
+  $('seed-review-action-status').textContent=`${j.packs.length} yerel bölüm hazır.`;
+ }catch(e){
+  box.hidden=false;box.innerHTML='<b>Örnek bölümler yüklenemedi.</b> <button type="button" onclick="loadSeedReviewPacks()">Yeniden dene</button>';
+  status.textContent=controller.signal.aborted?'Liste isteği 12 saniyede yanıt vermedi.':e.message;
+ }finally{clearTimeout(timeout)}
+}
 $('open').onclick=async()=>{try{await openPack($('path').value.trim())}catch(e){alert(e.message)}};
 $('browse').onclick=async()=>{try{const j=await api('/api/secim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tur:'inceleme'})});pickerId=j.job_id;while(true){await new Promise(r=>setTimeout(r,400));const s=await api('/api/secim/'+encodeURIComponent(pickerId));if(s.status==='done'){const p=s.result?.dizin||'';if(p){$('path').value=p;await openPack(p)}break}if(['error','timeout','cancelled'].includes(s.status))throw Error(s.hata||'Klasör seçimi tamamlanamadı')}}catch(e){alert(e.message)}};
+loadSeedReviewPacks();
 async function runSrtLint(){const button=$('srt-lint-run');button.disabled=true;$('srt-lint-status').textContent='Tarama sürüyor…';$('srt-lint-result').textContent='';try{const j=await api('/api/ocr-inceleme/srt-lint?review_id='+encodeURIComponent(reviewId));const errors=j.parse_errors||[];const warnings=j.warnings||[];const summary=`${j.cue_count} cue · ${j.parse_error_count} parse hatası · ${j.warning_count} sezgisel uyarı`;let html=`<p><b>${esc(summary)}</b></p>`;if(errors.length)html+='<h3>Yapı hataları</h3><ul>'+errors.map(x=>`<li>${esc(x)}</li>`).join('')+'</ul>';if(warnings.length)html+='<h3>İnceleme adayları</h3><ul>'+warnings.map(x=>`<li>${esc(x)}</li>`).join('')+'</ul>';if(j.warnings_truncated)html+='<p class="help">Ayrıntı sayısı sınırı nedeniyle ilk 500 uyarı gösteriliyor.</p>';if(!errors.length&&!j.warning_count)html+='<p>Sezgisel uyarı bulunmadı; bu doğruluk veya zamanlama garantisi değildir.</p>';if(j.read_only!==true||j.heuristic_only!==true)throw Error('Rapor güvenlik sözleşmesi beklenen biçimde değil');$('srt-lint-result').innerHTML=html;$('srt-lint-status').textContent='SRT değiştirilmedi.'}catch(e){$('srt-lint-status').textContent='Rapor alınamadı: '+e.message}finally{button.disabled=false}}
 $('srt-lint-run').onclick=runSrtLint;
 window.imageReady=(img,ok)=>{const card=img.closest('.cue');if(!card)return;card.querySelectorAll('.decision').forEach(b=>b.disabled=!ok);const textarea=card.querySelector('textarea');if(textarea)textarea.disabled=!ok;if(!ok){const n=document.createElement('div');n.className='notice bad';n.textContent='Görsel yüklenemedi; bu altyazı için karar verilemez.';img.replaceWith(n)}};
 function draw(){
- const decisions=pack.cues.filter(c=>c.active_event).length;$('summary').textContent=`${pack.cues.length} altyazı · ${decisions} kayıtlı karar · günlük: ${pack.review_log}`;
+ const decisions=pack.cues.filter(c=>c.active_event).length;const seedNotice=pack.seed_import?' · Seed import: SRT seed satırlarından oluşturulmuş alt kümedir; özgün tam-run SRT değildir.':'';$('summary').textContent=`${pack.cues.length} altyazı · ${decisions} kayıtlı karar · günlük: ${pack.review_log}${seedNotice}`;
  $('warnings').innerHTML=pack.warnings.length?'<div class="notice">'+pack.warnings.map(esc).join('<br>')+'</div>':'';
- $('cues').innerHTML=pack.cues.map((c,i)=>{const ev=c.active_event;const val=ev?.verified_source_text??c.source_text_ocr;const state=ev?ev.status:'İncelenmedi';const img=c.crop_valid?`<img loading="lazy" onload="imageReady(this,true)" onerror="imageReady(this,false)" alt="Altyazı kırpımı" src="/api/ocr-inceleme/${encodeURIComponent(reviewId)}/crop/${encodeURIComponent(c.cue_id)}">`:'<div class="notice">Bu blokta güvenilir ve doğrulanabilir kırpım yok; OCR veri kümesine alınamaz.</div>';const rawTiming=c.raw_end_note?`<div class="notice raw-end-info">${esc(c.raw_end_note)}</div>`:'';return `<article class="cue"><div>${img}</div><div><b>#${i+1} · ${esc(c.start_ms)}–${esc(c.end_ms)} ms</b> <span class="meta">güven: ${esc(c.ocr_confidence??'bilinmiyor')} · ${esc(state)}</span>${rawTiming}${c.crop_valid?`<p><label><input type="checkbox" class="ai-ocr-select" data-cue="${esc(c.cue_id)}"> AI görsel incelemesine dahil et</label></p>`:''}<p class="meta">OCR metni</p><textarea id="txt-${i}" ${c.crop_valid?'':'disabled'}>${esc(val)}</textarea><div class="controls"><button class="primary decision" onclick="decide(${i},'accepted')" disabled>Görüntü doğru</button><button class="decision" onclick="decide(${i},'corrected')" disabled>Düzeltmeyi kaydet</button><button class="warn decision" onclick="decide(${i},'uncertain')" disabled>Belirsiz</button>${ev?`<button onclick="undo(${i})">Son kararı geri al</button>`:''}</div><div class="meta">${esc(c.mapping_status||'')} ${c.crop_valid?'':'· görsel doğrulaması kullanılamıyor'}</div></div></article>`}).join('');
+ $('cues').innerHTML=pack.cues.map((c,i)=>{const ev=c.active_event;const val=ev?.verified_source_text??c.source_text_ocr;const state=ev?ev.status:'İncelenmedi';const img=c.crop_valid?`<img loading="lazy" onload="imageReady(this,true)" onerror="imageReady(this,false)" alt="Altyazı kırpımı" src="/api/ocr-inceleme/${encodeURIComponent(reviewId)}/crop/${encodeURIComponent(c.cue_id)}">`:'<div class="notice">Bu blokta güvenilir ve doğrulanabilir kırpım yok; OCR veri kümesine alınamaz.</div>';const rawTiming=c.raw_end_note?`<div class="notice raw-end-info">${esc(c.raw_end_note)}</div>`:'';const seedSuggestion=typeof c.seed_candidate_text==='string'?`<div class="notice"><b>Seed önerisi · insan kararı değil:</b><p>${esc(c.seed_candidate_text)}</p><button type="button" onclick="copySeedSuggestion(${i})">Öneriyi düzenleme alanına aktar</button></div>`:'';return `<article class="cue"><div>${img}</div><div><b>#${i+1} · ${esc(c.start_ms)}–${esc(c.end_ms)} ms</b> <span class="meta">güven: ${esc(c.ocr_confidence??'bilinmiyor')} · ${esc(state)}</span>${rawTiming}${seedSuggestion}${c.crop_valid?`<p><label><input type="checkbox" class="ai-ocr-select" data-cue="${esc(c.cue_id)}"> AI görsel incelemesine dahil et</label></p>`:''}<p class="meta">OCR metni</p><textarea id="txt-${i}" ${c.crop_valid?'':'disabled'}>${esc(val)}</textarea><div class="controls"><button class="primary decision" onclick="decide(${i},'accepted')" disabled>Görüntü doğru</button><button class="decision" onclick="decide(${i},'corrected')" disabled>Düzeltmeyi kaydet</button><button class="warn decision" onclick="decide(${i},'uncertain')" disabled>Belirsiz</button>${ev?`<button onclick="undo(${i})">Son kararı geri al</button>`:''}</div><div class="meta">${esc(c.mapping_status||'')} ${c.crop_valid?'':'· görsel doğrulaması kullanılamıyor'}</div></div></article>`}).join('');
  drawAiOcrProposals();drawAiDrafts();drawAiProposals();drawTranslationQualityReadiness();
 }
 window.decide=async(i,status)=>{const c=pack.cues[i];try{const correction=$('txt-'+i).value;await api('/api/ocr-inceleme/karar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId,cue_id:c.cue_id,status,correction})});await refresh()}catch(e){alert(e.message)}};
+window.copySeedSuggestion=i=>{const c=pack?.cues?.[i],field=$('txt-'+i);if(!c||typeof c.seed_candidate_text!=='string'||!field)return;field.value=c.seed_candidate_text;field.focus()};
 window.undo=async i=>{const c=pack.cues[i];try{await api('/api/ocr-inceleme/geri-al',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId,cue_id:c.cue_id})});await refresh()}catch(e){alert(e.message)}};
 async function refresh(){pack=await api('/api/ocr-inceleme/durum?review_id='+encodeURIComponent(reviewId));draw()}
 let exportedDatasetName=null;
