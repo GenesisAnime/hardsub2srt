@@ -29,6 +29,11 @@ class RequestSizeLimitTests(unittest.TestCase):
         self.video.write_bytes(b"synthetic placeholder; no decoder is run")
         self.client = ui_server.app.test_client()
 
+    def _post(self, path, body):
+        headers = {"Host": f"127.0.0.1:{ui_server.PORT}", "Origin": BASE}
+        return self.client.post(path, base_url=BASE, headers=headers, data=body,
+                                content_type="application/json")
+
     def test_global_body_limit_is_configured_for_the_largest_legitimate_body(self):
         self.assertEqual(ui_server.app.config["MAX_CONTENT_LENGTH"],
                          ui_server.MAX_ISTEK_BAYT)
@@ -39,8 +44,7 @@ class RequestSizeLimitTests(unittest.TestCase):
 
     def test_oversized_body_is_rejected_with_413_before_the_view_runs(self):
         body = b"x" * (ui_server.MAX_ISTEK_BAYT + 1)
-        response = self.client.post("/api/ekle", base_url=BASE, data=body,
-                                    content_type="application/json")
+        response = self._post("/api/ekle", body)
         self.assertEqual(response.status_code, 413)
 
     def test_body_exactly_at_the_limit_is_still_accepted(self):
@@ -52,8 +56,7 @@ class RequestSizeLimitTests(unittest.TestCase):
         self.assertEqual(len(body), ui_server.MAX_ISTEK_BAYT)
 
         with patch.object(ui_server, "ISLER", []):
-            response = self.client.post("/api/ekle", base_url=BASE, data=body,
-                                        content_type="application/json")
+            response = self._post("/api/ekle", body)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.get_json()["eklendi"]), 1)
 
