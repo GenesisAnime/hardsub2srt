@@ -103,7 +103,10 @@ class Cue:
     index: int   # dosyadaki 0 tabanlı sıra
 
 
-_TS_RE = re.compile(r"^\s*(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*")
+# Saat alanı sınırlıdır (<=9 hane): sınırsız alan int()'te Python'un 4300
+# hanelik dönüşüm sınırına takılıp ValueError fırlatır ve VTT kıyasını
+# traceback ile düşürürdü (bkz. srt_lint/ocr_video_eval aynı sınır).
+_TS_RE = re.compile(r"^\s*(?:(\d{1,9}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*")
 
 
 def parse_ts(s: str):

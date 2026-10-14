@@ -20,7 +20,13 @@ def _timestamp_ms(value: str) -> int | None:
     match = TIMESTAMP_RE.fullmatch(value.strip())
     if not match:
         return None
-    hours, minutes, seconds, millis = map(int, match.groups())
+    hours_text, minutes_text, seconds_text, millis_text = match.groups()
+    # SRT hours may exceed two digits, but unbounded fields can make int()
+    # raise on Python's digit limit (or consume excessive CPU if it is disabled).
+    if len(hours_text) > 9:
+        return None
+    hours, minutes, seconds, millis = map(
+        int, (hours_text, minutes_text, seconds_text, millis_text))
     if minutes >= 60 or seconds >= 60:
         return None
     return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis

@@ -62,6 +62,7 @@ import atexit
 import base64
 import ctypes
 import json
+import math
 import os
 import re
 import shutil
@@ -91,6 +92,7 @@ LOG_YANIT = 200            # /api/durum yanıtında dönen satır
 KUYRUK_YANIT = 100         # /api/durum yanıtında dönen iş sayısı
 MAX_BATCH = 100            # tek ekle isteğinin üst sınırı
 MAX_AKTIF_KUYRUK = 2000    # çalışan + bekleyen işlerin üst sınırı
+MAX_QA_SAYISI = 1000       # iş başına QA montajı seçeneğinin üst sınırı
 
 
 def _child_process_env():
@@ -175,6 +177,56 @@ except Exception as _ogren_hatasi:
 
 app = Flask(__name__)
 
+# Browser-facing mutations in the local UI use one same-origin gate. Checking
+# the Origin header blocks form-compatible cross-site requests as well as JSON
+# fetches; Flask's forced JSON parsing alone is not a CSRF defense.
+LOCAL_MUTATION_PATHS = {
+    "/api/ekle", "/api/iptal", "/api/klasortara", "/api/secim", "/api/ac",
+    "/api/blokkaydet", "/api/ogret",
+}
+
+
+def _local_mutation_source_error():
+    """Reject DNS-rebinding hosts and cross-origin writes to local UI state."""
+    allowed_hosts = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+    raw_host = request.environ.get("HTTP_HOST", "")
+    host = raw_host.lower()
+    if raw_host != raw_host.strip() or any(ch.isspace() for ch in raw_host) or host not in allowed_hosts:
+        return jsonify({"hata": "Yerel değişiklik yalnız localhost veya 127.0.0.1 üzerinden kullanılabilir"}), 403
+    origin = request.headers.get("Origin")
+    if not origin:
+        referer = request.headers.get("Referer", "")
+        if referer:
+            try:
+                parsed_referer = urlsplit(referer)
+                origin = f"{parsed_referer.scheme}://{parsed_referer.netloc}"
+            except ValueError:
+                origin = ""
+    try:
+        parsed = urlsplit(origin or "")
+        valid_origin = (
+            parsed.scheme.lower() == "http" and parsed.netloc.lower() == host
+            and parsed.hostname is not None
+            and parsed.hostname.lower() in {"localhost", "127.0.0.1"}
+            and parsed.port == PORT and parsed.username is None and parsed.password is None
+            and parsed.path in ("", "/") and not parsed.query and not parsed.fragment
+        )
+    except ValueError:
+        valid_origin = False
+    if not valid_origin:
+        return jsonify({"hata": "Yerel değişiklik için aynı kaynak gerekli"}), 403
+    return None
+
+
+@app.before_request
+def _reject_non_loopback_hosts():
+    """Prevent DNS-rebinding access to every route on the loopback-only server."""
+    host = request.environ.get("HTTP_HOST", "")
+    allowed_hosts = {"localhost", "127.0.0.1", f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+    if host.strip() != host or any(ch.isspace() for ch in host) or host.lower() not in allowed_hosts:
+        return jsonify({"hata": "Arayüz yalnız localhost veya 127.0.0.1 üzerinden kullanılabilir"}), 403
+    return None
+
 
 def _memory_request_error():
     """Reject DNS-rebinding Host headers and cross-origin browser mutations."""
@@ -242,6 +294,10 @@ def _guard_local_translation_memory():
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not (
                 request.headers.get("Origin") or request.headers.get("Referer")):
             return jsonify({"hata": "Kalite kaydı için aynı localhost kaynağı gerekli"}), 403
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path in LOCAL_MUTATION_PATHS:
+        error = _local_mutation_source_error()
+        if error:
+            return error
     if request.path.startswith("/api/katki/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         host = request.environ.get("HTTP_HOST", "").lower()
         if host not in {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}:
@@ -1759,6 +1815,31 @@ if (new URLSearchParams(location.search).get("view") === "kalite") panoGoster(tr
 </html>
 """
 
+# ------------------------------------------- istek/yanıt sertleştirmesi ----
+# Rotaların çoğu kendi sınırını koyar (AI OCR/çeviri yanıtı 4 MiB, rubrik
+# puanı 32 KiB...), ama tek tek eksik kalan yollarda gövde sınırsız belleğe
+# alınırdı. Küresel üst sınır tek yerde: en büyük meşru gövde AI yanıtı
+# (4 MiB + JSON kabuğu, bkz. translation_review.MAX_RESPONSE_BYTES + 4096).
+MAX_ISTEK_BAYT = 8 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_ISTEK_BAYT
+
+
+@app.after_request
+def _yerel_yanit_basliklari(response):
+    """Yerel arayüz yanıtlarına MIME koklama/veri sızma koruması ekle.
+
+    ``setdefault`` bilinçli: `send_file` gibi çağrıların kendi Cache-Control
+    değerini ezmiyoruz. CSP eklenmiyor — arayüz tek dosyada satır içi script
+    kullanıyor, kısıtlayıcı bir politika sayfayı kırardı.
+    """
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    if request.path.startswith("/api/"):
+        # API yanıtları yerel durumu (yollar, SRT içeriği, iş günlükleri) taşır.
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
 # ------------------------------------------------------------------ API ----
 @app.get("/")
 def kok():
@@ -2042,9 +2123,23 @@ def api_ai_ocr_gorsel_yanit():
         return jsonify({"hata": "Manuel AI OCR inceleme modülü kullanılamıyor"}), 503
     if not request.is_json:
         return jsonify({"hata": "JSON isteği gerekli"}), 415
-    if request.content_length and request.content_length > ai_ocr_review.MAX_RESPONSE_BYTES:
+    limit = ai_ocr_review.MAX_RESPONSE_BYTES
+    if request.content_length is not None and request.content_length > limit:
         return jsonify({"hata": "AI OCR yanıtı 4 MiB sınırını aşıyor"}), 413
-    value = request.get_json(silent=True) or {}
+    raw = bytearray()
+    while len(raw) <= limit:
+        chunk = request.stream.read(min(64 * 1024, limit + 1 - len(raw)))
+        if not chunk:
+            break
+        raw.extend(chunk)
+    if len(raw) > limit:
+        return jsonify({"hata": "AI OCR yanıtı 4 MiB sınırını aşıyor"}), 413
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return jsonify({"hata": "AI OCR yanıtı geçerli JSON değil"}), 400
+    if not isinstance(value, dict):
+        return jsonify({"hata": "JSON nesnesi gerekli"}), 400
     try:
         return jsonify(ai_ocr_review.import_response(value.get("review_id", ""), value.get("response")))
     except Exception as exc:
@@ -2413,10 +2508,81 @@ def api_is_gecmisi():
                         "uyari": "İş geçmişi okunamadı; canlı kuyruk etkilenmedi."})
 
 
+class _IstekHatasi(ValueError):
+    """Geçersiz arayüz istek gövdesi; rotalar bunu 400 olarak raporlar."""
+
+
+def _istek_json_nesnesi():
+    """Gövdeyi JSON nesnesi olarak döndürür; nesne değilse _IstekHatasi.
+
+    ``get_json(force=True, silent=True) or {}`` tek başına yetmez: gövde bir
+    JSON dizesi olduğunda (`"abc"`) sonuç truthy kalır ve `.get()` çağrısı
+    AttributeError ile 500 üretir. Eksik/boş gövde eskisi gibi {} döner.
+    """
+    deger = request.get_json(force=True, silent=True)
+    if deger is None:
+        return {}
+    if not isinstance(deger, dict):
+        raise _IstekHatasi("JSON nesnesi gerekli")
+    return deger
+
+
+def _secenek_tamsayi(ham, ad, en_az, en_cok):
+    """Arayüz gövdesindeki tamsayı seçeneği; aralık dışıysa _IstekHatasi.
+
+    bool kabul edilmez (JSON true sessizce 1'e dönüşmesin), None/"" varsayılan
+    0'dır. Metin dönüşümü burada yapılır; rotada int() ValueError fırlatıp
+    isteği 500'e düşürmez.
+    """
+    if ham is None or ham == "":
+        return 0
+    if isinstance(ham, bool):
+        raise _IstekHatasi(f"{ad} sayı olmalı (true/false kabul edilmez)")
+    if isinstance(ham, float):
+        if not math.isfinite(ham) or not ham.is_integer():
+            raise _IstekHatasi(f"{ad} tam sayı olmalı")
+        ham = int(ham)
+    elif not isinstance(ham, int):
+        try:
+            ham = int(str(ham).strip())
+        except (TypeError, ValueError):
+            raise _IstekHatasi(f"{ad} tam sayı olmalı")
+    if not en_az <= ham <= en_cok:
+        raise _IstekHatasi(f"{ad} {en_az}-{en_cok} aralığında olmalı")
+    return ham
+
+
+def _secenek_sonlu_sayi(ham, ad):
+    """Arayüz gövdesindeki ondalık seçenek; sonlu ve negatif değilse kabul et.
+
+    float('inf')/'nan' kabul edilirse alt sürece ``--limit-seconds inf``
+    bayrağı gider ve süre sınırı anlamsızlaşır; bu yüzden sonluluk şart.
+    """
+    if ham is None or ham == "":
+        return 0.0
+    if isinstance(ham, bool):
+        raise _IstekHatasi(f"{ad} sayı olmalı (true/false kabul edilmez)")
+    if isinstance(ham, (int, float)):
+        deger = float(ham)
+    else:
+        try:
+            deger = float(str(ham).strip())
+        except (TypeError, ValueError):
+            raise _IstekHatasi(f"{ad} sayı olmalı")
+    if not math.isfinite(deger):
+        raise _IstekHatasi(f"{ad} sonlu bir sayı olmalı")
+    if deger < 0:
+        raise _IstekHatasi(f"{ad} negatif olamaz")
+    return deger
+
+
 @app.post("/api/ekle")
 def api_ekle():
     global IS_SAYAC
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     yollar = v.get("yollar")
     if yollar is None and v.get("yol"):
         yollar = [v["yol"]]
@@ -2425,15 +2591,22 @@ def api_ekle():
     if len(yollar) > MAX_BATCH:
         return jsonify({"hata": f"Tek istekte en fazla {MAX_BATCH} video eklenebilir; seçilen: {len(yollar)}. Listeyi parçalara bölün."}), 413
 
+    try:
+        qa_sayi = _secenek_tamsayi(v.get("qa_sayi", 4), "qa_sayi",
+                                   0, MAX_QA_SAYISI)
+        limit_saniye = _secenek_sonlu_sayi(v.get("limit_saniye"), "limit_saniye")
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
+
     sec = {
         "ust_bant": bool(v.get("ust_bant")),
         "ass": bool(v.get("ass")),
         "cpu": bool(v.get("cpu", False)),
         "review_pack": bool(v.get("review_pack", False)),
         "dil": str(v.get("dil") or "tr,en"),
-        "qa_sayi": int(v.get("qa_sayi", 4) or 0),
+        "qa_sayi": qa_sayi,
         "cikti_klasor": str(v.get("cikti_klasor") or KLASOR),
-        "limit_saniye": float(v.get("limit_saniye") or 0),
+        "limit_saniye": limit_saniye,
         "onek": str(v.get("onek") or ""),
     }
     if any(c in sec["onek"] for c in '<>:"/\\|?*\x00\r\n'):
@@ -2504,7 +2677,10 @@ def api_iptal():
 
 @app.post("/api/klasortara")
 def api_klasortara():
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     dizin = str(v.get("dizin") or "").strip().strip('"')
     if not dizin:
         return jsonify({"hata": "dizin gerekli"}), 400
@@ -2669,7 +2845,10 @@ def api_secim():
         return jsonify({"hata": "Windows seçicisi yalnız Windows sunucusunda kullanılabilir; yolu elle girin."}), 501
     if PICKER_SHUTDOWN.is_set():
         return jsonify({"hata": "UI sunucusu kapanıyor; başlatıcıyı yeniden açın."}), 503
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     tur = v.get("tur")
     if tur not in ("dosya", "klasor", "inceleme"):
         return jsonify({"hata": "tur 'dosya', 'klasor' veya 'inceleme' olmalı"}), 400
@@ -2821,8 +3000,15 @@ def api_secim_durum(job_id):
 
 @app.post("/api/ac")
 def api_ac():
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     yol = str(v.get("yol") or "").strip()
+    if not yol:
+        # Path("") çalışma klasörünü temsil eder; boş yol sessizce sunucunun
+        # kendi klasörünü Explorer'da açardı.
+        return jsonify({"hata": "açılacak yol gerekli"}), 400
     p = Path(yol)
     if p.is_dir():
         subprocess.Popen(["explorer", str(p)], env=_child_process_env())
@@ -2871,6 +3057,14 @@ def srt_zaman_norm(s):
     if int(mi) > 59 or int(se) > 59:
         return None
     return f"{int(h):02d}:{int(mi):02d}:{int(se):02d},{(ms + '000')[:3]}"
+
+
+def _srt_zaman_ms(normalized):
+    """Convert a normalized SRT timestamp to milliseconds for numeric ordering."""
+    hours, minutes, seconds_ms = normalized.split(":")
+    seconds, millis = seconds_ms.split(",")
+    return (((int(hours) * 60 + int(minutes)) * 60 + int(seconds)) * 1000
+            + int(millis))
 
 
 def srt_parse(metin):
@@ -2992,7 +3186,10 @@ def api_blokkaydet():
     yedeği alır. Zamanlar doğrulanır (salt-okunur), boş bloklar düşer.
     v1.2: kayıt sonrası değişen bloklardan güvenli kelime çiftleri otomatik
     öğrenilir (ogren.py; sözlük + <ad>.ogrenme-gunlugu.json)."""
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     ham = v.get("bloklar")
     snap, srt, hata = is_srt_bul(str(v.get("is_id") or "").strip())
     if hata:
@@ -3007,6 +3204,8 @@ def api_blokkaydet():
         en = srt_zaman_norm(b.get("end"))
         if st is None or en is None:
             return jsonify({"hata": f"blok {b.get('index')}: zaman biçimi geçersiz"}), 400
+        if _srt_zaman_ms(st) >= _srt_zaman_ms(en):
+            return jsonify({"hata": f"blok {b.get('index')}: bitiş başlangıçtan sonra olmalı"}), 400
         mtn = str(b.get("metin") or "").replace("\r\n", "\n").replace("\r", "\n")
         mtn = "\n".join(ln.strip() for ln in mtn.split("\n")).strip()
         if mtn:
@@ -3050,7 +3249,10 @@ def api_blokkaydet():
 def api_ogret():
     """Kullanıcı düzeltmesini kullanici-sozlugu.txt'e yazar: eski<TAB>yeni.
     Tekrar: aynı satır varsa 'zaten-var'; eski farklı yeniyle varsa günceller."""
-    v = request.get_json(force=True, silent=True) or {}
+    try:
+        v = _istek_json_nesnesi()
+    except _IstekHatasi as exc:
+        return jsonify({"hata": str(exc)}), 400
     eski = str(v.get("eski") or "").strip()
     yeni = str(v.get("yeni") or "").strip()
     if not eski or not yeni:
