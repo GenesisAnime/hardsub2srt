@@ -38,6 +38,20 @@ class FullVideoAdapterTests(unittest.TestCase):
             with self.assertRaises(video_eval.VideoEvalError):
                 video_eval._read_srt(path, "fixture")
 
+    def test_strict_srt_parser_bounds_hour_digits_without_rejecting_long_timelines(self):
+        oversized_hour = "9" * 4301
+        malformed = (f"1\n{oversized_hour}:00:00,000 --> 999999999:00:01,000\n"
+                     "Synthetic oversized hour\n").encode("utf-8")
+        with self.assertRaisesRegex(video_eval.VideoEvalError, "zaman değeri geçersiz"):
+            video_eval._parse_srt_bytes(malformed, "synthetic")
+
+        long_timeline = (
+            b"1\n999999999:00:00,000 --> 999999999:00:01,000\n"
+            b"Synthetic long timeline\n"
+        )
+        parsed = video_eval._parse_srt_bytes(long_timeline, "synthetic")
+        self.assertEqual(parsed[0]["end_ms"] - parsed[0]["start_ms"], 1000)
+
     def test_synthetic_scoring_counts_missing_extra_text_and_timing(self):
         refs = [cue(0, 1000, 2000, "Café line"), cue(1, 3000, 4000, "Missing line")]
         preds = [cue(0, 1100, 2050, "Cafe line"), cue(1, 7000, 8000, "Extra line")]
