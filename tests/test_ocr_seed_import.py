@@ -71,7 +71,9 @@ class SeedImportTests(unittest.TestCase):
 
     def _import(self, rows=None):
         self._write_rows(rows or [self._row()])
-        output = self.app_root / "seed-review-synthetic"
+        # Match the documented LocalAppData destination. The UI discovers
+        # imports by the ``seed-review-*`` directory prefix.
+        output = self.app_root / "seed-review-example"
         target, report = seed_import.import_seed(self.seed_path, output)
         return target, report
 

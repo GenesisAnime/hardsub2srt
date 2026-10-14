@@ -25,7 +25,7 @@ and reports counts/SHA-256. It writes no review packs or report files.
 
 ```powershell
 $seed = 'C:\path\to\training-seed.jsonl'
-$out = Join-Path $env:LOCALAPPDATA 'hardsub2srt\seed-import-example'
+$out = Join-Path $env:LOCALAPPDATA 'hardsub2srt\seed-review-example'
 py -3 ocr_seed_import.py $seed --out $out
 ```
 
