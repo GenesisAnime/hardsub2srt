@@ -2,7 +2,7 @@
 
 hardsub2srt converts burned-in subtitles in video into timed Turkish `.srt` files using OCR. Video decoding and OCR run locally on the user's Windows/Python machine.
 
-**English** · [Türkçe](README.md)
+**English** · [Türkçe](README.md) · [Türkçe doküman haritası](docs/README.md)
 
 ## Quick start (Windows)
 

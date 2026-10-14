@@ -2,7 +2,7 @@
 
 ## Dil ve dokümantasyon
 
-- Kullanıcıya yönelik yeni veya güncellenen dokümantasyonu doğal Türkçe yazın. Yaygın teknik terimleri yerleşik İngilizce biçiminde koruyun (OCR, CLI, GPU, CI, branch, commit, pull request).
+- Kullanıcıya yönelik yeni veya güncellenen dokümantasyonu doğal Türkçe yazın. Yerleşik teknik terimleri İngilizce kullanın: OCR, CLI, GPU, branch, commit, pull request, CI.
 - `README.md` Türkçe ana giriş, `README.en.md` İngilizce giriştir. Mevcut İngilizce teknik dokümanları çevirmeden bırakın; yeni doküman haritasında dilini ve belgenin kullanım kılavuzu mu, tasarım notu mu olduğunu belirtin.
 - Uygulanmış davranış, ölçülmüş sonuç, plan ve bloklu işi ayrı ifade edin. Kod, test veya CI kanıtlamıyorsa destek/performans/doğruluk iddiası yazmayın.
 - Komutları ve seçenekleri güncel kaynakla karşılaştırın. Path, kullanıcı adı, medya adı veya makineye özgü bilgiyi örneğe koymayın; yer tutucu ve sentetik veri kullanın.

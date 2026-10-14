@@ -34,7 +34,7 @@ py -3 -c "import torch; print(torch.__version__); print(torch.cuda.is_available(
 ## İlk SRT
 
 ```powershell
-py -3 hardsub2srt.py "D:\Videolar\bolum.mkv" -o "D:\Altyazilar\bolum.srt"
+py -3 hardsub2srt.py "D:\LOCAL-ONLY-PLACEHOLDER\input.mkv" -o "D:\LOCAL-ONLY-PLACEHOLDER\output.srt"
 ```
 
 `-o` tam SRT hedefini belirtir. Rerun aynı SRT ve aynı ada bağlı yan dosyaların üzerine yazar; önceki çıktıyı korumak için yeni dosya adı kullanın. Hata durumunda FFmpeg/FFprobe’un PATH’te olduğunu, videonun açıldığını ve OCR paketlerinin kurulu olduğunu kontrol edin.
