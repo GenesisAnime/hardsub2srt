@@ -109,7 +109,10 @@ def _parse_srt_bytes(raw: bytes, label: str) -> list[dict]:
             raise VideoEvalError(f"{label}: {index + 1}. cue zaman biçimi geçersiz")
 
         def to_ms(match):
-            hours, minutes, seconds, millis = map(int, match.groups())
+            hour_text, minute_text, second_text, millis_text = match.groups()
+            if len(hour_text) > 9:
+                raise VideoEvalError(f"{label}: {index + 1}. cue zaman değeri geçersiz")
+            hours, minutes, seconds, millis = map(int, (hour_text, minute_text, second_text, millis_text))
             if minutes >= 60 or seconds >= 60:
                 raise VideoEvalError(f"{label}: {index + 1}. cue zaman değeri geçersiz")
             return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis

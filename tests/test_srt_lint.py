@@ -56,6 +56,14 @@ class SrtLintTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(sum("Çakışma adayı" in warning for warning in warnings), 2)
 
+    def test_unreasonably_large_hour_field_is_reported_without_raising(self):
+        hours = "9" * 5000
+        raw = ("1\n" + hours + ":00:00,000 --> " + hours + ":00:01,000\ntext\n").encode()
+        cues, errors = srt_lint.parse_srt(raw)
+        self.assertEqual(cues, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("zaman damgası", errors[0])
+
     def test_empty_or_non_utf8_file_is_reported(self):
         self.assertTrue(srt_lint.parse_srt(b"")[1])
         self.assertIn("UTF-8", srt_lint.parse_srt(b"\xff")[1][0])

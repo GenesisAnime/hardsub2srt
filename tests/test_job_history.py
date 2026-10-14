@@ -185,6 +185,100 @@ class JobHistoryTests(unittest.TestCase):
         self.assertFalse(_macos_mount_path_is_local(
             PurePosixPath("/Users/example/.local/state"), ""))
 
+    def test_block_editor_rejects_nonpositive_cue_duration_without_writing(self):
+        root = Path(self.temp.name)
+        video = root / "synthetic-editor.mp4"
+        video.write_bytes(b"synthetic; decoder is not run")
+        run_dir = root / "synthetic-run"
+        run_dir.mkdir()
+        srt = run_dir / "synthetic-editor.srt"
+        original = "1\n00:00:01,000 --> 00:00:02,000\nOriginal caption\n"
+        srt.write_text(original, encoding="utf-8")
+        job = ui_server.is_olustur(video, {"cikti_klasor": str(root), "cpu": False},
+                                   "is-994", 994)
+        job.update({"srt": str(srt), "run_dir": str(run_dir), "durum": "bitti"})
+        client = ui_server.app.test_client()
+        base = f"http://127.0.0.1:{ui_server.PORT}"
+        local_headers = {"Origin": base}
+
+        with patch.object(ui_server, "ISLER", [job]), patch.object(ui_server, "ogren_mod", None):
+            for start, end in (("00:00:01,000", "00:00:01,000"),
+                               ("00:00:02,000", "00:00:01,000"),
+                               ("100:00:00,000", "99:59:59,999")):
+                with self.subTest(start=start, end=end):
+                    srt.write_text(original, encoding="utf-8")
+                    backup = srt.with_name(srt.name + ".bak")
+                    backup.unlink(missing_ok=True)
+                    response = client.post("/api/blokkaydet", base_url=base,
+                                           headers=local_headers, json={
+                        "is_id": "is-994",
+                        "bloklar": [{"index": 0, "start": start, "end": end,
+                                     "metin": "Changed caption"}],
+                    })
+                    self.assertEqual(response.status_code, 400)
+                    self.assertIn("bitiş başlangıçtan sonra olmalı",
+                                  response.get_json()["hata"])
+                    self.assertEqual(srt.read_text(encoding="utf-8"), original)
+                    self.assertFalse(backup.exists())
+
+            valid = client.post("/api/blokkaydet", base_url=base,
+                                headers=local_headers, json={
+                "is_id": "is-994",
+                "bloklar": [{"index": 0, "start": "00:00:01,000",
+                             "end": "00:00:03,000", "metin": "Changed caption"}],
+            })
+            self.assertEqual(valid.status_code, 200)
+            self.assertIn("00:00:01,000 --> 00:00:03,000",
+                          srt.read_text(encoding="utf-8"))
+            self.assertTrue(srt.with_name(srt.name + ".bak").exists())
+
+            multi_day = client.post("/api/blokkaydet", base_url=base,
+                                    headers=local_headers, json={
+                "is_id": "is-994",
+                "bloklar": [{"index": 0, "start": "99:59:59,000",
+                             "end": "100:00:00,000", "metin": "Across 100 hours"}],
+            })
+            self.assertEqual(multi_day.status_code, 200)
+            self.assertIn("99:59:59,000 --> 100:00:00,000",
+                          srt.read_text(encoding="utf-8"))
+
+    def test_all_ui_routes_reject_non_loopback_host_headers(self):
+        client = ui_server.app.test_client()
+        local_host = f"127.0.0.1:{ui_server.PORT}"
+        for path in ("/", "/api/durum", "/api/ocr-inceleme/durum",
+                     "/api/ocr-inceleme/srt-lint", "/api/qa/synthetic.json"):
+            with self.subTest(path=path):
+                response = client.get(path, base_url=f"http://{local_host}",
+                                      headers={"Host": "attacker.synthetic.test:8765"})
+                self.assertEqual(response.status_code, 403)
+
+        for host in (f"localhost:{ui_server.PORT}", local_host):
+            with self.subTest(host=host):
+                response = client.get("/api/durum", base_url=f"http://{host}")
+                self.assertEqual(response.status_code, 200)
+
+    def test_cross_origin_form_cannot_write_user_dictionary(self):
+        dictionary = Path(self.temp.name) / "synthetic-user-dictionary.txt"
+        client = ui_server.app.test_client()
+        host = f"http://127.0.0.1:{ui_server.PORT}"
+        body = '{"eski":"CSRF-PROBE","yeni":"=POISONED"}'
+        with patch.object(ui_server, "SOZLUK", dictionary):
+            cross_origin = client.post(
+                "/api/ogret", base_url=host,
+                headers={"Origin": "https://attacker.synthetic.test",
+                         "Content-Type": "text/plain"}, data=body)
+            self.assertEqual(cross_origin.status_code, 403)
+            self.assertFalse(dictionary.exists())
+
+            same_origin = client.post(
+                "/api/ogret", base_url=host,
+                headers={"Origin": host, "Content-Type": "text/plain"}, data=body)
+            self.assertEqual(same_origin.status_code, 200)
+            self.assertEqual(
+                dictionary.read_text(encoding="utf-8"),
+                "CSRF-PROBE\t=POISONED\n",
+            )
+
     def test_history_endpoint_returns_allowlisted_records(self):
         history = JobHistory(self.path)
         history.record("is-8", status="failed", phase="complete", error_code="missing_srt")
@@ -207,6 +301,61 @@ class JobHistoryTests(unittest.TestCase):
                 headers={"Origin": "http://attacker.example"})
         self.assertEqual(host_response.status_code, 403)
         self.assertEqual(origin_response.status_code, 403)
+
+    def test_browser_mutations_reject_cross_origin_and_allow_same_origin(self):
+        client = ui_server.app.test_client()
+        external_origin = "https://attacker.synthetic.test"
+        host = f"http://127.0.0.1:{ui_server.PORT}"
+        headers = {"Content-Type": "text/plain", "Origin": external_origin}
+
+        # A text/plain JSON body is form-compatible: HTML forms can submit it,
+        # so requiring the Content-Type to say application/json is not enough.
+        cross_origin = client.post(
+            "/api/ogret", base_url=host, headers=headers,
+            data='{"eski":"CSRF-PROBE","yeni":"=POISONED"}')
+        self.assertEqual(cross_origin.status_code, 403)
+
+        # The queue API also force-parses JSON and must reject the same browser
+        # source before examining the caller-supplied local file paths.
+        cross_origin_queue = client.post(
+            "/api/ekle", base_url=host, headers=headers,
+            data='{"yollar":["C:/synthetic/video.mp4"]}')
+        self.assertEqual(cross_origin_queue.status_code, 403)
+
+        same_origin = client.post(
+            "/api/ekle", base_url=host,
+            headers={"Origin": host, "Content-Type": "text/plain"},
+            data='{"yollar":["C:/synthetic/video.mp4"]}')
+        self.assertEqual(same_origin.status_code, 200)
+
+        rejected_host = client.post(
+            "/api/ogret", base_url="http://127.0.0.1.evil:8765",
+            headers={"Origin": "http://127.0.0.1.evil:8765", "Content-Type": "text/plain"},
+            data='{"eski":"x","yeni":"y"}')
+        self.assertEqual(rejected_host.status_code, 403)
+
+        hostile_origin = client.post(
+            "/api/ogret", base_url=host,
+            headers={"Origin": host + ".evil", "Content-Type": "text/plain"},
+            data='{"eski":"x","yeni":"y"}')
+        self.assertEqual(hostile_origin.status_code, 403)
+
+        missing_origin = client.post(
+            "/api/ogret", base_url=host, data='{"eski":"x","yeni":"y"}')
+        self.assertEqual(missing_origin.status_code, 403)
+
+        read_only = client.get("/api/durum", base_url=host,
+                               headers={"Origin": external_origin})
+        self.assertEqual(read_only.status_code, 200)
+        self.assertNotIn("/api/durum", ui_server.LOCAL_MUTATION_PATHS)
+
+        guarded = {
+            "/api/ekle", "/api/iptal", "/api/klasortara", "/api/secim",
+            "/api/ac", "/api/blokkaydet", "/api/ogret",
+        }
+        self.assertTrue(guarded.issubset(ui_server.LOCAL_MUTATION_PATHS))
+        self.assertTrue(all(rule.rule in guarded for rule in ui_server.app.url_map.iter_rules()
+                            if rule.rule in ui_server.LOCAL_MUTATION_PATHS))
 
     def test_worker_exception_reaps_child_before_persisting_terminal_failure(self):
         history = JobHistory(self.path)
@@ -281,6 +430,7 @@ class JobHistoryTests(unittest.TestCase):
             ui_server.CALISAN.clear()
         self.assertEqual(history.recent(1)[0]["status"], "running")
 
+    @unittest.skipUnless(os.name == "nt", "Exercises Windows Job Object ownership")
     def test_normal_exit_waits_for_persistent_owner_close_failure_before_serial_slot_release(self):
         history = JobHistory(self.path)
         first_close = threading.Event()
@@ -350,6 +500,7 @@ class JobHistoryTests(unittest.TestCase):
         self.assertGreaterEqual(owner.close_calls, 4)
         self.assertEqual(history.recent(1)[0]["status"], "succeeded")
 
+    @unittest.skipUnless(os.name == "nt", "Exercises Windows Job Object assignment failure")
     def test_job_owner_assignment_and_reap_failure_stays_tracked_until_reaped(self):
         history = JobHistory(self.path)
 

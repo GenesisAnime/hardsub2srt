@@ -144,7 +144,13 @@ def _validate_crop_bytes(data: bytes, cue: dict) -> bool:
 
 def _srt_time_ms(value: str) -> int | None:
     m = re.fullmatch(r"(\d{2,}):(\d{2}):(\d{2}),(\d{3})", value or "")
-    if not m or int(m[2]) > 59 or int(m[3]) > 59:
+    if not m:
+        return None
+    # SRT hours may exceed two digits, but an unbounded field makes int() raise
+    # on Python's 4300-digit conversion limit. That would escape the pack
+    # validator as a raw ValueError instead of the documented ReviewError, so
+    # bound it exactly like srt_lint and the video-evaluation adapter do.
+    if len(m[1]) > 9 or int(m[2]) > 59 or int(m[3]) > 59:
         return None
     return ((int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3])) * 1000 + int(m[4]))
 
