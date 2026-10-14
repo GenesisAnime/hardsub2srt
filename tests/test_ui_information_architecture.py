@@ -24,6 +24,8 @@ class UiInformationArchitectureTests(unittest.TestCase):
         self.assertIn('id="opt-gpu" checked', html)
         self.assertIn('id="opt-cpu"', html)
         self.assertIn('id="opt-review-pack"', html)
+        self.assertIn('id="opt-dil" value="tr"', html)
+        self.assertIn('id="opt-review-pack" checked', html)
 
         log_details = html.split('<details id="log-details"', 1)[1].split(">", 1)[0]
         self.assertNotIn(" open", log_details)

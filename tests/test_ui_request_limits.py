@@ -47,6 +47,13 @@ class RequestSizeLimitTests(unittest.TestCase):
         response = self._post("/api/ekle", body)
         self.assertEqual(response.status_code, 413)
 
+    def test_language_codes_are_validated_before_queueing(self):
+        response = self._post("/api/ekle", json.dumps({
+            "yollar": [str(self.video)], "dil": "tr;bad",
+        }).encode("utf-8"))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("EasyOCR", response.get_json()["hata"])
+
     def test_body_exactly_at_the_limit_is_still_accepted(self):
         payload = json.dumps({
             "yollar": [str(self.video)],

@@ -1186,14 +1186,15 @@ main.quality-view #kuyruk-kart{grid-column:1/-1}
         <label class="chk"><input type="checkbox" id="opt-ass"> ASS üret (srt2ass)</label>
         <div>
           <label for="opt-dil">Dil (--lang)</label>
-          <input type="text" id="opt-dil" value="tr,en">
+          <input type="text" id="opt-dil" value="tr" placeholder="tr, en, ja">
+          <div class="not">Altyazının dilini seçin. Türkçe için tr kullanın; yalnız altyazı gerçekten iki dilli ise tr,en gibi bir liste girin.</div>
         </div>
         <div>
           <label for="opt-qa">QA montaj sayısı</label>
           <input type="number" id="opt-qa" value="4" min="0" max="12">
         </div>
-        <label class="chk" style="grid-column:1/-1"><input type="checkbox" id="opt-review-pack">
-          Yerel AI inceleme paketi oluştur (final SRT + cue başına tek altyazı kırpımı; otomatik paylaşım yok)</label>
+        <label class="chk" style="grid-column:1/-1"><input type="checkbox" id="opt-review-pack" checked>
+          Yerel review-pack oluştur (insan incelemesi için cue görüntüleri ve OCR risk uyarıları; otomatik paylaşım yok)</label>
         <div>
           <label for="opt-limit">Test modu — ilk N sn (0 = tüm video)</label>
           <input type="number" id="opt-limit" value="0" min="0" step="30">
@@ -1322,7 +1323,7 @@ function seceneklerOku(){
   return {
     ust_bant: $("opt-ust").checked,
     ass: $("opt-ass").checked,
-    dil: $("opt-dil").value.trim() || "tr,en",
+    dil: $("opt-dil").value.trim() || "tr",
     qa_sayi: parseInt($("opt-qa").value || "4", 10) || 0,
     review_pack: $("opt-review-pack").checked,
     cikti_klasor: $("opt-cikti").value.trim(),
@@ -2842,12 +2843,18 @@ def api_ekle():
         "ass": bool(v.get("ass")),
         "cpu": bool(v.get("cpu", False)),
         "review_pack": bool(v.get("review_pack", False)),
-        "dil": str(v.get("dil") or "tr,en"),
+        "dil": str(v.get("dil") or "tr").strip().lower(),
         "qa_sayi": qa_sayi,
         "cikti_klasor": str(v.get("cikti_klasor") or KLASOR),
         "limit_saniye": limit_saniye,
         "onek": str(v.get("onek") or ""),
     }
+    if (len(sec["dil"]) > 64 or any(
+            not re.fullmatch(r"[a-z]{2,3}(?:_[a-z0-9]+)?", code.strip())
+            for code in sec["dil"].split(",") if code.strip()) or
+            not sec["dil"].split(",") or
+            any(not code.strip() for code in sec["dil"].split(","))):
+        return jsonify({"hata": "dil alanı EasyOCR kodlarını virgülle alır (ör. tr veya tr,en)"}), 400
     if any(c in sec["onek"] for c in '<>:"/\\|?*\x00\r\n'):
         return jsonify({"hata": "çıktı öneki dosya yolu ayıracı veya geçersiz karakter içeremez"}), 400
 
