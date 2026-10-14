@@ -21,7 +21,7 @@ py -3 ocr_dataset_merge.py `
   --out-name "verified-ocr-dataset-composite-SYNTHETIC"
 ```
 
-Yollar sentetik örnektir. Her kaynak pack'in tüm cue'ları metadata'da tek gerçek source+episode grubuna, farklı pack'ler ise farklı gerçek gruplara bağlanmalıdır. Bir cue collision'ı, yinelenen pack, kaynak export hash'i, etkin karar veya crop uyuşmazlığı, kök dışı/reparse path ya da toplam boyut sınırında merge durur. `source-lineage-v1.json` source export manifestini ve parent review manifesti, SRT ve event journal hash'lerini bağlar; validator bunları her hazırlık/değerlendirme çağrısında yeniden kontrol eder. Metadata, hak kanıtı ve insan hak incelemesi ayrıca gereklidir; merge bunları üretmez veya onaylamaz.
+Yollar sentetik örnektir. Her kaynak pack'teki tüm cue'lar metadata'da tek gerçek source+episode grubuna, farklı pack'ler ise farklı gerçek gruplara bağlanmalıdır. Cue çakışması, yinelenen pack, kaynak export hash'i, etkin karar veya crop uyuşmazlığı, kök dışına çıkan/reparse path ya da toplam boyut sınırı merge işlemini durdurur. `source-lineage-v1.json` kaynak export manifestini ve üst review manifesti, SRT ve event journal hash'lerini birbirine bağlar; validator bunları her hazırlık/değerlendirme çağrısında yeniden kontrol eder. Metadata, hak kanıtı ve insan hak incelemesi de gerekir; merge bunları üretmez veya onaylamaz.
 
 Birleşik export için boş metadata şablonunu CLI ile oluşturun; review UI şablon düğmesi tek açık review-pack içindeki export'a bağlıdır:
 
@@ -126,13 +126,13 @@ seçtiğiniz coverage oranıyla **yeni, boş bir `--out` klasöründe** yeniden
 korunmuştur, ancak eski hazırlık artifact'ları güncel v1 validator sözleşmesine
 uyumlu değildir.
 
-Komut crop dosyalarının göreli ve kök dışına taşmayan yol olduğunu, SHA-256 değerlerinin eşleştiğini ve önce JPEG boyut marker'larının güvenli sınırlar içinde olduğunu, ardından OpenCV ile görüntünün çözülebildiğini denetler. Tek crop en çok 1280×1280 ve benzersiz crop toplamı en çok 128 MiB'dir; metadata 16 MiB, her rights evidence 16 MiB ve toplam kanıt dosyaları 64 MiB ile sınırlıdır. `cue_id` tekrarını, `ocr_confidence` alanı da dahil yanlış Phase 2 manifest şemasını, eksik/ekstra metadata satırını, boş insan doğrulanmış metni, lisans kanıtı dosyası/hash'i eksikliğini ve bozuk crop'u reddeder. `review_event_id` tek başına yeterli değildir: üst `.review-pack` ile `review-events.jsonl` içinde halen etkin karara ve aynı cue/crop/hash/SRT/zaman/metin/confidence değerlerine bağlanmalıdır. Bu zincir bulunmazsa provenance self-attested kalır ve deney bloklanır. Grup anahtarı NFC + boşluk birleştirme + casefold sonrası `source_id + episode_id` birleşimidir. Aynı gruptaki hiçbir cue farklı split'e düşmez. En az üç ayrı grup yoksa veya split boş kalacaksa çıktı üretimi durur.
+Komut crop dosyalarının göreli ve kökün altında kalan yollar olduğunu, SHA-256 değerlerinin eşleştiğini ve JPEG boyut işaretçilerinin güvenli sınırlar içinde olduğunu denetler; ardından OpenCV ile görüntünün çözülebildiğini doğrular. Tek crop en çok 1280×1280, benzersiz crop'ların toplamı en çok 128 MiB olabilir. Metadata 16 MiB, her hak kanıtı dosyası 16 MiB ve tüm kanıt dosyaları toplamı 64 MiB ile sınırlıdır. Komut yinelenen `cue_id` değerlerini, `ocr_confidence` alanı da dahil yanlış Phase 2 manifest şemasını, eksik/fazla metadata satırlarını, boş insan doğrulamalı metni, eksik lisans kanıtı dosyası/hash'ini ve bozuk crop'u reddeder. `review_event_id` tek başına yeterli değildir: üst `.review-pack` ve `review-events.jsonl` üzerinden hâlâ etkin karara ve aynı cue/crop/hash/SRT/zaman/metin/confidence değerlerine bağlanmalıdır. Bu zincir yoksa provenance `self_attested` kalır ve deney bloklanır. Grup anahtarı, NFC + boşluk birleştirme + casefold uygulamasından sonra `source_id + episode_id` birleşimidir. Aynı gruptaki cue'lar farklı split'lere dağılmaz. En az üç ayrı grup yoksa veya herhangi bir split boş kalacaksa çıktı üretilmez.
 
 Deterministik sıralama `SHA256(seed + NUL + canonical_group_id)` ile yapılır; sıralanmış gruplar sabit 80/10/10 hedefli grup adetlerine ayrılır. Bu, grup sayısına göre bölmedir; örnek/cue sayısına göre tam 80/10/10 garantisi vermez. Kısıtlı grup sayısında oranlar yaklaşık olur; rapor hem grup hem cue satır sayılarını ayrı verir. Yeni veri geldikçe mevcut test gruplarını sessizce değiştirmeyin: deney manifestini dondurun ve yeni bir deney sürümü açın.
 
 ## Metrik tanımları ve rapor
 
-Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json`, yeni dondurulmuş plan için `schemas/ocr-evaluation-plan-v1.schema.json`, `schemas/ocr-experiment-report-v1.schema.json`, video raporu için `schemas/ocr-video-evaluation-report-v1.schema.json` ve crop-only rapor için `schemas/ocr-crop-evaluation-report-v1.schema.json` dosyalarındadır. `experiment-report.json` hazırlıkta daima `PREPARED_NOT_RUN`, `rights_verified:false`, `experiment_run_blocked:true` ve null metriklerle yazılır. Null, sıfır başarı demek değildir; ölçülmedi demektir. Rights dosyalarının varlığı/hash'i yalnızca kanıt dosyasını öz-beyan edilen kayda bağlar; hukuki izni doğrulamaz. `ocr_crop_eval.py` yalnız still metin CER/WER/exact/coverage ölçer. `ocr_video_eval.py` sabit SRT ve zamanlı referans dosyaları için ayrı measurement-only adapter'dır; gerçek video/OCR çalıştırmaz ve release PASS üretemez. `vtt-qa.py`/`regresyon/gt_gate.py` mevcut regresyon araçları ayrı kalır.
+Makinece okunur şemalar `schemas/ocr-experiment-metadata-v1.schema.json`, `schemas/ocr-experiment-split-v1.schema.json`, yeni sabitlenmiş plan için `schemas/ocr-evaluation-plan-v1.schema.json`, `schemas/ocr-experiment-report-v1.schema.json`, video raporu için `schemas/ocr-video-evaluation-report-v1.schema.json` ve yalnız crop raporu için `schemas/ocr-crop-evaluation-report-v1.schema.json` dosyalarındadır. Hazırlık sırasında `experiment-report.json` daima `PREPARED_NOT_RUN`, `rights_verified:false`, `experiment_run_blocked:true` ve null metriklerle yazılır. Null, sıfır başarı değil, ölçüm yapılmadığı anlamına gelir. Hak dosyalarının varlığı/hash'i yalnızca kanıt dosyasını öz-beyan edilmiş kayda bağlar; yasal izni doğrulamaz. `ocr_crop_eval.py` yalnızca sabit görüntülerdeki metin için CER/WER/exact/coverage ölçer. `ocr_video_eval.py`, sabit SRT ve zaman hizalı referans dosyaları için ayrı, yalnız ölçüm yapan adapter'dır; gerçek video/OCR çalıştırmaz ve release PASS üretemez. `vtt-qa.py`/`regresyon/gt_gate.py` ayrı mevcut regresyon araçları olarak kalır.
 
 Still-crop ölçüm adaptörü `ocr_crop_eval.py` ile eklenmiştir. Bu adapter yalnızca
 Phase 2 insan onaylı crop + kaynak metni üzerinde OCR motorunun **crop metnini**
@@ -147,8 +147,8 @@ Phase 2 insan onaylı crop + kaynak metni üzerinde OCR motorunun **crop metnini
 metadata'sındaki her kayıt için `license.human_review.status` `reviewed`
 olmalıdır. Bu yalnız hak incelemesinin kullanıcı tarafından beyan edildiğini
 gösterir; raporda `rights_verified` daima `false` kalır. Eser kullanma hakkını
-program doğrulamaz. Parent review-pack/event zinciri her engine başlamadan önce
-tekrar doğrulanır; kendi başına taşınmış/self-attested export reddedilir.
+program doğrulamaz. Üst review-pack/event zinciri her motor başlamadan hemen
+önce yeniden doğrulanır; tek başına taşınmış/self-attested export reddedilir.
 
 ```powershell
 py -3 ocr_crop_eval.py "D:\yerel\verified-ocr-dataset-..." `
@@ -173,11 +173,11 @@ değeri ve oluşturulan ONNX oturumlarının configured provider listesi bulunur
 Bunlar node-level inference profili değildir. RapidOCR oturumundan configured
 provider listesi okunamazsa işlem durur.
 
-Her engine aynı frozen `test` split satırlarını işler ve her engine'den hemen
-önce manifest, metadata, crop SHA/decode, split ataması ve etkin Phase 2 karar
-zinciri tekrar doğrulanır. Çıktı yalnız aggregate metriklerdir; crop, OCR
-çıktısı, insan kaynak metni veya cue ID rapora yazılmaz. Rapor, dataset/review
-pack/metadata klasörlerinin dışında yeni bir JSON dosyası olmalıdır.
+Her motor aynı sabitlenmiş `test` split satırlarını işler. Her motor başlamadan
+hemen önce manifest, metadata, crop SHA/decode, split ataması ve etkin Phase 2
+karar zinciri yeniden doğrulanır. Çıktı yalnız aggregate metriklerden oluşur;
+crop, OCR çıktısı, insan kaynak metni veya cue ID rapora yazılmaz. Rapor,
+dataset/review-pack/metadata klasörlerinin dışında yeni bir JSON dosyası olmalıdır.
 
 - CER/WER referansı insan tarafından görsel olarak onaylanmış kaynak metindir;
   metrik normalize ederken NFC + boşluk birleştirme/trim uygular, case ve
@@ -206,8 +206,8 @@ almaz.
 `ocr_video_eval_templates.py`, yalnız mevcut strict Phase 5 doğrulamasından
 geçen dataset/metadata/experiment/split girdileri için yerel taslaklar üretir.
 Üretmeden önce gerçek adapter'ın kullandığı `_validated_split` ve
-`ocr_crop_eval.validate_run` çağrılır; Phase 2 etkin karar zinciri, rights
-evidence ve review metadata, hash'ler ve frozen grup split'i doğrulanamıyorsa
+`ocr_crop_eval.validate_run` çağrılır; Phase 2 etkin karar zinciri, hak kanıtı
+ve review metadata, hash'ler ve sabitlenmiş grup split'i doğrulanamıyorsa
 dosya yazılmaz. Bu yardımcı doğrulamayı gevşetmez.
 
 ```powershell
@@ -223,24 +223,24 @@ py -3 ocr_video_eval_templates.py "D:\yerel\verified-ocr-dataset-..." `
 (UNC/mapped drive ve `OneDrive`, `OneDriveCommercial`, `OneDriveConsumer`
 ortam değişkenlerindeki köklerin altı reddedilir) ve dataset, onun review-pack
 parent'ı, metadata/experiment/split klasörleri dışında kalmalıdır.
-`--protect-dir` her gelecekteki reference/prediction input klasörünü ek koruma
-listesine alır.
-Helper yeni benzersiz bir alt klasör yaratır; iki draft JSON ve README staging
-klasörüne yazılıp atomik olarak taşınır, var olan çıktı üzerine yazılmaz.
+`--protect-dir` her gelecek reference/prediction input klasörünü ek koruma
+listesine alır. Yardımcı yeni ve benzersiz bir alt klasör oluşturur; iki taslak
+JSON ile README önce hazırlık klasörüne yazılır, ardından atomik olarak taşınır.
+Var olan çıktının üzerine yazılmaz.
 
 `timed-reference-manifest-v1.draft.json` ve
 `prediction-manifest-v1.draft.json` dosyaları özel
 [`draft-v1 şemasını`](../schemas/ocr-video-evaluation-templates-draft-v1.schema.json)
 kullanır. Format, `ocr_video_eval.py`'nin kabul ettiği manifestten kasıtlı
 olarak farklıdır: `schema_version="draft-v1"`, `template_only=true` ve
-`INCOMPLETE_NOT_FOR_EVALUATION` alanlarıyla gerçek evaluation girişinde
-reddedilir. Yalnız frozen source/episode/split değerleri ile baseline/candidate
-kimlikleri doldurulur. Dil, medya hash'i, SRT yolları/hash'leri, alignment
-review (daima `pending`), model/config hash'i, device ve backend açıkça boş
-bırakılır. Taslak hak onayı, trusted reference, değerlendirme sonucu veya
-Phase 6 PASS oluşturmaz. Sentetik testlerde başarılı output için validator
-sınırı mock'lanır; ayrıca gerçek strict validator boş dataset/rights girdisini
-reddedip hiç output yazmaz.
+`INCOMPLETE_NOT_FOR_EVALUATION` alanları nedeniyle gerçek evaluation girdisi
+olarak reddedilir. Yalnız sabitlenmiş source/episode/split değerleri ile
+baseline/candidate kimlikleri doldurulur. Dil, medya hash'i, SRT yolları/hash'leri,
+alignment review (daima `pending`), model/config hash'i, device ve backend açıkça
+boş bırakılır. Taslak hak onayı, güvenilir referans, değerlendirme sonucu veya
+Phase 6 PASS oluşturmaz. Sentetik testlerde başarılı çıktı için validator
+sınırı mock'lanır; gerçek strict validator ise boş dataset/hak girdisini
+reddeder ve hiçbir çıktı yazmaz.
 
 `ocr_video_eval.py`, gelecekte izinli ve insan tarafından zaman hizası
 incelenmiş source-language referansları hazır olduğunda sabit tam bölüm SRT
@@ -264,18 +264,18 @@ py -3 ocr_video_eval.py "D:\yerel\verified-ocr-dataset-..." `
   --out "D:\yerel-raporlar\video-eval-2026-01.json"
 ```
 
-Input formats are strict and documented by
-`schemas/ocr-timed-reference-manifest-v1.schema.json` and
-`schemas/ocr-prediction-manifest-v1.schema.json`. Both contain exactly one row
-per frozen `source_id + episode_id` group; the prediction manifest has one row
-for each of the prepared baseline and candidate. Their split assignment must
-match the existing `split-manifest.json`. The helper first calls
-`ocr_crop_eval.validate_run`, which rechecks the active Phase 2 event chain,
-metadata/evidence hashes, human rights review attestation and the existing
-frozen split. It does not invent a replacement split contract. It also requires
-the exact sibling `split-manifest.json` and `PREPARED_NOT_RUN` experiment report.
+Girdi biçimleri katıdır ve `schemas/ocr-timed-reference-manifest-v1.schema.json`
+ile `schemas/ocr-prediction-manifest-v1.schema.json` şemalarında belgelenmiştir.
+İki manifestte de sabitlenmiş her `source_id + episode_id` grubu için tam bir
+satır bulunur; tahmin manifestinde hazırlanmış baseline ve candidate için ayrı
+satır yer alır. Split atamaları mevcut `split-manifest.json` ile eşleşmelidir.
+Yardımcı önce `ocr_crop_eval.validate_run` çağrısını yaparak etkin Phase 2 olay
+zincirini, metadata/kanıt hash'lerini, insan hak inceleme beyanını ve mevcut
+sabit split'i yeniden doğrular. Yeni bir split sözleşmesi üretmez. Ayrıca aynı
+üst dizindeki tam `split-manifest.json` dosyasını ve `PREPARED_NOT_RUN` deney
+raporunu zorunlu tutar.
 
-Timed-reference record example:
+Zaman hizalı referans kaydı örneği:
 
 ```json
 {
@@ -298,135 +298,142 @@ Timed-reference record example:
 }
 ```
 
-Prediction records use the same `source_id`, `episode_id`, `split` and
-`media_sha256`, plus `engine_id` (exactly the frozen baseline/candidate IDs),
-`prediction_srt_path`, `prediction_srt_sha256`, `model_sha256`,
-`config_sha256`, `configured_device` (`gpu` or `cpu`) and
-`session_configured_backend`. Put relative SRT files under their respective
-manifest directories. `prediction-manifest-v1` must contain both engine outputs
-for every split group; engine config/configured-device/session-configured-backend
-must stay constant across the groups for that engine. These fields bind the provided files and declare
-how they were produced, but this fixed-output adapter cannot verify execution.
+Tahmin kayıtları aynı `source_id`, `episode_id`, `split` ve
+`media_sha256` değerlerinin yanı sıra `engine_id` (sabit baseline/candidate
+ID'leriyle birebir aynı), `prediction_srt_path`, `prediction_srt_sha256`,
+`model_sha256`, `config_sha256`, `configured_device` (`gpu` veya `cpu`) ve
+`session_configured_backend` alanlarını kullanır. Göreli SRT dosyalarını ilgili
+manifest dizinlerinin altına koyun. `prediction-manifest-v1` her split grubu
+için iki motorun çıktısını da içermelidir; bir motorun engine config,
+configured-device ve session-configured-backend değerleri tüm gruplarda sabit
+kalmalıdır. Bu alanlar sağlanan dosyaları birbirine bağlar ve nasıl
+üretildiklerini beyan eder, ancak bu sabit çıktı adaptörü çalıştırmayı doğrulayamaz.
 
-Each timed reference row binds a local relative SRT path and SHA-256 to source,
-episode, split and the media SHA-256. `alignment_review.status=reviewed`,
-reviewer, timezone timestamp and the same media hash are required. This is a
-human attestation, not independent proof that the subtitle is authorized,
-source-language, synchronized, or reviewed by a verified person. Rights remain
-`false` in every report. Each prediction row similarly binds a local SRT and
-SHA-256 to that exact media hash plus self-declared engine
-config/configured-device/session-configured-backend.
-All referenced paths must remain under their manifest directory; hash or group
-mismatch stops evaluation. Input SRTs are strict UTF-8, bounded in size/cue
-count, and every nonempty block must parse; malformed blocks are not silently
-skipped. One report requires a single common `language` value across every
-timed reference; mixed-language references are rejected so WER tokenization is
-not pooled across incompatible languages. The current dataset metadata schema
-has no language field to compare against, so the reference language remains a
-human declaration and the report includes it.
+Her zaman hizalı referans satırı göreli bir yerel SRT yolunu ve SHA-256 değerini
+source, episode, split ve medya SHA-256 değerlerine bağlar.
+`alignment_review.status=reviewed`, gözden geçiren kişi, saat dilimi içeren tarih
+ve aynı medya hash'i zorunludur. Bu bir insan beyanıdır; altyazının izinli,
+kaynak dilinde, eşzamanlı veya kimliği doğrulanmış biri tarafından incelenmiş
+olduğunu bağımsız olarak kanıtlamaz. Her raporda rights değeri `false` kalır.
+Her tahmin satırı da yerel SRT'yi ve SHA-256 değerini tam olarak aynı medya
+hash'ine ve beyan edilmiş engine config/configured-device/session-configured-backend
+değerlerine bağlar.
 
-Cues use deterministic maximum-cardinality one-to-one temporal matching.
-Candidate pairs need intersection / **reference cue duration** >= 0.5. The
-Hopcroft-Karp traversal orders reference cues by candidate degree then file
-order; each adjacency list prefers larger overlap, then prediction file order.
-This guarantees the largest number of valid pairs, while the overlap ordering
-is a stable tie-break preference (it does not claim globally maximal total
-overlap among all maximum-cardinality matchings). To bound dense interval work,
-one shared counter allows at most **2,000,000 pair operations total**: each
-prediction visited while pruning the active list and each remaining
-reference/prediction overlap comparison counts once. It also retains at most
-**2,000,000 qualifying edges**; each bound is checked before processing or
-appending the over-limit item. Either limit stops scoring, including when all
-overlaps are below threshold. Text
-CER/WER and normalization reuse `ocr_crop_eval.py`; unmatched references count
-as empty OCR text, while extra prediction cues lower precision. Timing reports
-matched-cue mean absolute start/end error and share with both errors within the
-previously frozen tolerance. Reports include train/validation/test, micro and
-per-group results, but never cue text, raw source/episode IDs, or absolute
-paths (group rows use SHA-256 pseudonyms).
+Başvurulan tüm yollar manifest dizininin altında kalmalıdır; hash veya grup
+uyuşmazlığı değerlendirmeyi durdurur. Girdi SRT'leri katı UTF-8 biçiminde ve
+boyut/cue sayısı sınırları içinde olmalıdır; boş olmayan her blok ayrıştırılmalı,
+bozuk bloklar sessizce atlanmamalıdır. Tek bir raporda bütün zaman hizalı
+referansların `language` değeri aynı olmalıdır. WER tokenization uyumsuz diller
+arasında birleştirilmesin diye farklı dillerdeki referanslar reddedilir. Mevcut
+dataset metadata şemasında karşılaştırılacak bir dil alanı yoktur; bu nedenle
+referans dili insan beyanı olarak kalır ve rapora eklenir.
 
-The output schema `schemas/ocr-video-evaluation-report-v1.schema.json` is
-deliberately **not** the Phase 6 input schema. It records the candidate's
-observed test CER delta, the plan hash, and the per-test-group coverage result
-for both baseline and candidate, but does not convert either comparison into
-release eligibility. Coverage is `matched_cues / reference_cues` within each
-frozen source+episode test group. A match is the evaluator's deterministic
-one-to-one temporal match requiring overlap / reference-cue duration >= 0.5;
-unmatched reference cues stay in the denominator and extra predictions do not
-increase it. The group must meet the explicitly predeclared threshold for both
-engines. A group exactly on the threshold passes; any group below it makes the
-coverage gate `FAIL`. The overall comparison also fails when candidate corpus
-CER exceeds the frozen limit or any test group's candidate CER regresses while
-the frozen no-group-regression rule is required. Any failed comparison returns
-exit code 1 after saving its measurement report. Missing, duplicate, zero-denominator, inconsistent, or
-unexpected test-group coverage stops evaluation without writing a report. Its status is always
+Cue'lar, en yüksek eşleşme sayısını bulan deterministik bire bir zamansal
+eşleştirme kullanır. Eşleşecek aday çiftlerde kesişim / **referans cue süresi**
+>= 0.5 olmalıdır. Hopcroft-Karp geçişi referans cue'larını önce aday derecesine,
+sonra dosya sırasına göre dizer; her komşuluk listesinde daha büyük örtüşme,
+ardından tahmin dosyası sırası tercih edilir. Böylece geçerli çift sayısı en
+yüksek düzeye çıkar. Örtüşme sırası kararlı bir eşitlik bozma tercihidir; en
+yüksek eşleşme sayısına sahip tüm çözümler arasında toplam örtüşmenin genel
+olarak en büyük olduğunu iddia etmez. Yoğun aralık işlemlerini sınırlamak için
+ortak sayaç toplamda en fazla **2.000.000 çift işlemi** kabul eder: etkin listeyi
+budarken ziyaret edilen her tahmin ve kalan her referans/tahmin örtüşme
+karşılaştırması bir işlem sayılır. Ayrıca en fazla **2.000.000 uygun kenar**
+saklanır. Her sınır, aşırı öğe işlenmeden veya eklenmeden önce denetlenir.
+Örtüşmelerin tümü eşiğin altında kalsa bile sınırlardan birine ulaşmak
+puanlamayı durdurur. Metin CER/WER ve normalizasyon için `ocr_crop_eval.py`
+yeniden kullanılır; eşleşmeyen referanslar boş OCR metni sayılır, fazla tahmin
+cue'ları precision değerini düşürür. Zaman raporu eşleşmiş cue'larda
+başlangıç/bitiş mutlak hatalarının ortalamasını ve her iki hatası da önceden
+sabitlenmiş tolerans içinde olanların oranını verir. Raporlar
+train/validation/test, micro ve grup başına sonuçları içerir; cue metni, ham
+source/episode ID'leri veya mutlak yolları içermez (grup satırlarında SHA-256
+takma adları kullanılır).
+
+Çıktı şeması `schemas/ocr-video-evaluation-report-v1.schema.json` özellikle
+Phase 6 girdi şeması **değildir**. Adayın gözlenen test CER farkını, plan hash'ini
+ve her test grubu için baseline ile candidate coverage sonucunu kaydeder; ancak
+bu karşılaştırmaları release uygunluğuna dönüştürmez. Her sabitlenmiş
+source+episode test grubu için coverage `matched_cues / reference_cues` olarak
+hesaplanır. Eşleşme, örtüşme / referans cue süresi >= 0.5 koşulunu isteyen
+değerlendiricinin deterministik bire bir zamansal eşleştirmesidir; eşleşmeyen
+referans cue'ları paydada kalır, fazla tahminler paydayı büyütmez. Her iki motor
+da her grup için önceden ilan edilmiş eşiği karşılamalıdır. Eşiğe tam eşit grup
+geçer; altındaki herhangi bir grup coverage kapısını `FAIL` yapar. Adayın corpus
+CER'ı sabit limiti aşarsa veya zorunlu grup bazlı gerilememe kuralı varken
+herhangi bir test grubunun candidate CER'ı gerilerse genel karşılaştırma da
+başarısız olur. Başarısız karşılaştırma ölçüm raporunu kaydettikten sonra exit
+code 1 döndürür. Eksik, yinelenen, sıfır paydalı, tutarsız veya beklenmeyen test
+grubu coverage değeri rapor yazılmadan değerlendirmeyi durdurur. Durum daima
 `MEASURED_ADAPTER_ONLY_NOT_RELEASE_PASS`, `phase6_eligible=false`,
-`rights_verified=false`, and release status `BLOCKED_ADAPTER_ONLY`. It reports
-predeclared CER and coverage facts but makes no release decision. Synthetic
-tests exercise threshold validation, low/high and exact-boundary outcomes,
-missing/ambiguous groups, and plan mutation/replay. A real run is still blocked
-because this user has no authorized three-group dataset or trusted timed
-references yet.
+`rights_verified=false`; release durumu ise `BLOCKED_ADAPTER_ONLY` olur. Önceden
+belirlenmiş CER ve coverage bilgilerini raporlar, release kararı vermez. Sentetik
+testler eşik doğrulamayı, düşük/yüksek ve tam sınır sonuçlarını, eksik/belirsiz
+grupları ve plan değişikliği/yeniden oynatmayı kapsar. Bu kullanıcının henüz
+izinli üç gruplu veri kümesi veya güvenilir zaman hizalı referansları olmadığı
+için gerçek koşum blokludur.
 
 ## Tam Phase 5 hâlâ neden bloklu
 
-Crop-level CER/WER and the fixed-SRT adapter measure different surfaces. The
-adapter can calculate metrics only after prepared rights/provenance gates and
-human-attested time-aligned references exist. It cannot independently verify
-lawful use, reference trust, or the model/device execution, and its report
-cannot unlock Phase 6. Trusted data, independent rights validation, actual
-candidate execution provenance, and release-grade evidence remain outstanding.
-The explicit per-group coverage threshold is now part of a hash-bound pre-result
-plan; it is a measurement gate, not proof of quality or a release authorization.
-The prep report stays `PREPARED_NOT_RUN`; the
-crop report remains crop-only; the video adapter report remains measurement-
-only. See the next section for the separate local runner; no model trainer or
-training flow exists.
+Crop-level CER/WER ile sabit SRT adaptörü farklı kapsamları ölçer. Adaptör,
+metrikleri ancak hazırlık aşamasındaki hak/provenance kapıları geçildiğinde ve
+insan tarafından beyan edilmiş zaman hizalı referanslar bulunduğunda
+hesaplayabilir. Yasal kullanım hakkını, referansların güvenilirliğini veya
+model/aygıt çalıştırmasını bağımsız doğrulayamaz; raporu Phase 6 kapısını açamaz.
+Güvenilir veri, bağımsız hak doğrulaması, adayın gerçek çalıştırılma provenance'ı
+ve release düzeyinde kanıt hâlâ eksiktir. Grup başına açık coverage eşiği artık
+sonuç öncesinde hash ile bağlanan planın parçasıdır; bu bir ölçüm kapısıdır,
+kalite kanıtı veya release yetkisi değildir. Hazırlık raporu `PREPARED_NOT_RUN`
+olarak kalır; crop raporu yalnız crop ölçer, video adaptörü de yalnız ölçüm
+yapar. Ayrı yerel runner için sonraki bölüme bakın; model trainer veya eğitim
+akışı yoktur.
 
-## Fixed-profile local OCR runner
+## Sabit profilli yerel OCR runner
 
-`phase5_execution.py` is the separate, opt-in local runner. It validates a
-frozen Phase 5 execution plan, Phase 2 parent lineage, per-group media hashes,
-both local offline profiles, the separately reviewed rights receipt, and its
-project trust pin before creating output. It invokes only the fixed product
-CLI with the selected hash-pinned profile and fixed OCR arguments. The runner
-records SRT and stats hashes, profile/model/config/device/backend identity and
-the run's input bindings. Its test executor is synthetic; it is not a model
-trainer and it does not update OCR weights.
+`phase5_execution.py`, isteğe bağlı ve ayrı bir yerel runner'dır. Çıktı
+oluşturmadan önce sabitlenmiş Phase 5 execution plan'ını, Phase 2 parent
+lineage'ını, grup başına medya hash'lerini, iki yerel offline profile'ı, ayrıca
+incelenmiş hak makbuzunu ve proje trust pin'ini doğrular. Yalnız seçili, hash'i
+sabitlenmiş profile ve sabit OCR argümanlarıyla ürün CLI'sini çağırır. Runner
+SRT ve stats hash'lerini, profile/model/config/device/backend kimliğini ve
+koşunun input bağlantılarını kaydeder. Test executor sentetiktir; model trainer
+değildir ve OCR ağırlıklarını güncellemez.
 
-Runner output includes `phase5-execution-receipt-v2.json` and a
-`prediction-manifest-v1.json` whose `execution_receipt` object binds the
-receipt's relative path, raw SHA-256, and run ID. The receipt repeats the
-canonical prediction-record digest and records. Before measurement, the adapter
-checks this cross-file binding against the prepared dataset/split/reference,
-media hashes, profile/config identity, SRT and stats files, and cue counts. It
-labels the result `runner_recorded_not_independently_verified`; legacy manual
-v1 manifests remain `user_supplied_not_independently_verified`.
+Runner çıktısında `phase5-execution-receipt-v2.json` ve
+`prediction-manifest-v1.json` dosyasını içerir; manifestteki
+`execution_receipt` nesnesi makbuzun göreli yolunu, ham SHA-256 değerini ve run
+ID'sini bağlar. Makbuz canonical prediction-record özeti ile kayıtları tekrar
+içerir. Ölçümden önce adaptör bu dosyalar arası bağı hazırlanan
+dataset/split/reference, medya hash'leri, profile/config kimliği, SRT ve stats
+dosyaları ve cue sayımlarıyla karşılaştırır. Sonuç
+`runner_recorded_not_independently_verified` olarak işaretlenir; eski manuel v1
+manifestleri `user_supplied_not_independently_verified` olarak kalır.
 
-This binding is a local consistency check, not a digital signature or
-independent execution proof. It has no cryptographic nonce: the run ID is a
-local correlation value, and a person who can rewrite the receipt and manifest
-can create a new internally consistent pair. It does not establish node-level
-GPU execution, lawful use, reviewer identity, or trusted evidence, and it never
-changes `rights_verified:false` or `phase6_eligible:false`.
+Bu bağ yerel bir tutarlılık kontrolüdür; dijital imza veya bağımsız çalıştırma
+kanıtı değildir. Kriptografik nonce içermez: run ID yerel bir ilişkilendirme
+değeridir. Makbuzu ve manifesti yeniden yazabilen biri kendi içinde tutarlı yeni
+bir çift oluşturabilir. Bu mekanizma node-level GPU çalıştırmasını, yasal
+kullanım hakkını, gözden geçiren kişinin kimliğini veya kanıtların
+güvenilirliğini göstermez; `rights_verified:false` ya da
+`phase6_eligible:false` değerlerini hiçbir zaman değiştirmez.
 
-The runner is implemented, but a real run is currently blocked: there is no
-rights-reviewed authorized corpus or trusted time-aligned reference set, and
-the Phase 5 execution receipt registry and Phase 6 trust registries are empty.
-Synthetic fake-executor tests validate local mechanics only; no real video,
-OCR, or model experiment has run. Do not treat the measurement adapter as the
-runner or its report as a release PASS.
+Runner uygulanmıştır, ancak gerçek bir çalıştırma şu anda blokludur: hakları
+incelenmiş izinli bir corpus veya güvenilir zaman hizalı referans kümesi yoktur;
+Phase 5 execution receipt registry ve Phase 6 trust registries boştur. Sentetik
+fake-executor testleri yalnız yerel mekaniği doğrular; gerçek video, OCR veya
+model deneyi çalıştırılmamıştır. Measurement adapter'ı runner, raporunu da
+release PASS olarak değerlendirmeyin.
 
 Tam video değerlendirme için daha sonra eklenmesi gereken metriklerin tanımı:
 
-- **CER:** referans karakterlerine bölünen Levenshtein karakter düzenleme sayısı; NFC + boşluk normalize edilir, harf büyüklüğü ve noktalama korunur. Empty reference örneği CER hesaplamasından çıkarılır ve ayrı raporlanır.
-- **WER:** aynı normalization sonrası Unicode whitespace ile tokenization; referans kelime sayısına bölünen kelime düzenleme sayısı. Dil özel tokenizer kullanılmıyorsa bunu WER'in sınırlaması olarak belirtin.
-- **Exact match:** aynı normalize edilmiş metne sahip eşleşmiş cue sayısı / referans cue sayısı; eşleşmeyen referans cue yanlış sayılır.
-- **Cue recall:** zaman aralığı eşleştirme algoritması ve toleransı sabitlenmiş trusted reference cue'larının eşleşen sayısı / toplam referans cue sayısı.
-- **Cue precision:** eşleşen OCR cue sayısı / toplam OCR cue sayısı. Bu tanımlar `vtt-qa.py`'nin mevcut örtüşme eşik sistemiyle farklıysa adapter farkı açıkça raporlamalı.
-- **Zaman:** eşleştirilmiş cue'larda start ve end mutlak farklarının ayrı ortalaması ve, yalnızca referans hizalaması bunu destekliyorsa, önceden belirlenmiş tolerans içinde olan çiftlerin oranı. Tolerans deney başlamadan dondurulmalıdır.
-- **Coverage:** referans cue'larının doğrulanabilir, hizalanmış ve ölçülebilir olan kısmı; unavailable/ambiguous/missing referanslar ve nedenleri ayrıca sayılmalıdır.
-- **Aggregates:** her episode/source için ayrı sonuç; cue-weighted micro (toplam edit / toplam referans birimi), group macro (grup skorlarının basit ortalaması). Hem train, validation hem test ayrı raporlanmalı; release gate yalnız dondurulmuş test grubunu kullanır.
+- **CER:** referans karakter sayısına bölünen Levenshtein karakter düzenleme sayısıdır; NFC ve boşluk normalizasyonu uygulanır, harf büyüklüğü ve noktalama korunur. Boş referans örnekleri CER hesabından çıkarılır ve ayrıca raporlanır.
+- **WER:** aynı normalizasyondan sonra Unicode whitespace ile tokenization yapılır; kelime düzenleme sayısı referans kelime sayısına bölünür. Dile özel tokenizer kullanılmıyorsa WER'in bu sınırlaması belirtilmelidir.
+- **Exact match:** normalize edilmiş metni aynı olan eşleşmiş cue sayısı / referans cue sayısıdır; eşleşmeyen referans cue yanlış sayılır.
+- **Cue recall:** sabitlenmiş zaman aralığı eşleştirme algoritması ve toleransına göre eşleşen trusted reference cue sayısı / toplam referans cue sayısıdır.
+- **Cue precision:** eşleşen OCR cue sayısı / toplam OCR cue sayısıdır. Bu tanımlar `vtt-qa.py`'nin mevcut örtüşme eşik sisteminden farklıysa adaptör farkı açıkça raporlamalıdır.
+- **Zaman:** eşleşmiş cue'larda başlangıç ve bitiş mutlak farklarının ayrı ortalamasıdır. Yalnız referans hizalaması destekliyorsa, önceden belirlenmiş tolerans içindeki çiftlerin oranı da verilir. Tolerans deney başlamadan sabitlenmelidir.
+- **Coverage:** doğrulanabilir, hizalanmış ve ölçülebilir referans cue'larının payıdır; kullanılamayan/belirsiz/eksik referanslar ve nedenleri ayrıca sayılmalıdır.
+- **Aggregates:** her episode/source için ayrı sonuç; cue-weighted micro (toplam edit / toplam referans birimi) ve group macro (grup skorlarının basit ortalaması). Train, validation ve test ayrı raporlanmalı; release gate yalnız sabitlenmiş test grubunu kullanır.
 
 Her gerçek ölçüm baseline ve aday için aynı reference, cue alignment, normalization, OCR engine/config, configured-device/session-configured-backend ve koşu parametrelerini kaydetmelidir. Provider/device değerleri çalışma yapılandırmasıdır, node-level inference profili değildir. Fark varsa açıkça gösterilmelidir. Translation metrikleri bu OCR raporuna eklenmez; ayrı bilingual-human set ve ayrı schema gerekir.
 
