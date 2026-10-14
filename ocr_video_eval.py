@@ -77,6 +77,7 @@ def _relative_file(root: Path, raw: object, label: str) -> Path:
         raise VideoEvalError(f"{label}: mutlak veya kök dışına çıkan yol kabul edilmez")
     path = (root / rel).resolve(strict=True)
     try:
+        # path-scope-ok: path (üstte) ve root bu ifadede çözülüyor
         path.relative_to(root.resolve(strict=True))
     except ValueError as exc:
         raise VideoEvalError(f"{label}: manifest kök dizini dışına çıkıyor") from exc
@@ -931,6 +932,7 @@ def run(dataset: Path, metadata: Path, experiment: Path, references_path: Path,
                  references_path.resolve().parent, predictions_path.resolve().parent)
     for root in protected:
         try:
+            # path-scope-ok: out_path (üstte) ve döngüdeki her protected kökü çözülüyor
             out_path.relative_to(root.resolve())
         except ValueError:
             continue

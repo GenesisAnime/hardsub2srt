@@ -15,7 +15,7 @@ from review_bundle import build_review_pack
 class DatasetMergeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="hardsub-merge-synthetic-")
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()   # kanonik kök (kısa ad/bağ karışmasın)
 
     def tearDown(self):
         self.tmp.cleanup()

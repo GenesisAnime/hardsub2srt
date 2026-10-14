@@ -16,7 +16,7 @@ from review_bundle import build_review_pack
 class AiOcrReviewPathSecurityTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()   # kanonik kök (kısa ad/bağ karışmasın)
         self.srt = self.root / "synthetic.srt"
         self.srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nsynthetic\n\n", encoding="utf-8")
         self.crop = np.full((24, 120, 3), 90, dtype=np.uint8)

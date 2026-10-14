@@ -17,6 +17,8 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+import path_scope
+
 
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_SRT_BYTES = 16 * 1024 * 1024
@@ -45,11 +47,12 @@ def _sha256(data: bytes) -> str:
 
 
 def _contained(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
+    """Kök ile kökün altındaki yolu aynı biçimde karşılaştır.
+
+    Windows'ta aynı dizin 8.3 kısa adıyla (`RUNNER~1`) ya da bağ yoluyla da
+    ifade edilebilir; ham metin karşılaştırması geçerli dosyayı reddediyordu.
+    """
+    return path_scope.is_within(path, root)
 
 
 def _stat_signature(path: Path) -> tuple[int, int, int] | None:

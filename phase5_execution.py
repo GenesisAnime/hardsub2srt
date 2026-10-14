@@ -26,6 +26,7 @@ from pathlib import Path
 import ocr_experiment as prep
 import ocr_video_eval as video_eval
 import ocr_video_eval_templates as templates
+import path_scope
 from offline_ocr_profile import load_profile
 
 
@@ -495,14 +496,14 @@ def _source_hashes() -> dict[str, str]:
     """
     result = {}
     for path in sorted(ROOT.rglob("*.py")):
-        relative = path.relative_to(ROOT)
+        relative = path_scope.relative_to(path, ROOT)
         if SOURCE_SKIP_DIRS.intersection(part.lower() for part in relative.parts):
             continue
         try:
             templates._reject_reparse_components(path)
         except templates.TemplateError as exc:
             raise ExecutionError("Application source path uses a symlink/junction/reparse point") from exc
-        if not path.resolve(strict=True).is_relative_to(ROOT):
+        if not path_scope.is_within(path.resolve(strict=True), ROOT):
             raise ExecutionError("Application source resolves outside the product root")
         result[relative.as_posix()] = _sha_file(path)
     for name in ("kullanici-sozlugu.txt", "turkce-sozluk.txt", "requirements.txt"):

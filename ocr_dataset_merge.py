@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 import ocr_experiment as prep
+import path_scope
 
 
 MAX_MEMBERS = 1000
@@ -45,15 +46,20 @@ def _check_existing_components(path: Path, allowed_root: Path | None = None) -> 
     """Fail closed on symlinks/junctions in an existing path."""
     absolute = Path(os.path.abspath(path))
     if allowed_root is not None:
+        base = Path(os.path.abspath(allowed_root))
+        if not path_scope.is_within(absolute, base):
+            raise MergeError("Yol ortak yerel kökün dışında")
         try:
-            relative = absolute.relative_to(Path(os.path.abspath(allowed_root)))
-        except ValueError as exc:
-            raise MergeError("Yol ortak yerel kökün dışında") from exc
-        current = Path(os.path.abspath(allowed_root))
-        components = [current]
+            relative, anchor = absolute.relative_to(base), base
+        except ValueError:
+            # Aynı ağacın iki gösterimi (8.3 kısa ad/bağ): denetimi normalize
+            # et, yürüyüşü gerçek dosya adları üzerinde sürdür.
+            relative = path_scope.relative_to(absolute, base)
+            anchor = path_scope.normalize(base)
+        components = [anchor]
         for part in relative.parts:
-            current = current / part
-            components.append(current)
+            anchor = anchor / part
+            components.append(anchor)
     else:
         components = list(reversed(absolute.parents)) + [absolute]
     for component in components:
@@ -163,7 +169,7 @@ def _relative_source(root: Path, value: Path) -> Path:
     _check_existing_components(candidate, root)
     try:
         resolved = candidate.resolve(strict=True)
-        resolved.relative_to(root)
+        path_scope.relative_to(resolved, root)
     except (OSError, ValueError) as exc:
         raise MergeError("Kaynak export bulunamadı veya ortak kökün dışına çıkıyor") from exc
     return resolved
@@ -171,7 +177,7 @@ def _relative_source(root: Path, value: Path) -> Path:
 
 def _root_relative(root: Path, path: Path) -> str:
     try:
-        return path.relative_to(root).as_posix()
+        return path_scope.relative_to(path, root).as_posix()
     except ValueError as exc:
         raise MergeError("Kaynak yolu ortak yerel kökün dışında") from exc
 
@@ -181,7 +187,8 @@ def _read_source_export(root: Path, raw_path: Path):
     if not export.is_dir() or not export.name.startswith("verified-ocr-dataset-"):
         raise MergeError("Her kaynak verified-ocr-dataset-* export klasörü olmalı")
     pack = export.parent
-    if (pack == root or not pack.is_relative_to(root)
+    if (path_scope.normalize(pack) == path_scope.normalize(root)
+            or not path_scope.is_within(pack, root)
             or not pack.name.endswith(".review-pack")):
         raise MergeError("Her export doğrudan bir .review-pack klasöründe bulunmalı")
     lineage_path = export / LINEAGE_NAME
@@ -235,6 +242,7 @@ def merge_exports(root: Path, source_exports: list[Path], out_name: str) -> tupl
         configured = os.environ.get(variable, "").strip()
         if configured:
             try:
+                # path-scope-ok: root yukarıda resolve(strict=True) edildi, sağ taraf da burada çözülüyor
                 if root.is_relative_to(Path(configured).expanduser().resolve(strict=False)):
                     raise MergeError(f"Ortak kök senkronizasyon klasöründe ({variable}); yerel klasör kullanın")
             except OSError as exc:
@@ -255,7 +263,7 @@ def merge_exports(root: Path, source_exports: list[Path], out_name: str) -> tupl
     for value in source_exports:
         export, pack, rows, manifest, provenance = _read_source_export(root, value)
         source_paths.append((export, pack, rows, manifest, provenance))
-    source_paths.sort(key=lambda item: item[0].relative_to(root).as_posix())
+    source_paths.sort(key=lambda item: path_scope.relative_to(item[0], root).as_posix())
     if len({str(pack) for _, pack, *_ in source_paths}) != len(source_paths):
         raise MergeError("Aynı review-pack'ten birden fazla export seçildi")
 

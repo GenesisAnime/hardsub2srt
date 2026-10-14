@@ -166,7 +166,7 @@ class Phase5ExecutionHarness:
 class OfflineProfileTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="phase5-offline-profile-synthetic-")
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()   # kanonik kök (kısa ad/bağ karışmasın)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -413,7 +413,7 @@ class OfflineProfileTests(unittest.TestCase):
 class Phase5ExecutionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="phase5-execution-synthetic-")
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()   # kanonik kök (kısa ad/bağ karışmasın)
         self.output_tmp = tempfile.TemporaryDirectory(prefix="phase5-output-synthetic-")
         self.output_parent = Path(self.output_tmp.name)
         self.harness = Phase5ExecutionHarness(self.root, self.output_parent)
