@@ -1,6 +1,6 @@
 # hardsub2srt
 
-Videodaki gömülü altyazıyı yerel OCR ile zamanlı SRT’ye çıkarır; FFprobe bir softsub track bulursa FFmpeg ilk track’i SRT’ye dönüştürmeyi dener. Desteklenmeyen codec/container hata verir; OCR fallback yapılmaz. **OCR metni okur, çeviri yapmaz.** Ana kullanım Windows ve Python’dır. [İngilizce README](README.en.md) · [Doküman haritası](docs/README.md)
+Videoya işlenmiş hardsub altyazılarını yerel OCR ile zamanlı SRT’ye çıkarır; videodaki gömülü softsub track’lerini ise FFprobe ile bulup FFmpeg kullanarak ilk track üzerinden dışa aktarmayı dener. Desteklenmeyen codec/container hata verir; OCR fallback yapılmaz. **OCR metni okur, çeviri yapmaz.** Ana kullanım Windows ve Python’dır. [İngilizce README](README.en.md) · [Doküman haritası](docs/README.md)
 
 ## Hızlı başlangıç
 
