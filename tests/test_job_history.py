@@ -185,6 +185,63 @@ class JobHistoryTests(unittest.TestCase):
         self.assertFalse(_macos_mount_path_is_local(
             PurePosixPath("/Users/example/.local/state"), ""))
 
+    def test_block_editor_rejects_nonpositive_cue_duration_without_writing(self):
+        root = Path(self.temp.name)
+        video = root / "synthetic-editor.mp4"
+        video.write_bytes(b"synthetic; decoder is not run")
+        run_dir = root / "synthetic-run"
+        run_dir.mkdir()
+        srt = run_dir / "synthetic-editor.srt"
+        original = "1\n00:00:01,000 --> 00:00:02,000\nOriginal caption\n"
+        srt.write_text(original, encoding="utf-8")
+        job = ui_server.is_olustur(video, {"cikti_klasor": str(root), "cpu": False},
+                                   "is-994", 994)
+        job.update({"srt": str(srt), "run_dir": str(run_dir), "durum": "bitti"})
+        client = ui_server.app.test_client()
+        base = f"http://127.0.0.1:{ui_server.PORT}"
+        local_headers = {"Origin": base}
+
+        with patch.object(ui_server, "ISLER", [job]), patch.object(ui_server, "ogren_mod", None):
+            for start, end in (("00:00:01,000", "00:00:01,000"),
+                               ("00:00:02,000", "00:00:01,000"),
+                               ("100:00:00,000", "99:59:59,999")):
+                with self.subTest(start=start, end=end):
+                    srt.write_text(original, encoding="utf-8")
+                    backup = srt.with_name(srt.name + ".bak")
+                    backup.unlink(missing_ok=True)
+                    response = client.post("/api/blokkaydet", base_url=base,
+                                           headers=local_headers, json={
+                        "is_id": "is-994",
+                        "bloklar": [{"index": 0, "start": start, "end": end,
+                                     "metin": "Changed caption"}],
+                    })
+                    self.assertEqual(response.status_code, 400)
+                    self.assertIn("bitiş başlangıçtan sonra olmalı",
+                                  response.get_json()["hata"])
+                    self.assertEqual(srt.read_text(encoding="utf-8"), original)
+                    self.assertFalse(backup.exists())
+
+            valid = client.post("/api/blokkaydet", base_url=base,
+                                headers=local_headers, json={
+                "is_id": "is-994",
+                "bloklar": [{"index": 0, "start": "00:00:01,000",
+                             "end": "00:00:03,000", "metin": "Changed caption"}],
+            })
+            self.assertEqual(valid.status_code, 200)
+            self.assertIn("00:00:01,000 --> 00:00:03,000",
+                          srt.read_text(encoding="utf-8"))
+            self.assertTrue(srt.with_name(srt.name + ".bak").exists())
+
+            multi_day = client.post("/api/blokkaydet", base_url=base,
+                                    headers=local_headers, json={
+                "is_id": "is-994",
+                "bloklar": [{"index": 0, "start": "99:59:59,000",
+                             "end": "100:00:00,000", "metin": "Across 100 hours"}],
+            })
+            self.assertEqual(multi_day.status_code, 200)
+            self.assertIn("99:59:59,000 --> 100:00:00,000",
+                          srt.read_text(encoding="utf-8"))
+
     def test_all_ui_routes_reject_non_loopback_host_headers(self):
         client = ui_server.app.test_client()
         local_host = f"127.0.0.1:{ui_server.PORT}"
