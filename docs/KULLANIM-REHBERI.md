@@ -42,6 +42,6 @@ Kuyruk tek işçiyle sırayla çalışır ve bellektedir; sunucu yeniden başlat
 
 CLI’de `-o` SRT hedefidir. Hardsub koşusu ana SRT ve `_ekran.srt` ile `.stats.json`, `.hardsub2srt.json` ve blok/takas gibi aynı gövdeye bağlı JSON yan dosyaları yazabilir. Mevcut aynı adlı CLI çıktılarını tekrar çalıştırmak üzerine yazar; gerekli dosyaları önceden yedekleyin veya farklı bir hedef kullanın.
 
-`--review-pack` ayrıca `<SRT-gövdesi>.review-pack/` klasörü üretir; bu klasör zaten varsa CLI durur ve paketin üzerine yazmaz. Softsub doğrudan çıkarımında OCR kare-cue eşleşmesi olmadığından review-pack oluşturulmaz. Paket, SRT metni ve altyazı kare kırpımları içerebilir. AI sohbet paketi dışarı elle gönderilirse içerik seçtiğiniz sağlayıcıya gider; uygulama kendisi sağlayıcı API’si çağırmaz.
+`--review-pack` ayrıca `<SRT-gövdesi>.review-pack/` klasörü üretir; bu klasör zaten varsa CLI durur ve review pack’in üzerine yazmaz. Softsub doğrudan çıkarımında OCR kare-cue eşleşmesi olmadığından review pack oluşturulmaz. Paket, SRT metni ve altyazı kare kırpımları içerebilir. AI sohbet paketi dışarı elle gönderilirse içerik seçtiğiniz sağlayıcıya gider; uygulama kendisi sağlayıcı API’si çağırmaz.
 
 İnceleme/öğrenme akışları için [İnceleme paketi](REVIEW-BUNDLE.md) [EN], [Manuel AI OCR görsel incelemesi](AI-OCR-GORSEL-INCELEME.md) [TR] ve [Seed içe aktarma](SEED-IMPORT.md) [EN] belgelerine bakın.

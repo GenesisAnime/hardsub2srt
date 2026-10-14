@@ -26,7 +26,7 @@ CLI ayarları için `py -3 hardsub2srt.py --help` kullanın. Temel seçenekler:
 - `--cpu`: OCR’ı CPU’da zorlar.
 - `--nvdec`: FFmpeg’in NVIDIA video decode desteğini dener. Bu, OCR’ı GPU’da çalıştıran PyTorch CUDA ayarından ayrıdır; NVDEC varsayılan olarak kapalıdır ve başarısız olursa decode CPU’ya düşer.
 - `--qa 0`: QA kare montajını kapatır. Tam CLI koşusunda varsayılan 6 örnektir; `--limit-seconds` ile sınırlı koşuda varsayılan kapalıdır.
-- `--review-pack`: özgün OCR segmentiyle güvenle eşleşen hardsub cue’ları için görsel inceleme paketi üretir. Softsub doğrudan çıkarımda bu paket oluşturulmaz.
+- `--review-pack`: özgün OCR segmentiyle güvenle eşleşen hardsub cue’ları için review pack üretir. Softsub doğrudan çıkarımda bu paket oluşturulmaz.
 
 PowerShell’de `cikar.bat` tek video için sürükle-bırak, `toplu.bat` toplu iş içindir. Ayrıntılı seçenekler ve çıktı davranışı: [Kullanım rehberi](docs/KULLANIM-REHBERI.md).
 
