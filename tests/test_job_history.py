@@ -185,6 +185,21 @@ class JobHistoryTests(unittest.TestCase):
         self.assertFalse(_macos_mount_path_is_local(
             PurePosixPath("/Users/example/.local/state"), ""))
 
+    def test_all_ui_routes_reject_non_loopback_host_headers(self):
+        client = ui_server.app.test_client()
+        local_host = f"127.0.0.1:{ui_server.PORT}"
+        for path in ("/", "/api/durum", "/api/ocr-inceleme/durum",
+                     "/api/ocr-inceleme/srt-lint", "/api/qa/synthetic.json"):
+            with self.subTest(path=path):
+                response = client.get(path, base_url=f"http://{local_host}",
+                                      headers={"Host": "attacker.synthetic.test:8765"})
+                self.assertEqual(response.status_code, 403)
+
+        for host in (f"localhost:{ui_server.PORT}", local_host):
+            with self.subTest(host=host):
+                response = client.get("/api/durum", base_url=f"http://{host}")
+                self.assertEqual(response.status_code, 200)
+
     def test_cross_origin_form_cannot_write_user_dictionary(self):
         dictionary = Path(self.temp.name) / "synthetic-user-dictionary.txt"
         client = ui_server.app.test_client()
