@@ -851,10 +851,17 @@ def run_ffprobe(path):
         raise VideoOkumaHatasi(
             f"{Path(path).name}: süre bilgisi yok — ham akış yerine "
             f"kapsayıcılı dosya (mp4/mkv) kullanın")
-    subs = [{"index": s["index"], "codec": s["codec_name"],
-             "lang": s.get("tags", {}).get("language", "?")}
-            for s in streams
-            if isinstance(s, dict) and s.get("codec_type") == "subtitle"]
+    subs = []
+    for stream in streams:
+        if not isinstance(stream, dict) or stream.get("codec_type") != "subtitle":
+            continue
+        index, codec = stream.get("index"), stream.get("codec_name")
+        if type(index) is not int or index < 0 or type(codec) is not str or not codec:
+            raise VideoOkumaHatasi(
+                f"{Path(path).name}: altyazı akışı eksik ffprobe bilgisi içeriyor")
+        tags = stream.get("tags")
+        language = tags.get("language", "?") if isinstance(tags, dict) else "?"
+        subs.append({"index": index, "codec": codec, "lang": language})
     return {"fps": fps, "duration": duration,
             "nb_frames": _ffprobe_sayi(v.get("nb_frames")), "subtitles": subs,
             "width": _ffprobe_sayi(v.get("width")),

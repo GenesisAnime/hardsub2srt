@@ -121,6 +121,21 @@ class FfprobeMetadataTests(unittest.TestCase):
                 hardsub2srt.run_ffprobe("synthetic.m4a")
         self.assertIn("video akışı yok", str(caught.exception))
 
+    def test_incomplete_subtitle_stream_metadata_is_a_controlled_error(self):
+        for missing in ("index", "codec_name"):
+            with self.subTest(missing=missing):
+                subtitle = {"index": 1, "codec_name": "subrip",
+                            "codec_type": "subtitle"}
+                del subtitle[missing]
+                payload = {
+                    "streams": [dict(RAW_H264_STREAM, duration="2.000000"), subtitle],
+                    "format": {"duration": "2.000000"},
+                }
+                with patch.object(hardsub2srt.subprocess, "run", _probe_stub(payload)):
+                    with self.assertRaises(hardsub2srt.VideoOkumaHatasi) as caught:
+                        hardsub2srt.run_ffprobe("synthetic.mkv")
+                self.assertIn("altyazı akışı eksik ffprobe bilgisi", str(caught.exception))
+
     def test_healthy_probe_result_is_unchanged(self):
         payload = {
             "streams": [dict(RAW_H264_STREAM, avg_frame_rate="24000/1001",
@@ -158,6 +173,28 @@ class MainErrorPathTests(unittest.TestCase):
         self.assertIn("video okunamadı", str(caught.exception))
         self.assertIn("sentetik ffprobe hatası", str(caught.exception))
         self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_main_surfaces_partial_subtitle_metadata_without_traceback(self):
+        for missing in ("index", "codec_name"):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                video = root / "synthetic-partial-subtitle.mkv"
+                video.write_bytes(b"synthetic placeholder; ffprobe is stubbed")
+                subtitle = {"index": 1, "codec_name": "subrip",
+                            "codec_type": "subtitle"}
+                del subtitle[missing]
+                payload = {
+                    "streams": [dict(RAW_H264_STREAM, duration="2.000000"), subtitle],
+                    "format": {"duration": "2.000000"},
+                }
+                stderr, stdout = io.StringIO(), io.StringIO()
+                with patch.object(hardsub2srt.subprocess, "run", _probe_stub(payload)), \
+                        redirect_stderr(stderr), redirect_stdout(stdout):
+                    with self.assertRaises(SystemExit) as caught:
+                        hardsub2srt.main([str(video), "-o", str(root / "out.srt")])
+                self.assertIn("video okunamadı", str(caught.exception))
+                self.assertIn("altyazı akışı eksik ffprobe bilgisi", str(caught.exception))
+                self.assertNotIn("Traceback", stderr.getvalue())
 
 
 if __name__ == "__main__":
