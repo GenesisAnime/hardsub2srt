@@ -87,6 +87,7 @@ def _check_no_reparse(path: Path, stop: Path | None = None) -> None:
 
 def _under(path: Path, root: Path) -> bool:
     try:
+        # path-scope-ok: caller pairs share resolved roots or lexical child paths; resolving children breaks Windows LocalAppData virtualization checks.
         path.relative_to(root)
         return True
     except ValueError:
@@ -257,6 +258,26 @@ def _normalize_crop(data: bytes) -> tuple[bytes, int, int]:
     return crop, width, height
 
 
+def _read_bounded(path: Path, max_bytes: int, label: str) -> bytes:
+    """Read one file only after its current size fits the remaining budget.
+
+    The bounded read also handles a file growing after ``stat``: at most one
+    byte beyond the limit is read before rejecting it.
+    """
+    try:
+        if max_bytes < 0 or path.stat().st_size > max_bytes:
+            raise ImportError(f"{label} birikimli bayt sınırını aşıyor")
+        with path.open("rb") as stream:
+            data = stream.read(max_bytes + 1)
+    except ImportError:
+        raise
+    except OSError as exc:
+        raise ImportError(f"{label} okunamadı") from exc
+    if len(data) > max_bytes:
+        raise ImportError(f"{label} birikimli bayt sınırını aşıyor")
+    return data
+
+
 def _validate_row(row: object, seed_root: Path,
                   images: dict[str, tuple[Path, bytes]],
                   crop_cache: dict[str, tuple[bytes, int, int]]) -> dict:
@@ -303,16 +324,25 @@ def _validate_row(row: object, seed_root: Path,
     image_name = PurePosixPath(row["image"]).as_posix()
     data = images.get(image_name, (None, None))[1]
     if data is None:
-        if image_path.stat().st_size > MAX_EVIDENCE_FILE_BYTES:
-            raise ImportError("Kanıt görseli 16 MiB sınırını aşıyor")
-        data = image_path.read_bytes()
+        evidence_total = sum(len(cached_data) for _path, cached_data in images.values())
+        remaining_evidence = min(MAX_EVIDENCE_FILE_BYTES,
+                                 MAX_EVIDENCE_TOTAL_BYTES - evidence_total)
+        if remaining_evidence < 0:
+            raise ImportError("Özgün evidence toplamı 256 MiB sınırını aşıyor")
+        data = _read_bounded(image_path, remaining_evidence, "Özgün evidence")
         images[image_name] = (image_path, data)
     digest = row.get("image_sha256")
     if type(digest) is not str or not HEX64.fullmatch(digest) or _sha256(data) != digest:
         raise ImportError("Orijinal kanıt görselinin SHA-256 değeri eşleşmiyor")
     normalized_crop, width, height = crop_cache.get(digest, (None, None, None))
     if normalized_crop is None:
+        cached_crop_bytes = sum(len(crop) for crop, _width, _height in crop_cache.values())
+        remaining_crop_bytes = MAX_IMPORT_CROP_BYTES - cached_crop_bytes
+        if remaining_crop_bytes < 1:
+            raise ImportError("Normalize edilmiş crop toplamı 256 MiB sınırını aşıyor")
         normalized_crop, width, height = _normalize_crop(data)
+        if len(normalized_crop) > remaining_crop_bytes:
+            raise ImportError("Normalize edilmiş crop toplamı 256 MiB sınırını aşıyor")
         crop_cache[digest] = (normalized_crop, width, height)
     if action == "replace_text":
         crop = normalized_crop
@@ -486,12 +516,6 @@ def import_seed(seed_path: Path, output_path: Path | None = None) -> tuple[Path 
             raise ImportError(f"Yinelenen video/episode/cue kimliği: satır {line_number}")
         ids.add(row_key)
         rows.append(row)
-    evidence_total = sum(len(data) for _path, data in images.values())
-    if evidence_total > MAX_EVIDENCE_TOTAL_BYTES:
-        raise ImportError("Özgün evidence toplamı 256 MiB sınırını aşıyor")
-    if sum(len(crop) for crop, _width, _height in crop_cache.values()) > MAX_IMPORT_CROP_BYTES:
-        raise ImportError("Normalize edilmiş crop toplamı 256 MiB sınırını aşıyor")
-
     groups = defaultdict(list)
     identity_to_episode = {}
     for item in rows:
