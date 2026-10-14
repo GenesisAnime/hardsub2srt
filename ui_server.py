@@ -2088,6 +2088,9 @@ def _ocr_hata(exc):
 @app.get("/api/ocr-inceleme/seed-paketleri")
 def api_ocr_inceleme_seed_paketleri():
     """List only revalidated seed review packs below the fixed local app root."""
+    error = _memory_request_error()
+    if error:
+        return error
     try:
         _root, packs = _seed_review_storage_catalog()
         return jsonify({"packs": [{
@@ -2104,6 +2107,9 @@ def api_ocr_inceleme_seed_paketleri():
 @app.post("/api/ocr-inceleme/seed-paket-ac")
 def api_ocr_inceleme_seed_paket_ac():
     """Open a validated local seed pack by opaque ID; do not accept a path."""
+    error = _memory_request_error()
+    if error:
+        return error
     if ocr_review is None:
         return jsonify({"hata": "OCR inceleme modülü kullanılamıyor"}), 503
     if not request.is_json:
