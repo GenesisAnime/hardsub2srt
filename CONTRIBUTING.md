@@ -1,26 +1,38 @@
 # Katkı kuralları
 
+## Dil ve dokümantasyon
+
+- Kullanıcıya yönelik yeni veya güncellenen dokümantasyonu varsayılan olarak doğal Türkçe yazın. Yaygın teknik English jargonunu (OCR, CLI, GPU, CI, branch, commit, pull request) koruyun.
+- `README.md` Türkçe ana giriş, `README.en.md` İngilizce giriştir. Mevcut İngilizce teknik dokümanları çevirmeden bırakın; yeni doküman haritasında dilini ve belgenin kullanım kılavuzu mu, tasarım notu mu olduğunu belirtin.
+- Uygulanmış davranış, ölçülmüş sonuç, plan ve bloklu işi ayrı ifade edin. Kod, test veya CI kanıtlamıyorsa destek/performans/doğruluk iddiası yazmayın.
+- Komutları ve seçenekleri güncel kaynakla karşılaştırın. Path, kullanıcı adı, medya adı veya makineye özgü bilgiyi örneğe koymayın; yer tutucu ve sentetik veri kullanın.
+
 ## Gizlilik ve telif
 
-Bu depoya şu içerikleri eklemeyin:
+Bu depoya şunları eklemeyin:
 
 - Video, anime karesi, QA ekran görüntüsü veya telifli başka medya.
 - Ham `.srt`/`.vtt`, replikler, cümle düzeyinde OCR örneği veya kişisel altyazı dosyası.
-- Video/çıktıların mutlak yerel yolu, kullanıcı adı, tam dosya adı ya da bunlardan türetilmiş hash gibi yerel iş akışını tanımlayabilecek metadata.
+- Kullanıcı adı, gerçek mutlak yerel yol, özel hostname, token, parola, API key veya bunlardan türetilmiş tanımlayıcı hash.
 
-OCR çıktılarını veya koşum yan ürünlerini issue/PR ekine koymayın. İstatistik paylaşımı gerekiyorsa önce alanları kendiniz gözden geçirin ve yalnız gerekli, gizlilikten arındırılmış özetleri paylaşın. Bu depoda kullanıcı koşumlarını otomatik alan telemetry API'si veya otomatik yükleme özelliği yoktur.
+OCR çıktılarını veya koşum yan ürünlerini issue/PR ekine koymayın. İstatistik paylaşımı gerekiyorsa alanları kendiniz inceleyin ve yalnız gerekli, gizlilikten arındırılmış özetleri paylaşın. AI OCR/çeviri yanıtı öneridir; insan kararının yerine geçmez ve sağlayıcıya elle gönderim uygulama tarafından yapılmaz.
 
-## Kod ve dokümantasyon katkısı
+## Geliştirme ve doğrulama
 
-- Değişiklik amacını ve kullanıcıya etkisini açıkça yazın.
-- OCR davranışını değiştiriyorsanız GT referanslı `regresyon/gt_gate.py` ölçümünü ve hangi koşum/ayarların kullanıldığını belirtin. Kaynak video ve trusted VTT depoya eklenmez; kullanılabilir değillerse bunu açıkça yazın, ölçülmemiş sonucu başarı gibi göstermeyin.
-- `regresyon/README-kisa.md` içindeki iki regresyon yönteminin kapsamını birbirine karıştırmayın: sabit kare kıyası OCR bileşenini ölçer; `gt_gate.py` sabit video penceresindeki transkripsiyon metnini zaman uyumlu VTT referansına karşı ölçer.
-- Değiştirilen Python dosyalarında `py -3 -m py_compile <dosya>` ile sözdizimi kontrolü yapın. Gerekiyorsa test komutlarını ve sonuçlarını PR'da raporlayın; gerçek videoya erişim yoksa OCR doğruluğu iddiası ileri sürmeyin.
+Yerel testler, GitHub Actions ile aynı hafif bağımlılık kümesini kullanır; OCR motorları ve model ağırlıkları test için kurulmaz. Temiz bir Python test ortamında:
 
-## Sözlük değişiklikleri
+```powershell
+py -3 -m pip install --upgrade pip
+py -3 -m pip install pytest flask numpy opencv-python-headless
+py -3 -m pytest -q -rs
+```
 
-`kullanici-sozlugu.txt` yalnız kelime düzeyindeki düzeltmeleri içermelidir. Replik, cümle veya bağlamlı altyazı metni eklemeyin. Her kuralın neden güvenli ve genel olduğunu PR açıklamasında belirtin.
+CI, Python 3.14 ile Ubuntu ve Windows’ta `python -m pytest -q -rs` çalıştırır. Testler sentetik/runtime davranışını denetler; gerçek video OCR kalitesini veya GPU inference’ını ölçmez. CI, OCR runtime bağımlılıklarını kurmaz; ayrıca `opencv-python-headless` kullanır. Python dosyası değiştiyse `py -3 -m py_compile <dosya>` ek sözdizimi kontrolü olarak kullanılabilir; testlerin yerine geçmez. OCR davranışı değişiyorsa ilgili testlere ek olarak yetkili video ve trusted zaman hizalı referansla ölçüm gerektiğini, bu ölçüm yoksa açıkça belirtin.
 
-## Lisans ve üçüncü taraf modeller
+## Sözlük, lisans ve commit mesajı
 
-Kod MIT lisanslıdır. Üçüncü taraf OCR kütüphaneleri/model ağırlıkları, PyTorch/CUDA ve FFmpeg ayrı lisans ve dağıtım şartlarına tabidir. Model ağırlıklarını bu depoya eklemeyin; dağıtım veya yeni model kaynağı önermeden önce lisansını ve boyutunu belgeleyin.
+`kullanici-sozlugu.txt` yalnız kelime düzeyindeki düzeltmeleri içermelidir. Replik veya bağlamlı altyazı eklemeyin; her kuralın neden genel ve güvenli olduğunu pull request içinde açıklayın.
+
+Kod MIT lisanslıdır. OCR kütüphaneleri/model ağırlıkları, PyTorch/CUDA, FFmpeg ve diğer üçüncü taraf bileşenlerin lisans/dağıtım koşulları ayrıdır. Model ağırlıklarını depoya eklemeyin.
+
+Commit başlığını ve varsa gövdesini kısa Türkçe yazın; yaygın teknik jargon İngilizce kalabilir. PowerShell’de Türkçe karakter içeren commit mesajını `-m` ile vermeyin. Mesajı UTF-8 dosyaya kaydedip `git commit -F <dosya>` kullanın.

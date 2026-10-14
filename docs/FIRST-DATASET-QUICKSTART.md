@@ -43,7 +43,7 @@ AI önerileri, SRT metnini düzenlemek veya kaynak metni onaylamak için insan i
 
 ## 4. Üç veya daha fazla review-pack export’unu lineage ile birleştirin
 
-**Önce OneDrive dışına bayt içeriğini değiştirmeden tam klasör kopyası alın.** Kullanıcının `.review-pack` klasörleri şu anda `C:\Users\naton\OneDrive\Desktop\.srt` altında olduğundan, yeni bir yerel ve senkronize edilmeyen kök oluşturun (ör. `C:\LOCAL-ONLY-PLACEHOLDER\local-review-root`) ve her `.review-pack` klasörünün tamamını oraya kopyalayın. `.review-pack` klasörünü ve içindeki `manifest.json`, kopyalanmış SRT, `review-events.jsonl`, `crops/` ve `verified-ocr-dataset-*` export klasörlerini birlikte koruyun. Kopyaları doğruladıktan sonra bile OneDrive’daki asılları taşımayın veya silmeyin.
+**Önce OneDrive dışına bayt içeriğini değiştirmeden tam klasör kopyası alın.** Yeni bir yerel ve senkronize edilmeyen kök oluşturun (ör. `C:\LOCAL-ONLY-PLACEHOLDER\local-review-root`) ve her `.review-pack` klasörünün tamamını oraya kopyalayın. `.review-pack` klasörünü ve içindeki `manifest.json`, kopyalanmış SRT, `review-events.jsonl`, `crops/` ve `verified-ocr-dataset-*` export klasörlerini birlikte koruyun. Kopyaları doğruladıktan sonra bile eşitlenen asılları taşımayın veya silmeyin.
 
 Yalnız `verified-ocr-dataset-*` alt klasörünü kopyalamayın: lineage doğrulayıcısı export’u üst review-pack’in OCR manifesti, SRT hash’i, etkin review-event günlüğü ve crop hash’leriyle tekrar eşleştirir. Üst pack dosyaları yoksa doğrulanmış kaynak zinciri kurulamaz ve merge durur. `--root` yeni yerel kopyaların kökü olmalı; her `--source-export` bu köke göreli, kendi `.review-pack` klasörünün içindeki export yoludur. `--out-name` aynı kökte var olmayan yeni bir klasör adı olmalıdır.
 
