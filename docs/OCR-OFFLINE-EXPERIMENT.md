@@ -373,81 +373,123 @@ grupları ve plan değişikliği/yeniden oynatmayı kapsar. Bu kullanıcının h
 izinli üç gruplu veri kümesi veya güvenilir zaman hizalı referansları olmadığı
 için gerçek koşum blokludur.
 
-## Tam Phase 5 hâlâ neden bloklu
+## Tam Phase 5 neden hâlâ bloklu?
 
 Crop-level CER/WER ile sabit SRT adaptörü farklı kapsamları ölçer. Adaptör,
-metrikleri ancak hazırlık aşamasındaki hak/provenance kapıları geçildiğinde ve
-insan tarafından beyan edilmiş zaman hizalı referanslar bulunduğunda
-hesaplayabilir. Yasal kullanım hakkını, referansların güvenilirliğini veya
-model/aygıt çalıştırmasını bağımsız doğrulayamaz; raporu Phase 6 kapısını açamaz.
-Güvenilir veri, bağımsız hak doğrulaması, adayın gerçek çalıştırılma provenance'ı
-ve release düzeyinde kanıt hâlâ eksiktir. Grup başına açık coverage eşiği artık
-sonuç öncesinde hash ile bağlanan planın parçasıdır; bu bir ölçüm kapısıdır,
-kalite kanıtı veya release yetkisi değildir. Hazırlık raporu `PREPARED_NOT_RUN`
-olarak kalır; crop raporu yalnız crop ölçer, video adaptörü de yalnız ölçüm
-yapar. Ayrı yerel runner için sonraki bölüme bakın; model trainer veya eğitim
-akışı yoktur.
+yalnız hazırlıktaki hak/provenance kapıları geçildiğinde ve insan tarafından
+onaylanmış zaman hizalı referanslar bulunduğunda metrik hesaplayabilir. Yasal
+kullanım hakkını, referansın güvenilirliğini veya modelin/aygıtın gerçekten nasıl
+çalıştırıldığını bağımsız olarak doğrulayamaz; raporu Phase 6 kapısını açmaz.
+Güvenilir veri, bağımsız hak doğrulaması, adayın gerçek çalıştırılma kaydı ve
+yayın düzeyinde kanıt hâlâ eksiktir. Grup başına coverage eşiği sonuçtan önce
+hash ile bağlanan plana eklenmiştir; bu bir ölçüm kapısıdır, kalite kanıtı ya da
+yayın izni değildir. Hazırlık raporu `PREPARED_NOT_RUN` olarak kalır; crop
+raporu yalnızca crop metnini ölçer, video adaptörünün raporu da yalnızca ölçüm
+sonucu verir. Ayrı yerel runner sonraki bölümde açıklanmıştır; model eğitimi
+yapan bir araç veya akış yoktur.
 
 ## Sabit profilli yerel OCR runner
 
-`phase5_execution.py`, isteğe bağlı ve ayrı bir yerel runner'dır. Çıktı
-oluşturmadan önce sabitlenmiş Phase 5 execution plan'ını, Phase 2 parent
-lineage'ını, grup başına medya hash'lerini, iki yerel offline profile'ı, ayrıca
-incelenmiş hak makbuzunu ve proje trust pin'ini doğrular. Yalnız seçili, hash'i
-sabitlenmiş profile ve sabit OCR argümanlarıyla ürün CLI'sini çağırır. Runner
-SRT ve stats hash'lerini, profile/model/config/device/backend kimliğini ve
-koşunun input bağlantılarını kaydeder. Test executor sentetiktir; model trainer
-değildir ve OCR ağırlıklarını güncellemez.
+`phase5_execution.py`, ayrı ve isteğe bağlı bir yerel runner'dır. Çıktı
+oluşturmadan önce sabitlenmiş Phase 5 çalıştırma planını, Phase 2 üst paket
+bağlantısını, grup başına medya hash'lerini, iki yerel çevrimdışı profili, ayrıca
+incelenmiş hak makbuzunu ve proje trust pin'ini doğrular. Yalnız seçili,
+hash'i sabitlenmiş profili ve sabit OCR argümanlarını kullanarak ürün CLI'sini
+çağırır. Runner SRT ve stats hash'lerini; profil/model/config/device/backend
+kimliğini ve koşunun girdi bağlantılarını kaydeder. Test yürütücüsü sentetik
+girdiler kullanır; model eğitmez ve OCR ağırlıklarını güncellemez.
 
-Runner çıktısında `phase5-execution-receipt-v2.json` ve
-`prediction-manifest-v1.json` dosyasını içerir; manifestteki
+Runner çıktısı `phase5-execution-receipt-v2.json` ile
+`prediction-manifest-v1.json` dosyalarını içerir. Manifestteki
 `execution_receipt` nesnesi makbuzun göreli yolunu, ham SHA-256 değerini ve run
-ID'sini bağlar. Makbuz canonical prediction-record özeti ile kayıtları tekrar
-içerir. Ölçümden önce adaptör bu dosyalar arası bağı hazırlanan
-dataset/split/reference, medya hash'leri, profile/config kimliği, SRT ve stats
-dosyaları ve cue sayımlarıyla karşılaştırır. Sonuç
+ID'sini birbirine bağlar. Makbuz, kanonik prediction-record özetini ve kayıtları
+tekrar içerir. Ölçümden önce adaptör bu dosyalar arası bağı hazırlanmış veri
+kümesi/split/referans, medya hash'leri, profil/config kimliği, SRT ve stats
+dosyaları ile cue sayıları üzerinden denetler. Sonuç
 `runner_recorded_not_independently_verified` olarak işaretlenir; eski manuel v1
 manifestleri `user_supplied_not_independently_verified` olarak kalır.
 
-Bu bağ yerel bir tutarlılık kontrolüdür; dijital imza veya bağımsız çalıştırma
-kanıtı değildir. Kriptografik nonce içermez: run ID yerel bir ilişkilendirme
+Bu bağ yerel tutarlılık kontrolüdür; dijital imza veya bağımsız çalıştırma
+kanıtı değildir. Kriptografik nonce içermez: run ID yalnızca yerel ilişkilendirme
 değeridir. Makbuzu ve manifesti yeniden yazabilen biri kendi içinde tutarlı yeni
-bir çift oluşturabilir. Bu mekanizma node-level GPU çalıştırmasını, yasal
-kullanım hakkını, gözden geçiren kişinin kimliğini veya kanıtların
-güvenilirliğini göstermez; `rights_verified:false` ya da
+bir çift oluşturabilir. Bu mekanizma GPU'nun hangi node üzerinde çalıştığını,
+yasal kullanım hakkını, incelemeyi yapan kişinin kimliğini veya kanıtların
+güvenilirliğini göstermez; `rights_verified:false` ve
 `phase6_eligible:false` değerlerini hiçbir zaman değiştirmez.
 
-Runner uygulanmıştır, ancak gerçek bir çalıştırma şu anda blokludur: hakları
-incelenmiş izinli bir corpus veya güvenilir zaman hizalı referans kümesi yoktur;
-Phase 5 execution receipt registry ve Phase 6 trust registries boştur. Sentetik
-fake-executor testleri yalnız yerel mekaniği doğrular; gerçek video, OCR veya
-model deneyi çalıştırılmamıştır. Measurement adapter'ı runner, raporunu da
-release PASS olarak değerlendirmeyin.
+Runner uygulanmıştır, ancak gerçek koşum şu anda blokludur: hakları incelenmiş
+izinli bir veri kümesi veya güvenilir zaman hizalı referans kümesi yoktur; Phase
+5 execution receipt registry ile Phase 6 trust registries boştur. Sentetik
+sahte yürütücü testleri yalnız yerel işleyişi doğrular; gerçek video, OCR veya
+model deneyi çalıştırılmamıştır. Ölçüm adaptörünü runner ile, raporunu da
+`release PASS` ile karıştırmayın.
 
-Tam video değerlendirme için daha sonra eklenmesi gereken metriklerin tanımı:
+## Tam video değerlendirmesi için gereken ek metrikler
 
-- **CER:** referans karakter sayısına bölünen Levenshtein karakter düzenleme sayısıdır; NFC ve boşluk normalizasyonu uygulanır, harf büyüklüğü ve noktalama korunur. Boş referans örnekleri CER hesabından çıkarılır ve ayrıca raporlanır.
-- **WER:** aynı normalizasyondan sonra Unicode whitespace ile tokenization yapılır; kelime düzenleme sayısı referans kelime sayısına bölünür. Dile özel tokenizer kullanılmıyorsa WER'in bu sınırlaması belirtilmelidir.
-- **Exact match:** normalize edilmiş metni aynı olan eşleşmiş cue sayısı / referans cue sayısıdır; eşleşmeyen referans cue yanlış sayılır.
-- **Cue recall:** sabitlenmiş zaman aralığı eşleştirme algoritması ve toleransına göre eşleşen trusted reference cue sayısı / toplam referans cue sayısıdır.
-- **Cue precision:** eşleşen OCR cue sayısı / toplam OCR cue sayısıdır. Bu tanımlar `vtt-qa.py`'nin mevcut örtüşme eşik sisteminden farklıysa adaptör farkı açıkça raporlamalıdır.
-- **Zaman:** eşleşmiş cue'larda başlangıç ve bitiş mutlak farklarının ayrı ortalamasıdır. Yalnız referans hizalaması destekliyorsa, önceden belirlenmiş tolerans içindeki çiftlerin oranı da verilir. Tolerans deney başlamadan sabitlenmelidir.
-- **Coverage:** doğrulanabilir, hizalanmış ve ölçülebilir referans cue'larının payıdır; kullanılamayan/belirsiz/eksik referanslar ve nedenleri ayrıca sayılmalıdır.
-- **Aggregates:** her episode/source için ayrı sonuç; cue-weighted micro (toplam edit / toplam referans birimi) ve group macro (grup skorlarının basit ortalaması). Train, validation ve test ayrı raporlanmalı; release gate yalnız sabitlenmiş test grubunu kullanır.
+- **CER:** referans karakter sayısına bölünen Levenshtein karakter düzenleme
+  sayısıdır. NFC ve boşluk normalizasyonu uygulanır; harf büyüklüğü ve noktalama
+  korunur. Boş referans örnekleri CER hesabından çıkarılır ve ayrıca raporlanır.
+- **WER:** aynı normalizasyondan sonra Unicode boşlukları üzerinden tokenization
+  yapılır; kelime düzenleme sayısı referans kelime sayısına bölünür. Dile özel
+  tokenizer kullanılmıyorsa WER'in bu sınırlaması belirtilmelidir.
+- **Exact match:** normalize edilmiş metni aynı olan eşleşmiş cue sayısı /
+  referans cue sayısıdır; eşleşmeyen referans cue yanlış sayılır.
+- **Cue recall:** sabitlenmiş zaman aralığı eşleştirme algoritması ve toleransına
+  göre eşleşen güvenilir referans cue sayısı / toplam referans cue sayısıdır.
+- **Cue precision:** eşleşen OCR cue sayısı / toplam OCR cue sayısıdır. Bu
+  tanımlar `vtt-qa.py`'nin mevcut örtüşme eşiği sisteminden farklıysa adaptör bu
+  farkı açıkça raporlamalıdır.
+- **Zaman:** eşleşmiş cue'larda başlangıç ve bitiş mutlak farklarının ayrı
+  ortalamasıdır. Yalnız referans hizalaması destekliyorsa, önceden belirlenmiş
+  tolerans içindeki çiftlerin oranı da verilir. Tolerans deneyden önce
+  sabitlenmelidir.
+- **Coverage:** doğrulanabilir, hizalanmış ve ölçülebilir referans cue'larının
+  payıdır; kullanılamayan/belirsiz/eksik referanslar ve nedenleri ayrıca
+  sayılmalıdır.
+- **Aggregates:** her bölüm/kaynak için ayrı sonuç; cue ağırlıklı micro (toplam
+  edit / toplam referans birimi) ve group macro (grup skorlarının basit
+  ortalaması). Train, validation ve test ayrı raporlanmalı; yayın kapısı yalnız
+  sabitlenmiş test grubunu kullanmalıdır.
 
-Her gerçek ölçüm baseline ve aday için aynı reference, cue alignment, normalization, OCR engine/config, configured-device/session-configured-backend ve koşu parametrelerini kaydetmelidir. Provider/device değerleri çalışma yapılandırmasıdır, node-level inference profili değildir. Fark varsa açıkça gösterilmelidir. Translation metrikleri bu OCR raporuna eklenmez; ayrı bilingual-human set ve ayrı schema gerekir.
+Her gerçek ölçüm baseline ve aday için aynı referansı, cue hizalamasını,
+normalizasyon kurallarını, OCR engine/config, configured-device/session-configured-backend
+değerlerini ve koşu parametrelerini kaydetmelidir. Provider/device değerleri
+çalışma yapılandırmasını belirtir; node-level inference profili değildir. Fark
+varsa açıkça gösterilmelidir. Çeviri metrikleri bu OCR raporuna eklenmez; bunun
+için ayrı, insanlarca değerlendirilen iki dilli bir veri kümesi ve ayrı schema
+gerekir.
 
-## Önceden ilan edilen regresyon kapısı
+## Önceden ilan edilen gerileme kapısı
 
-Rapor çalıştırılmadan önce `--max-cer-regression` ve zorunlu `--min-test-group-coverage` sabitlenir. Aday dondurulmuş test setinde baseline CER'ına göre izin verilen artışı aşarsa veya baseline/aday motorlarından herhangi biri herhangi bir test grubunda minimum coverage oranının altına düşerse coverage/CER karşılaştırması başarısızdır. Her episode/source grubu ayrı raporlanır; yüksek coverage'lı bir grup diğer gruptaki düşüklüğü örtemez. Eşik sonuca baktıktan sonra değiştirilemez; yeni bir değer yeni experiment planı gerektirir. Bu karşılaştırmalar yine Phase 6 release PASS'i değildir.
+Rapor çalıştırılmadan önce `--max-cer-regression` ve zorunlu
+`--min-test-group-coverage` sabitlenir. Aday, sabit test kümesinde baseline
+CER'ına göre izin verilen artışı aşarsa veya baseline/aday motorlarından biri
+herhangi bir test grubunda minimum coverage oranının altına düşerse coverage/CER
+karşılaştırması başarısız olur. Her episode/source grubu ayrı raporlanır; yüksek
+coverage'lı bir grup başka gruptaki düşüklüğü örtemez. Eşik sonuçlar görüldükten
+sonra değiştirilemez; yeni bir değer yeni experiment planı gerektirir. Bu
+karşılaştırmalar Phase 6 `release PASS` anlamına gelmez.
 
 ## Kesin durma koşulları
 
-- İnsan accepted/corrected export doğrulanamıyorsa; crop hash/decode, cue ID veya schema hatalıysa: hazırlığı reddet.
-- source/episode grup bilgisi veya hash'i eşleşen lisans kanıt dosyası yoksa split üretme. Kanıt varlığı hukuki uygunluk sayılmaz; insan rights review tamamlanmamışsa deney çalıştırma.
-- Parent review-pack zinciri doğrulanamıyorsa provenance `self_attested` yazılır ve deney çalıştırma kapısı kapalı kalır.
-- Üçten az bağımsız grup varsa: train/validation/test kurma; değerlendirmeyi yetersiz veri olarak durdur.
-- Her kaynak review-pack birden fazla source+episode grubu olarak işaretlenmişse veya iki pack aynı grubu iddia ediyorsa metadata lineage'i reddedilir.
-- Trusted, zamanla uyumlu source-language reference yoksa: OCR accuracy, model gain veya regression pass raporlama.
-- Baseline/aday engine, config, configured-device/session-configured-backend, metrik normalization/alignment veya predeclared gate eksikse: sonuç üretimini reddet.
-- Bu teslimatta model eğitimi, model ağırlığı değişimi ve kullanıcı videosu/corpus işlemi **yapılmadı**. Yeterli veri, lisans ve engine-specific reference gelene kadar bunlar bloklu kalır.
+- İnsan tarafından `accepted`/`corrected` olarak onaylanmış export
+  doğrulanamıyorsa veya crop hash/decode, cue ID ya da schema hatalıysa hazırlığı
+  reddet.
+- source/episode grubu bilgisi veya hash'i eşleşen lisans kanıtı dosyası yoksa
+  split üretme. Kanıt dosyasının varlığı hukuki uygunluk değildir; insan hak
+  incelemesi tamamlanmadıysa deneyi çalıştırma.
+- Üst review-pack zinciri doğrulanamıyorsa provenance `self_attested` yazılır
+  ve deney çalıştırma kapısı kapalı kalır.
+- Üçten az bağımsız grup varsa train/validation/test split'i oluşturma;
+  değerlendirmeyi veri yetersizliği nedeniyle durdur.
+- Bir kaynak review-pack birden fazla source+episode grubu olarak
+  işaretlenmişse veya iki pack aynı grubu iddia ediyorsa metadata lineage'ını
+  reddet.
+- Güvenilir, zaman hizalı, kaynak dilde referans yoksa OCR doğruluğu, model
+  kazanımı veya gerileme testi başarısı raporlama.
+- Baseline/aday engine, config, configured-device/session-configured-backend,
+  metrik normalization/alignment ya da önceden belirlenmiş kapı eksikse sonuç
+  üretimini reddet.
+- Bu çalışmada model eğitimi, model ağırlığı değişimi veya kullanıcı
+  videosu/veri kümesi işlemi **yapılmadı**. Yeterli veri, lisans ve engine'e özel
+  referanslar sağlanana kadar bunlar bloklu kalır.
