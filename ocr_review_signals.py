@@ -9,6 +9,7 @@ DEFAULT_CPS_THRESHOLD = 20.0
 _MARKUP_RE = re.compile(r"<[^>]*>|\{\\[^}]*\}")
 _TOKEN_RE = re.compile(r"[^\s]+")
 _ODD_GLYPHS = frozenset("¿��□■")
+_EDGE_PUNCTUATION = ".,!?;:'\"()[]{}<>…—-"
 
 _LANGUAGE_SCRIPTS = {
     "latin": {"tr", "en", "fr", "de", "es", "it", "pt", "nl", "sv",
@@ -97,16 +98,40 @@ def review_signals(cue: dict, languages: object = None,
 
     tokens = _TOKEN_RE.findall(visible)
     token_shape_suspect = False
-    for token in tokens:
+    allowed_singletons: set[str] = set()
+    if langs & _LANGUAGE_SCRIPTS["latin"]:
+        if "tr" in langs:
+            allowed_singletons.update(("a", "o"))
+        if langs & ({"en", "fr", "de", "es", "it", "pt", "nl", "sv",
+                     "no", "da", "fi", "is", "pl", "cs", "sk", "hu",
+                     "ro", "hr", "sl", "sq", "et", "lv", "lt", "id",
+                     "ms", "vi"}):
+            allowed_singletons.update(("a", "i"))
+    previous_core = ""
+    for token_index, token in enumerate(tokens):
         letters = [char for char in token if char.isalpha()]
         digits = [char for char in token if char.isdigit()]
         if letters and digits:
             token_shape_suspect = True
             break
+        core = token.strip(_EDGE_PUNCTUATION)
+        if core.isdigit() and (len(core) <= 2 or len(set(core)) == 1):
+            token_shape_suspect = True
+            break
+        if (len(core) == 1 and core.isalpha() and allowed_singletons and
+                0 < token_index < len(tokens) - 1):
+            single = core.lower()
+            if single not in allowed_singletons:
+                token_shape_suspect = True
+                break
+            if previous_core.lower().endswith(single):
+                token_shape_suspect = True
+                break
         if len(letters) >= 4 and any(char.islower() for char in letters) and \
                 sum(char.isupper() for char in letters[1:]) >= 2:
             token_shape_suspect = True
             break
+        previous_core = core
     if token_shape_suspect:
         add("suspicious_token", "Karışık harf/rakam veya olağandışı büyük harf dizilimi")
 

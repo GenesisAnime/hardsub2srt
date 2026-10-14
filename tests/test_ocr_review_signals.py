@@ -33,6 +33,16 @@ class OcrReviewSignalsTests(unittest.TestCase):
         self.assertIn("unusual_glyph", codes)
         self.assertIn("very_short_cue", codes)
 
+    def test_isolated_ocr_letters_and_zero_are_flagged(self):
+        noisy = self._codes({"source_text_ocr": "Bize e gereken her şey 0 burada",
+                             "ocr_confidence": 0.97,
+                             "start_ms": 0, "end_ms": 4000})
+        ordinary = self._codes({"source_text_ocr": "Ama o gün geldi.",
+                                "ocr_confidence": 0.97,
+                                "start_ms": 0, "end_ms": 2500})
+        self.assertIn("suspicious_token", noisy)
+        self.assertNotIn("suspicious_token", ordinary)
+
     def test_expected_japanese_text_and_normal_short_dialogue_are_not_flagged(self):
         japanese = self._codes({"source_text_ocr": "猫です", "ocr_confidence": 0.99,
                                 "start_ms": 0, "end_ms": 1500}, ("ja",))
