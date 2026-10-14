@@ -17,6 +17,8 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
+from srt_format import SRT_TIMESTAMP_RE, duration_ms, parse_srt_ms
+
 import ocr_crop_eval as crop_eval
 import ocr_experiment as prep
 
@@ -32,7 +34,6 @@ MIN_OVERLAP_REFERENCE_RATIO = 0.5  # frozen; overlap / reference cue duration
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ENGINE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-TIMESTAMP_RE = re.compile(r"^(\d{2,}):(\d{2}):(\d{2}),(\d{3})$")
 
 
 class VideoEvalError(ValueError):
@@ -105,22 +106,16 @@ def _parse_srt_bytes(raw: bytes, label: str) -> list[dict]:
         if len(lines) < 2 or "-->" not in lines[0]:
             raise VideoEvalError(f"{label}: {index + 1}. SRT bloğu geçersiz")
         left, sep, right = lines[0].partition("-->")
-        match_a, match_b = TIMESTAMP_RE.fullmatch(left.strip()), TIMESTAMP_RE.fullmatch(right.strip())
-        if not sep or not match_a or not match_b:
+        start, end = parse_srt_ms(left), parse_srt_ms(right)
+        if not sep or start is None or end is None:
+            # The canonical parser owns accepted syntax and bounds; use its
+            # shape regex only to preserve this adapter's prior diagnostics.
+            if (SRT_TIMESTAMP_RE.fullmatch(left.strip()) and
+                    SRT_TIMESTAMP_RE.fullmatch(right.strip())):
+                raise VideoEvalError(f"{label}: {index + 1}. cue zaman değeri geçersiz")
             raise VideoEvalError(f"{label}: {index + 1}. cue zaman biçimi geçersiz")
-
-        def to_ms(match):
-            hour_text, minute_text, second_text, millis_text = match.groups()
-            if len(hour_text) > 9:
-                raise VideoEvalError(f"{label}: {index + 1}. cue zaman değeri geçersiz")
-            hours, minutes, seconds, millis = map(int, (hour_text, minute_text, second_text, millis_text))
-            if minutes >= 60 or seconds >= 60:
-                raise VideoEvalError(f"{label}: {index + 1}. cue zaman değeri geçersiz")
-            return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis
-
-        start, end = to_ms(match_a), to_ms(match_b)
         cue_text = " ".join(line for line in lines[1:] if line).strip()
-        if start >= end or not cue_text or len(cue_text) > MAX_TEXT_CHARS:
+        if duration_ms(start, end) is None or not cue_text or len(cue_text) > MAX_TEXT_CHARS:
             raise VideoEvalError(f"{label}: {index + 1}. cue süresi/metni geçersiz")
         cues.append({"index": index, "start_ms": start, "end_ms": end, "text": cue_text})
     return cues

@@ -47,6 +47,8 @@ from datetime import datetime
 from itertools import combinations
 from pathlib import Path
 
+from srt_format import parse_loose_ms, parse_timing_pair
+
 SURUM = "1.0"
 
 # --- post-fix ailesiyle AYNI eşikler (hardsub2srt.py) ----------------------
@@ -65,11 +67,6 @@ _TR_LOW = str.maketrans("Iİ", "ıi")
 _KELIME_RE = re.compile(r"^([^A-Za-zçğıöşüÇĞİÖŞÜ0-9]*)([A-Za-zçğıöşüÇĞİÖŞÜ]+)"
                         r"([^A-Za-zçğıöşüÇĞİÖŞÜ0-9]*)$")
 _HARF_RE = re.compile(r"[A-Za-zçğıöşüÇĞİÖŞÜ]")
-# Saat alanı sınırlıdır (<=9 hane): sınırsız alan int()'te Python'un 4300
-# hanelik dönüşüm sınırına takılıp ValueError fırlatır ve "Kaydet = öğren"
-# turunu traceback ile düşürürdü (bkz. srt_lint/ocr_video_eval aynı sınır).
-_TS_RE = re.compile(r"^\s*(?:(\d{1,9}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*$")
-
 _FREK = {"sozluk": None, "kaynak": None}
 
 
@@ -485,14 +482,8 @@ def ciftleri_ogren(ciftler, sozluk_yol, yaz=True, kaynak="cli"):
 
 # --------------------------------------------------------- SRT + hizalama --
 def _ts_ms(s):
-    m = _TS_RE.match(str(s or "").strip())
-    if not m:
-        return None
-    h, mi, se, ms = m.groups()
-    if int(mi) > 59 or int(se) > 59:
-        return None
-    return ((int(h or 0) * 60 + int(mi)) * 60 + int(se)) * 1000 + \
-        int((ms + "000")[:3])
+    """Timestamp rule is centralized in srt_format.parse_loose_ms."""
+    return parse_loose_ms(s, full_match=True)
 
 
 def srt_parse(metin):
@@ -506,13 +497,11 @@ def srt_parse(metin):
         ti = next((k for k, ln in enumerate(satirlar) if "-->" in ln), None)
         if ti is None:
             continue
-        sol, _, sag = satirlar[ti].partition("-->")
-        st = _ts_ms(sol.split()[-1] if sol.split() else "")
-        en = _ts_ms(sag.split()[0] if sag.split() else "")
+        pair = parse_timing_pair(satirlar[ti], token_edges=True, loose=True)
         mtn = "\n".join(satirlar[ti + 1:]).strip()
-        if st is None or en is None or not mtn:
+        if pair is None or not mtn:
             continue
-        bloklar.append({"start": st, "end": en, "metin": mtn})
+        bloklar.append({"start": pair[0], "end": pair[1], "metin": mtn})
     return bloklar
 
 
