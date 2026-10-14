@@ -28,6 +28,8 @@ py -3 -c "import torch; print(torch.__version__); print(torch.cuda.is_available(
 
 `--nvdec` video decode içindir; OCR modelinin GPU kullandığını göstermez. Varsayılan olarak kapalıdır ve decode başarısız olursa CPU’ya düşer. Video decode ile OCR aygıt durumunu ayrı değerlendirin.
 
+`--batch` tanıma çağrılarını gruplar; metin tespiti hâlâ görüntü başına yapılır. Daha büyük değer daha çok VRAM ayırabilir ama tek başına daha hızlı çalışacağını veya GPU’yu dolduracağını kanıtlamaz. Aynı kısa video ve aynı `--lang` ile 16/32 gibi değerleri karşılaştırın; `.stats.json` içindeki `timing` alanlarına ve SRT farkına bakın. Şu anki stats VRAM tepe kullanımını kaydetmez. `ogren.py` GPU kullanmaz; sözlük ve metin karşılaştırmasını CPU’da yapar.
+
 ## Softsub SRT’si beklenenden farklı veya çıkarılamıyor
 
 FFprobe altyazı track bulursa CLI ilk gömülü track’i OCR yerine FFmpeg ile SRT’ye dönüştürmeyi dener. Yalnız ilk track kullanılır; CLI’de track seçimi yoktur. Codec/container desteklenmiyorsa FFmpeg hata verir ve OCR fallback yapılmaz. Kaynakta gömülü track yoksa hardsub OCR yolu kullanılır.

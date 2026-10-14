@@ -35,6 +35,11 @@ frames, retry decisions, or SRT text/timestamps.
 All measurements use `time.monotonic()`. New values are serialized to three
 decimal places; the threshold and recovery stage values reuse their existing
 stats fields, which retain their established one-decimal precision.
+The timing object records stage durations and the requested OCR batch size,
+but not peak VRAM or GPU utilization. `--batch` batches recognition calls;
+detection remains per image. Compare batch sizes on the same short video and
+language before changing defaults. The separate `ogren.py` learning script is
+CPU-only.
 `run_elapsed_seconds` starts at entry to `main()` and is sampled after optional
 review-pack generation, immediately before the final stats write. It therefore
 includes style detection, model setup and other work not broken out as a stage;

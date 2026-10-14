@@ -28,6 +28,8 @@ If the result is `False`, OCR falls back to the CPU; `--cpu` explicitly selects 
 
 `--nvdec` is for video decoding; it does not show whether the OCR model uses the GPU. It is off by default and decoding falls back to the CPU if it fails. Check video decoding and the OCR device separately.
 
+`--batch` groups OCR recognition calls; text detection still runs per image. A larger value may allocate more VRAM, but does not by itself prove faster processing or higher GPU utilization. Compare values such as 16 and 32 on the same short video with the same `--lang`, then compare `.stats.json` timing and the SRT output. Current stats do not record peak VRAM. `ogren.py` does not use the GPU; its dictionary and text comparison work runs on the CPU.
+
 ## Softsub output is unexpected or cannot be extracted
 
 If FFprobe finds a subtitle track, the CLI tries to convert the first embedded track to SRT with FFmpeg instead of using OCR. It uses only the first track; the CLI cannot select another one. If the codec/container is unsupported, FFmpeg reports an error and there is no OCR fallback. If the source has no embedded track, the hardsub OCR path is used.

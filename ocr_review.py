@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import path_scope
+import ocr_review_signals
 from srt_format import parse_srt_ms
 
 
@@ -463,6 +464,15 @@ def public_pack(info: dict) -> dict:
     active, warnings = _active(info)
     raw_timing_metadata = info["manifest"].get("raw_timing_metadata")
     srt_digest = info["manifest"].get("srt_sha256_local")
+    ocr_metadata = info["manifest"].get("ocr_metadata")
+    if not isinstance(ocr_metadata, dict):
+        ocr_metadata = {}
+    languages = ocr_metadata.get("languages")
+    try:
+        confidence_threshold = float(ocr_metadata.get(
+            "confidence_threshold", 0.75))
+    except (TypeError, ValueError):
+        confidence_threshold = 0.75
     cues = []
     seed_import = info["manifest"].get("seed_import")
     seed_suggestions_enabled = (
@@ -479,6 +489,9 @@ def public_pack(info: dict) -> dict:
             "raw_end_ms", "clamp_delta_ms", "raw_end_time_basis")}
         public_cue["raw_end_note"] = _raw_end_note(
             cue, raw_timing_metadata, srt_digest)
+        public_cue["review_flags"] = ocr_review_signals.review_signals(
+            cue, languages=languages,
+            confidence_threshold=confidence_threshold)
         candidate = cue.get("seed_candidate_text") if seed_suggestions_enabled else None
         public_cue["seed_candidate_text"] = (
             candidate if isinstance(candidate, str) and candidate.strip() and
@@ -874,9 +887,9 @@ async function runSrtLint(){const button=$('srt-lint-run');button.disabled=true;
 $('srt-lint-run').onclick=runSrtLint;
 window.imageReady=(img,ok)=>{const card=img.closest('.cue');if(!card)return;card.querySelectorAll('.decision').forEach(b=>b.disabled=!ok);const textarea=card.querySelector('textarea');if(textarea)textarea.disabled=!ok;if(!ok){const n=document.createElement('div');n.className='notice bad';n.textContent='Görsel yüklenemedi; bu altyazı için karar verilemez.';img.replaceWith(n)}};
 function draw(){
- const decisions=pack.cues.filter(c=>c.active_event).length;const seedNotice=pack.seed_import?' · Seed import: SRT seed satırlarından oluşturulmuş alt kümedir; özgün tam-run SRT değildir.':'';$('summary').textContent=`${pack.cues.length} altyazı · ${decisions} kayıtlı karar · günlük: ${pack.review_log}${seedNotice}`;
+ const decisions=pack.cues.filter(c=>c.active_event).length;const flagged=pack.cues.filter(c=>Array.isArray(c.review_flags)&&c.review_flags.length).length;const seedNotice=pack.seed_import?' · Seed import: SRT seed satırlarından oluşturulmuş alt kümedir; özgün tam-run SRT değildir.':'';$('summary').textContent=`${pack.cues.length} altyazı · ${decisions} kayıtlı karar · ${flagged} cue görsel inceleme önerisi · günlük: ${pack.review_log}${seedNotice}`;
  $('warnings').innerHTML=pack.warnings.length?'<div class="notice">'+pack.warnings.map(esc).join('<br>')+'</div>':'';
- $('cues').innerHTML=pack.cues.map((c,i)=>{const ev=c.active_event;const val=ev?.verified_source_text??c.source_text_ocr;const state=ev?ev.status:'İncelenmedi';const img=c.crop_valid?`<img loading="lazy" onload="imageReady(this,true)" onerror="imageReady(this,false)" alt="Altyazı kırpımı" src="/api/ocr-inceleme/${encodeURIComponent(reviewId)}/crop/${encodeURIComponent(c.cue_id)}">`:'<div class="notice">Bu blokta güvenilir ve doğrulanabilir kırpım yok; OCR veri kümesine alınamaz.</div>';const rawTiming=c.raw_end_note?`<div class="notice raw-end-info">${esc(c.raw_end_note)}</div>`:'';const seedSuggestion=typeof c.seed_candidate_text==='string'?`<div class="notice"><b>Seed önerisi · insan kararı değil:</b><p>${esc(c.seed_candidate_text)}</p><button type="button" onclick="copySeedSuggestion(${i})">Öneriyi düzenleme alanına aktar</button></div>`:'';return `<article class="cue"><div>${img}</div><div><b>#${i+1} · ${esc(c.start_ms)}–${esc(c.end_ms)} ms</b> <span class="meta">güven: ${esc(c.ocr_confidence??'bilinmiyor')} · ${esc(state)}</span>${rawTiming}${seedSuggestion}${c.crop_valid?`<p><label><input type="checkbox" class="ai-ocr-select" data-cue="${esc(c.cue_id)}"> AI görsel incelemesine dahil et</label></p>`:''}<p class="meta">OCR metni</p><textarea id="txt-${i}" ${c.crop_valid?'':'disabled'}>${esc(val)}</textarea><div class="controls"><button class="primary decision" onclick="decide(${i},'accepted')" disabled>Görüntü doğru</button><button class="decision" onclick="decide(${i},'corrected')" disabled>Düzeltmeyi kaydet</button><button class="warn decision" onclick="decide(${i},'uncertain')" disabled>Belirsiz</button>${ev?`<button onclick="undo(${i})">Son kararı geri al</button>`:''}</div><div class="meta">${esc(c.mapping_status||'')} ${c.crop_valid?'':'· görsel doğrulaması kullanılamıyor'}</div></div></article>`}).join('');
+ $('cues').innerHTML=pack.cues.map((c,i)=>{const ev=c.active_event;const val=ev?.verified_source_text??c.source_text_ocr;const state=ev?ev.status:'İncelenmedi';const img=c.crop_valid?`<img loading="lazy" onload="imageReady(this,true)" onerror="imageReady(this,false)" alt="Altyazı kırpımı" src="/api/ocr-inceleme/${encodeURIComponent(reviewId)}/crop/${encodeURIComponent(c.cue_id)}">`:'<div class="notice">Bu blokta güvenilir ve doğrulanabilir kırpım yok; OCR veri kümesine alınamaz.</div>';const rawTiming=c.raw_end_note?`<div class="notice raw-end-info">${esc(c.raw_end_note)}</div>`:'';const seedSuggestion=typeof c.seed_candidate_text==='string'?`<div class="notice"><b>Seed önerisi · insan kararı değil:</b><p>${esc(c.seed_candidate_text)}</p><button type="button" onclick="copySeedSuggestion(${i})">Öneriyi düzenleme alanına aktar</button></div>`:'';const reviewFlags=Array.isArray(c.review_flags)?c.review_flags:[];const reviewNotice=reviewFlags.length?`<div class="notice"><b>Görsel inceleme önerisi:</b> ${esc(reviewFlags.map(f=>f.label).join(' · '))}</div>`:'';return `<article class="cue"><div>${img}</div><div><b>#${i+1} · ${esc(c.start_ms)}–${esc(c.end_ms)} ms</b> <span class="meta">güven: ${esc(c.ocr_confidence??'bilinmiyor')} · ${esc(state)}</span>${rawTiming}${reviewNotice}${seedSuggestion}${c.crop_valid?`<p><label><input type="checkbox" class="ai-ocr-select" data-cue="${esc(c.cue_id)}"> AI görsel incelemesine dahil et</label></p>`:''}<p class="meta">OCR metni</p><textarea id="txt-${i}" ${c.crop_valid?'':'disabled'}>${esc(val)}</textarea><div class="controls"><button class="primary decision" onclick="decide(${i},'accepted')" disabled>Görüntü doğru</button><button class="decision" onclick="decide(${i},'corrected')" disabled>Düzeltmeyi kaydet</button><button class="warn decision" onclick="decide(${i},'uncertain')" disabled>Belirsiz</button>${ev?`<button onclick="undo(${i})">Son kararı geri al</button>`:''}</div><div class="meta">${esc(c.mapping_status||'')} ${c.crop_valid?'':'· görsel doğrulaması kullanılamıyor'}</div></div></article>`}).join('');
  drawAiOcrProposals();drawAiDrafts();drawAiProposals();drawTranslationQualityReadiness();
 }
 window.decide=async(i,status)=>{const c=pack.cues[i];try{const correction=$('txt-'+i).value;await api('/api/ocr-inceleme/karar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:reviewId,cue_id:c.cue_id,status,correction})});await refresh()}catch(e){alert(e.message)}};

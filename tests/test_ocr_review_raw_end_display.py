@@ -44,6 +44,8 @@ class OcrReviewRawEndDisplayTests(unittest.TestCase):
         client = ui_server.app.test_client()
         page = client.get("/ocr-inceleme").get_data(as_text=True)
         self.assertIn("const rawTiming=c.raw_end_note?`<div class=\"notice raw-end-info\">${esc(c.raw_end_note)}</div>`:''", page)
+        self.assertIn("${reviewNotice}", page)
+        self.assertIn("Görsel inceleme önerisi", page)
         self.assertIn("SRT yazılan bitiş", ocr_review._raw_end_note(self.cue, self.metadata, self.digest))
         self.assertIn("c.end_ms", page)
         self.assertIn("${rawTiming}", page)
@@ -83,6 +85,31 @@ class OcrReviewRawEndDisplayTests(unittest.TestCase):
             self.assertNotIn("raw_timing_metadata", reopened)
             self.assertNotIn("srt_sha256_local", reopened)
             self.assertIsNone(reopened["cues"][0]["raw_end_note"])
+
+    def test_review_pack_flags_low_confidence_and_high_confidence_text_anomalies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            srt = Path(temporary) / "synthetic.srt"
+            srt.write_text(
+                "1\n00:00:00,000 --> 00:00:02,000\nMerhaba привет\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nOther text\n",
+                encoding="utf-8")
+            cues = [
+                {"start_ms": 0, "end_ms": 2000, "text": "Merhaba привет",
+                 "confidence": 0.99, "frame_index": 10, "frame_ms": 500,
+                 "band_y": 2, "band_height": 12},
+                {"start_ms": 3000, "end_ms": 4000, "text": "Other text",
+                 "confidence": 0.4, "frame_index": 20, "frame_ms": 3500,
+                 "band_y": 2, "band_height": 12},
+            ]
+            pack, _manifest = build_review_pack(
+                srt, cues, {"languages": ["tr"], "confidence_threshold": 0.75},
+                lambda *_args: np.full((10, 32, 3), 80, dtype=np.uint8))
+            _review_id, opened = ocr_review.open_pack(str(pack))
+            first = {flag["code"] for flag in opened["cues"][0]["review_flags"]}
+            second = {flag["code"] for flag in opened["cues"][1]["review_flags"]}
+            self.assertIn("unexpected_script", first)
+            self.assertNotIn("low_confidence", first)
+            self.assertIn("low_confidence", second)
 
 
 if __name__ == "__main__":

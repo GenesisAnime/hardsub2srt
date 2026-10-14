@@ -17,6 +17,9 @@ Neither path translates subtitles. Hardsub OCR reads text from the image; softsu
 # Standard OCR
 py -3 hardsub2srt.py "D:\LOCAL-ONLY-PLACEHOLDER\input.mkv" -o "D:\LOCAL-ONLY-PLACEHOLDER\output.srt"
 
+# Use the subtitle language; Turkish is the default, English is explicit
+py -3 hardsub2srt.py "D:\LOCAL-ONLY-PLACEHOLDER\input.mkv" -o "D:\LOCAL-ONLY-PLACEHOLDER\output-en.srt" --lang en
+
 # Force OCR to use the CPU
 py -3 hardsub2srt.py "D:\LOCAL-ONLY-PLACEHOLDER\input.mkv" -o "D:\LOCAL-ONLY-PLACEHOLDER\output.srt" --cpu
 
@@ -47,6 +50,8 @@ The queue has one worker and is held in memory; pending jobs are not restored af
 In the CLI, `-o` is the SRT output target. A hardsub run writes the main SRT and may also write `_ekran.srt`, `.stats.json`, `.hardsub2srt.json`, and other JSON sidecars tied to the same filename. Rerunning to the same target overwrites existing CLI outputs; back them up first or choose another target.
 
 `--review-pack` also creates a `<SRT-stem>.review-pack/` directory. The CLI stops if that directory already exists and never overwrites it. Direct softsub extraction does not create a review pack because it has no OCR frame-to-cue matching. A review pack may contain SRT text and subtitle-frame crops. If you manually send a review package to an AI chat, its contents go to the AI provider you choose; the application does not call the provider's API.
+
+Choose EasyOCR languages to match the subtitle: the CLI defaults to `tr`; use `en` for English or `tr,en` only for genuinely bilingual subtitles. The UI defaults to creating a review pack. Its human review page flags low confidence, unexpected scripts, suspicious token shapes, very short cues, and high characters per second. These are review warnings, not automatic corrections. Low-confidence cues are also retried by the second engine.
 
 For review and learning workflows, see [Review bundle: human OCR review](REVIEW-BUNDLE.md) [EN], [AI OCR visual review](AI-OCR-VISUAL-REVIEW.en.md) [EN], and [Seed import](SEED-IMPORT.md) [EN].
 

@@ -17,6 +17,9 @@ Her iki yol da çeviri yapmaz. Hardsub’da OCR, görüntüde okunan metni üret
 # Standart OCR
 py -3 hardsub2srt.py "D:\LOCAL-ONLY-PLACEHOLDER\input.mkv" -o "D:\LOCAL-ONLY-PLACEHOLDER\output.srt"
 
+# Türkçe altyazı için varsayılan dil tr'dir; İngilizce altyazı için en kullanın
+py -3 hardsub2srt.py "D:\LOCAL-ONLY-PLACEHOLDER\input.mkv" -o "D:\LOCAL-ONLY-PLACEHOLDER\output-en.srt" --lang en
+
 # OCR'ı CPU'da çalıştır
 py -3 hardsub2srt.py "D:\LOCAL-ONLY-PLACEHOLDER\input.mkv" -o "D:\LOCAL-ONLY-PLACEHOLDER\output.srt" --cpu
 
@@ -47,6 +50,8 @@ Kuyruk tek işçiyle sırayla çalışır ve bellektedir; sunucu yeniden başlat
 CLI’de `-o` SRT hedefidir. Hardsub koşusu ana SRT ve `_ekran.srt` ile `.stats.json`, `.hardsub2srt.json` ve blok/takas gibi aynı gövdeye bağlı JSON yan dosyaları yazabilir. Mevcut aynı adlı CLI çıktılarını tekrar çalıştırmak üzerine yazar; gerekli dosyaları önceden yedekleyin veya farklı bir hedef kullanın.
 
 `--review-pack` ayrıca `<SRT-gövdesi>.review-pack/` klasörü üretir; bu klasör zaten varsa CLI durur ve review pack’in üzerine yazmaz. Softsub doğrudan çıkarımında OCR kare-cue eşleşmesi olmadığından review pack oluşturulmaz. Paket, SRT metni ve altyazı kare kırpımları içerebilir. AI sohbet paketi dışarı elle gönderilirse içerik seçtiğiniz AI provider’a gider; uygulama kendisi provider API’si çağırmaz.
+
+EasyOCR dili altyazıyla eşleştirin: CLI varsayılanı `--lang tr`'dir; İngilizce için `--lang en`, iki dil gerçekten altyazıda görünüyorsa `--lang tr,en` kullanın. Arayüzde review-pack varsayılan açıktır. İnceleme sayfası düşük güveni, beklenmeyen alfabeyi, OCR benzeri token biçimlerini, aşırı kısa cue'ları ve yüksek karakter/sn değerini uyarı olarak işaretler; bu işaretler otomatik düzeltme değildir. Düşük güvenli cue'lar ayrıca ikinci engine'den geçer.
 
 İnceleme/öğrenme akışları için [Review pack: insan OCR incelemesi](REVIEW-BUNDLE.md) [EN], [Manuel AI OCR görsel incelemesi](AI-OCR-GORSEL-INCELEME.md) [TR] ve [Seed import](SEED-IMPORT.md) [EN] belgelerine bakın.
 

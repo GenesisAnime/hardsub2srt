@@ -26,6 +26,7 @@ Hardsub OCR does not translate text or guarantee that it is correct. A hardsub C
 Use `py -3 hardsub2srt.py --help` for CLI options. Common options:
 
 - `--cpu` forces OCR to use the CPU.
+- `--lang tr` selects the subtitle language for EasyOCR. The default is `tr`; use `en` for English or `tr,en` only when the subtitles are genuinely bilingual. Adding unrelated languages may not improve recognition.
 - `--nvdec` tries FFmpeg's NVIDIA video-decoding path. This is separate from PyTorch CUDA for OCR; NVDEC is off by default and decoding falls back to the CPU if it fails.
 - `--qa 0` disables QA montages. A full CLI run defaults to six samples; a run limited with `--limit-seconds` defaults to QA off.
 - `--review-pack` creates a review pack for hardsub cues with a verified OCR-to-frame match. Direct softsub extraction does not create one.
@@ -38,7 +39,7 @@ The Windows batch launchers `cikar.bat` and `toplu.bat` accept multiple video fi
 
 Run `arayuz.bat` or `py -3 ui_server.py` to start the local Flask UI at `http://127.0.0.1:8765`. Each job writes to a new `runs/video-<name>/<timestamp>_<job-id>/` folder under the selected output root; previous run folders are not overwritten. The queue is in memory, so pending jobs are not restored after a server restart. The UI defaults to four QA samples and can disable them with 0.
 
-OCR uses a CUDA-enabled PyTorch GPU when available, otherwise it falls back to CPU. The UI also offers a separate CPU option.
+The UI starts with `tr` for subtitle language and enables review-pack creation by default. The human review page flags low confidence, unexpected scripts, suspicious token shapes, very short cues, and high characters per second; the second engine already retries low-confidence cues. OCR uses a CUDA-enabled PyTorch GPU when available, otherwise it falls back to CPU. The UI also offers a separate CPU option.
 
 ## Privacy and AI review
 

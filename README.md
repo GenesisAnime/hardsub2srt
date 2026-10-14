@@ -26,6 +26,7 @@ Hardsub OCR çıktısını çevirmez veya metnin doğru olduğunu garanti etmez.
 CLI ayarları için `py -3 hardsub2srt.py --help` kullanın. Temel seçenekler:
 
 - `--cpu`: OCR’ı CPU’da zorlar.
+- `--lang tr`: EasyOCR için altyazının dilini seçer. Varsayılan `tr`; İngilizce için `en`, gerçekten iki dilli altyazı için `tr,en` verin. İlgisiz dilleri eklemek tanımayı iyileştirmeyebilir.
 - `--nvdec`: FFmpeg’in NVIDIA video decode desteğini dener. Bu, OCR’ı GPU’da çalıştıran PyTorch CUDA ayarından ayrıdır; NVDEC varsayılan olarak kapalıdır ve başarısız olursa decode CPU’ya düşer.
 - `--qa 0`: QA kare montajını kapatır. Tam CLI koşusunda varsayılan 6 örnektir; `--limit-seconds` ile sınırlı koşuda varsayılan kapalıdır.
 - `--review-pack`: özgün OCR segmentiyle güvenle eşleşen hardsub cue’ları için review pack üretir. Softsub doğrudan çıkarımda bu paket oluşturulmaz.
@@ -38,7 +39,7 @@ Windows batch launcher’ları `cikar.bat` ve `toplu.bat` birden fazla video dos
 
 `arayuz.bat` çalıştırın veya `py -3 ui_server.py` komutunu verin; arayüz `http://127.0.0.1:8765` adresinde yalnızca bu bilgisayarda açılır. Arayüz işleri seçilen çıktı kökü altında her koşu için yeni `runs/video-<ad>/<zaman>_<iş-kimliği>/` klasörüne yazar; önceki koşu klasörlerini üzerine yazmaz. Kuyruk bellektedir ve sunucu yeniden başlatılınca bekleyen işler geri yüklenmez.
 
-Arayüzün QA montajı varsayılanı 4 örnektir; 0 ile kapatılır. OCR için CUDA destekli PyTorch kullanılabiliyorsa GPU seçilir, aksi durumda CPU’ya düşer. `--cpu` arayüzde de seçilebilir.
+Arayüzün QA montajı varsayılanı 4 örnektir; 0 ile kapatılır. Dil alanı Türkçe altyazı için `tr` ile başlar. Review-pack arayüzde varsayılan olarak seçilidir; düşük güven, beklenmeyen alfabe, şüpheli token, çok kısa cue ve yüksek karakter/sn sinyalleri insan inceleme sayfasında uyarı olarak gösterilir. İkinci engine düşük güvenli cue’ları zaten yeniden okur. OCR için CUDA destekli PyTorch kullanılabiliyorsa GPU seçilir, aksi durumda CPU’ya düşer. `--cpu` arayüzde de seçilebilir.
 
 ## Gizlilik ve AI incelemesi
 

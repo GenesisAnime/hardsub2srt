@@ -130,14 +130,16 @@ kronolojik olarak geri konur — bayrağın anlamı "ayırma"dır, "silme" deği
   - Satır gruplama eşiği font yüksekliğine ölçeklenir (28px sabiti değil).
 
 OCR, CUDA'lı torch kuruluysa GPU'da değilse CPU'da çalışır; --cpu ile GPU
-zorla devre dışı bırakılır. --lang virgüllü liste alır (ör. tr,en).
+zorla devre dışı bırakılır. --lang altyazı dil(ler)ini virgülle alır;
+varsayılan Türkçe için tr'dir (ör. en, ja, tr,en).
 
 Kullanım:
   py -3 hardsub2srt.py "video.mp4" -o "out.srt"
   py -3 hardsub2srt.py "video.mp4" -o "out.srt" --limit-seconds 120   (test)
   py -3 hardsub2srt.py "video.mp4" -o "out.srt" --batch 32            (GPU batch)
   py -3 hardsub2srt.py "video.mp4" -o "out.srt" --qa 12 --qa-dir qa   (doğrulama montajı)
-  py -3 hardsub2srt.py "video.mp4" -o "out.srt" --lang tr,en          (çok dil)
+  py -3 hardsub2srt.py "video.mp4" -o "out.srt" --lang tr             (Türkçe)
+  py -3 hardsub2srt.py "video.mp4" -o "out.srt" --lang tr,en          (iki dil)
   py -3 hardsub2srt.py "video.mp4" -o "out.srt" --cpu                 (OCR'u CPU'da zorla)
   py -3 hardsub2srt.py "video.mp4" -o "out.srt" --nvdec               (NVDEC decode)
   py -3 hardsub2srt.py "video.mp4" -o "out.srt" --ocr paddle          (2. görüş: yalnız PP-OCRv5)
@@ -3738,6 +3740,18 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
+def _parse_ocr_languages(value):
+    """Normalize a comma-separated EasyOCR language list."""
+    if not isinstance(value, str) or len(value) > 64:
+        raise argparse.ArgumentTypeError("dil listesi 64 karakteri aşamaz")
+    codes = [part.strip().lower() for part in value.split(",")]
+    if not codes or any(not re.fullmatch(r"[a-z]{2,3}(?:_[a-z0-9]+)?", code)
+                        for code in codes):
+        raise argparse.ArgumentTypeError(
+            "yalnız EasyOCR dil kodlarını virgülle girin (ör. tr veya tr,en)")
+    return ",".join(dict.fromkeys(codes))
+
+
 def main(argv=None):
     cli_args = list(sys.argv[1:] if argv is None else argv)
     if cli_args[:1] == ["phase5-run"]:
@@ -3815,9 +3829,10 @@ def main(argv=None):
                          "sayisi/sureleri degismez. Her degisiklik "
                          "<ad>.kurtarma-gunlugu.json'a yazilir (varsayilan "
                          "acik; --no-kurtarma = kapat)")
-    ap.add_argument("--lang", default="tr,en",
-                    help="EasyOCR dil kodlari, virgulle birlestirilir "
-                         "(orn: tr,en / ja / ko,zh_sim)")
+    ap.add_argument("--lang", type=_parse_ocr_languages, default="tr",
+                    help="altyazının diline uygun EasyOCR dil kodları; "
+                         "virgülle birleştirilebilir (varsayılan: tr; "
+                         "ör. en / ja / tr,en)")
     ap.add_argument("--ocr", choices=["auto", "easyocr", "paddle"],
                     default="auto",
                     help="dusuk guvenli segmentlerin ikinci gorUs motoru: "
@@ -4038,7 +4053,7 @@ def main(argv=None):
 
     lang_list = [s.strip().lower() for s in args.lang.split(",") if s.strip()]
     if not lang_list:
-        lang_list = ["tr", "en"]
+        lang_list = ["tr"]
     if args.cpu:
         gpu_flag, device = False, "CPU (--cpu ile zorlandi)"
     else:
