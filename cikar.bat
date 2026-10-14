@@ -77,6 +77,7 @@ echo  SRT ciktilari     : %~dp0
 echo  QA kontrol montaji: %~dp0qa
 echo ================================================================
 pause
+if !HATALI! GTR 0 exit /b 1
 exit /b 0
 
 rem ---- yardimci: oge sayimi (dosya=1, klasor=icindeki videolar) ----
