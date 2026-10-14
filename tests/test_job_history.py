@@ -430,6 +430,7 @@ class JobHistoryTests(unittest.TestCase):
             ui_server.CALISAN.clear()
         self.assertEqual(history.recent(1)[0]["status"], "running")
 
+    @unittest.skipUnless(os.name == "nt", "Exercises Windows Job Object ownership")
     def test_normal_exit_waits_for_persistent_owner_close_failure_before_serial_slot_release(self):
         history = JobHistory(self.path)
         first_close = threading.Event()
@@ -499,6 +500,7 @@ class JobHistoryTests(unittest.TestCase):
         self.assertGreaterEqual(owner.close_calls, 4)
         self.assertEqual(history.recent(1)[0]["status"], "succeeded")
 
+    @unittest.skipUnless(os.name == "nt", "Exercises Windows Job Object assignment failure")
     def test_job_owner_assignment_and_reap_failure_stays_tracked_until_reaped(self):
         history = JobHistory(self.path)
 
