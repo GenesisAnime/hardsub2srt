@@ -1,112 +1,152 @@
+"""Synthetic coverage for assistant-reviewed OCR seed imports."""
+
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
+import cv2
+import numpy as np
+
+import ocr_review
 import ocr_seed_import as seed_import
 
 
-def _row(image_name: str, data: bytes) -> dict:
-    return {
-        "schema": seed_import.SEED_SCHEMA,
-        "version": seed_import.SEED_VERSION,
-        "image": f"evidence/{image_name}",
-        "image_sha256": hashlib.sha256(data).hexdigest(),
-        "episode_key": "s01e01",
-        "video_identity": {"size": 123, "sha1_first_1mb": "a" * 40},
-        "cue_start_ms": 1000,
-        "cue_end_ms": 2000,
-        "observed_srt_text": "observed text",
-        "target_text": "candidate text",
-        "label_source": "assistant_visual_review",
-        "action": "replace_text",
-        "training_eligible": False,
-        "user_confirmation_status": "pending",
-        "rights_status": "not_verified",
-        "dataset_status": "candidate_needs_human_review",
-    }
-
-
-class SeedImportMemoryLimitTests(unittest.TestCase):
+class SeedImportTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        (self.root / "evidence").mkdir()
+        self.tmp = tempfile.TemporaryDirectory(prefix="hardsub-seed-import-synthetic-")
+        self.root = Path(self.tmp.name).resolve()
+        self.seed_root = self.root / "input"
+        (self.seed_root / "evidence").mkdir(parents=True)
+        self.image_bytes = self._synthetic_png()
+        (self.seed_root / "evidence" / "sample.png").write_bytes(self.image_bytes)
+        self.seed_path = self.seed_root / "training-seed.jsonl"
+        self.app_root = self.root / "app-local"
+        self.app_root.mkdir()
 
     def tearDown(self):
-        self.temp.cleanup()
+        ocr_review._PACKS.clear()
+        self.tmp.cleanup()
 
-    def test_aggregate_evidence_limit_rejects_before_reading_next_image(self):
-        first = b"first-image"
-        second = b"second-image"
-        first_path = self.root / "evidence" / "first.jpg"
-        second_path = self.root / "evidence" / "second.jpg"
-        first_path.write_bytes(first)
-        second_path.write_bytes(second)
-        images = {}
-        crop_cache = {}
+    @staticmethod
+    def _synthetic_png():
+        image = np.zeros((48, 240, 3), dtype=np.uint8)
+        image[10:38, 20:220] = (230, 230, 230)
+        ok, encoded = cv2.imencode(".png", image)
+        if not ok:
+            raise AssertionError("synthetic PNG encoding failed")
+        return encoded.tobytes()
 
-        with patch.object(seed_import, "MAX_EVIDENCE_FILE_BYTES", 64), \
-                patch.object(seed_import, "MAX_EVIDENCE_TOTAL_BYTES", len(first) + 2), \
-                patch.object(seed_import, "_normalize_crop", return_value=(b"crop", 1, 1)):
-            seed_import._validate_row(_row("first.jpg", first), self.root, images, crop_cache)
-            self.assertEqual(sum(len(data) for _path, data in images.values()), len(first))
-            # The second file is individually small, but exceeds the remaining
-            # aggregate budget. Its stat size must reject it before open/read.
-            with patch.object(Path, "open", autospec=True,
-                              side_effect=AssertionError("over-budget evidence was opened")):
-                with self.assertRaisesRegex(seed_import.ImportError, "birikimli bayt sınırını"):
-                    seed_import._validate_row(
-                        _row("second.jpg", second), self.root, images, crop_cache)
-        self.assertEqual(set(images), {"evidence/first.jpg"})
+    def _row(self, **overrides):
+        row = {
+            "schema": seed_import.SEED_SCHEMA,
+            "version": seed_import.SEED_VERSION,
+            "image": "evidence/sample.png",
+            "image_sha256": hashlib.sha256(self.image_bytes).hexdigest(),
+            "episode_key": "S01E01",
+            "video_identity": {
+                "size": 123456,
+                "sha1_first_1mb": "a" * 40,
+            },
+            "cue_start_ms": 1000,
+            "cue_end_ms": 2000,
+            "observed_srt_text": "SYNTHETIC OBSERVED TEXT",
+            "target_text": "SYNTHETIC CANDIDATE TEXT",
+            "label_source": "assistant_visual_review",
+            "action": "replace_text",
+            "training_eligible": False,
+            "user_confirmation_status": "pending",
+            "rights_status": "not_verified",
+            "dataset_status": "candidate_needs_human_review",
+        }
+        row.update(overrides)
+        return row
 
-    def test_bounded_read_rejects_growth_after_size_check(self):
-        class GrowingFile:
-            def __init__(self):
-                self.requested = []
+    def _write_rows(self, rows):
+        self.seed_path.write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+            encoding="utf-8")
 
-            def stat(self):
-                return SimpleNamespace(st_size=4)
+    def _import(self, rows=None):
+        self._write_rows(rows or [self._row()])
+        output = self.app_root / "seed-review-synthetic"
+        target, report = seed_import.import_seed(self.seed_path, output)
+        return target, report
 
-            def open(self, _mode):
-                return self
+    def test_successful_import_stays_unreviewed_and_exports_no_labels(self):
+        target, report = self._import()
 
-            def __enter__(self):
-                return self
+        self.assertEqual(report["human_decisions_created"], 0)
+        self.assertEqual(report["exportable_labels_created_by_import"], 0)
+        self.assertFalse(report["training_eligible"])
+        self.assertEqual(report["review_packs_created"], 1)
+        self.assertFalse((target / "review-packs" / "s01e01-aaaaaaaa-01.review-pack" /
+                          "review-events.jsonl").exists())
 
-            def __exit__(self, *_args):
-                return False
+        packs = seed_import.list_seed_review_packs(self.app_root)
+        self.assertEqual(len(packs), 1)
+        self.assertEqual(packs[0]["reviewed_count"], 0)
+        self.assertEqual(packs[0]["candidate_count"], 1)
+        pack_path = seed_import.open_seed_review_pack(self.app_root, packs[0]["pack_id"])
+        review_id, public = ocr_review.open_pack(str(pack_path))
+        self.assertIsNone(public["cues"][0]["active_event"])
+        self.assertEqual(public["cues"][0]["seed_candidate_text"], "SYNTHETIC CANDIDATE TEXT")
+        self.assertTrue(public["seed_import"])
 
-            def read(self, size):
-                self.requested.append(size)
-                return b"x" * size
+        dataset, count = ocr_review.export_dataset(review_id)
+        self.assertEqual(count, 0)
+        self.assertEqual((dataset / "manifest.jsonl").read_text(encoding="utf-8"), "")
 
-        growing = GrowingFile()
-        with self.assertRaisesRegex(seed_import.ImportError, "birikimli bayt sınırını"):
-            seed_import._read_bounded(growing, 4, "Özgün evidence")
-        self.assertEqual(growing.requested, [5])
+    def test_rejects_parent_traversal_in_evidence_path(self):
+        self._write_rows([self._row(image="evidence/../outside.png")])
+        with self.assertRaises(seed_import.ImportError):
+            seed_import.import_seed(self.seed_path, None)
 
-    def test_crop_cache_limit_is_checked_before_adding_each_normalized_crop(self):
-        first = b"first-image"
-        second = b"second-image"
-        (self.root / "evidence" / "first.jpg").write_bytes(first)
-        (self.root / "evidence" / "second.jpg").write_bytes(second)
-        images = {}
-        crop_cache = {}
-        normalize = lambda data: ((b"crop1" if data == first else b"crop2"), 1, 1)
+    def test_rejects_duplicate_json_keys(self):
+        row_text = json.dumps(self._row(), ensure_ascii=False)
+        # A duplicate key must not be silently resolved by json.loads.
+        self.seed_path.write_text(row_text[:-1] + ',"version":1}\n', encoding="utf-8")
+        with self.assertRaisesRegex(seed_import.ImportError, "geçersiz JSON"):
+            seed_import.import_seed(self.seed_path, None)
 
-        with patch.object(seed_import, "MAX_EVIDENCE_FILE_BYTES", 64), \
-                patch.object(seed_import, "MAX_EVIDENCE_TOTAL_BYTES", 64), \
-                patch.object(seed_import, "MAX_IMPORT_CROP_BYTES", 7), \
-                patch.object(seed_import, "_normalize_crop", side_effect=normalize):
-            seed_import._validate_row(_row("first.jpg", first), self.root, images, crop_cache)
-            with self.assertRaisesRegex(seed_import.ImportError, "Normalize edilmiş crop toplamı"):
-                seed_import._validate_row(
-                    _row("second.jpg", second), self.root, images, crop_cache)
-        self.assertEqual(sum(len(crop) for crop, _w, _h in crop_cache.values()), 5)
-        self.assertEqual(len(crop_cache), 1)
+    def test_rejects_duplicate_video_episode_cue_rows(self):
+        row = self._row()
+        self._write_rows([row, row.copy()])
+        with self.assertRaisesRegex(seed_import.ImportError, "Yinelenen video/episode/cue"):
+            seed_import.import_seed(self.seed_path, None)
+
+    def test_rejects_bad_hash_and_invalid_row_schema(self):
+        self._write_rows([self._row(image_sha256="0" * 64)])
+        with self.assertRaisesRegex(seed_import.ImportError, "SHA-256"):
+            seed_import.import_seed(self.seed_path, None)
+
+        invalid = self._row()
+        invalid["unexpected"] = "not accepted"
+        self._write_rows([invalid])
+        with self.assertRaisesRegex(seed_import.ImportError, "tam v1 şeması"):
+            seed_import.import_seed(self.seed_path, None)
+
+    def test_opaque_ids_reject_paths_unknown_ids_and_tampered_crop(self):
+        target, _report = self._import()
+        with self.assertRaises(seed_import.ImportError):
+            seed_import.open_seed_review_pack(self.app_root, "../review-packs")
+        with self.assertRaises(seed_import.ImportError):
+            seed_import.open_seed_review_pack(self.app_root, "f" * 32)
+
+        pack = target / "review-packs" / "s01e01-aaaaaaaa-01.review-pack"
+        crop = next((pack / "crops").glob("*.jpg"))
+        crop.write_bytes(b"tampered synthetic image")
+        self.assertEqual(seed_import.list_seed_review_packs(self.app_root), [])
+
+    def test_check_mode_validates_without_writing(self):
+        self._write_rows([self._row()])
+        target, report = seed_import.import_seed(self.seed_path, None)
+        self.assertIsNone(target)
+        self.assertEqual(report["assistant_candidates"], 1)
+        self.assertEqual(report["human_decisions_created"], 0)
+        self.assertFalse(any(self.app_root.iterdir()))
 
 
 if __name__ == "__main__":
