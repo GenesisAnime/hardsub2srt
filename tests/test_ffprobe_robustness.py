@@ -153,6 +153,29 @@ class FfprobeMetadataTests(unittest.TestCase):
         self.assertEqual(info["subtitles"],
                          [{"index": 1, "codec": "subrip", "lang": "tur"}])
 
+    def test_utf8_probe_json_does_not_use_windows_console_codepage(self):
+        payload = {
+            "streams": [dict(RAW_H264_STREAM, duration="2.000000",
+                             tags={"title": "Çeşme’deki öykü — ıtı"})],
+            "format": {"duration": "2.000000", "format_name": "matroska"},
+        }
+        stdout = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        def _run(_args, **kwargs):
+            # The old text=True call made subprocess decode UTF-8 ffprobe JSON
+            # using Windows' active ANSI code page (cp1254 on the repro machine).
+            if kwargs.get("text") or kwargs.get("universal_newlines"):
+                raise UnicodeDecodeError("cp1254", b"\x9e", 0, 1,
+                                         "character maps to <undefined>")
+            return hardsub2srt.subprocess.CompletedProcess(
+                "ffprobe", 0, stdout, b"")
+
+        with patch.object(hardsub2srt.subprocess, "run", _run):
+            info = hardsub2srt.run_ffprobe("synthetic-utf8-title.mkv")
+
+        self.assertEqual(info["duration"], 2.0)
+        self.assertEqual(info["fps"], 25.0)
+
 
 class MainErrorPathTests(unittest.TestCase):
     def test_main_exits_with_one_line_message_for_unreadable_video(self):
