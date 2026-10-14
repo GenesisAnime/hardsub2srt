@@ -1,5 +1,7 @@
 # İsteğe bağlı ölçüm katkısı
 
+**Türkçe [TR]** · [English version](CONTRIBUTION-API.en.md) [EN]
+
 ## Durum
 
 Yerel istemci ve Flask WSGI API kodu hazırdır; **VDS'ye dağıtılmamıştır ve uzak veri gönderilmemiştir**. API yalnız sayısal OCR koşum özetlerini kabul eder. OCR, video, SRT/VTT, crop veya AI sağlayıcı çağrısı bu serviste çalışmaz. GitHub Pages bu API'yi barındırmaz.
