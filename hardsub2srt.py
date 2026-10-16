@@ -3284,7 +3284,7 @@ def _duzelt_metin(metin, sozluk, kayit=None, zaman=None):
     return "\n".join(yeni_satirlar), degis
 
 
-def _kullanici_uygula(metin, kurallar, kayit=None, zaman=None):
+def _kullanici_uygula(metin, kurallar, kayit=None, zaman=None, uygulanan=None):
     """UI 'Öğret' kurallarını uygular (birebir metin değişimi).
 
     Kural bloğun tamamında aranır; birden çok geçerse hepsi değişir ve
@@ -3294,10 +3294,16 @@ def _kullanici_uygula(metin, kurallar, kayit=None, zaman=None):
     if not kurallar or not metin:
         return metin, degis
     for eski, yeni in kurallar:
+        # Aynı kuralın ham ve post-fix geçişlerinde tekrar uygulanmasını önle.
+        # None: eski tek-geçiş çağrılarının davranışını korur.
+        if uygulanan is not None and (eski, yeni) in uygulanan:
+            continue
         n = metin.count(eski)
         if not n:
             continue
         metin = metin.replace(eski, yeni)
+        if uygulanan is not None:
+            uygulanan.add((eski, yeni))
         degis.append({"zaman": zaman, "eski": eski, "yeni": yeni,
                       "sinif": "kullanici",
                       "detay": "kullanici-sozlugu"
@@ -3317,9 +3323,12 @@ def _duzelt_blok_metni(metin, sozluk, kullanici, kayit=None, zaman=None):
     temizliği EN BAŞTA çalışır: çöp satır sözlük onarımına girmeden
     düşer. Döner: (yeni_metin, değişiklikler[])."""
     metin, sfx_deg = _satir_sfx_temizle(metin, sozluk, kayit, zaman)
-    metin, k1 = _kullanici_uygula(metin, kullanici, kayit, zaman)
+    uygulanan = set()
+    metin, k1 = _kullanici_uygula(metin, kullanici, kayit, zaman,
+                                  uygulanan=uygulanan)
     metin, d = _duzelt_metin(metin, sozluk, kayit, zaman)
-    metin, k2 = _kullanici_uygula(metin, kullanici, kayit, zaman)
+    metin, k2 = _kullanici_uygula(metin, kullanici, kayit, zaman,
+                                  uygulanan=uygulanan)
     return metin, sfx_deg + k1 + d + k2
 
 
